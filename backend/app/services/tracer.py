@@ -400,7 +400,7 @@ class TransactionTracer:
                         "index": i,
                     })
 
-            elif op in ("SHA3", "KECCAK256") and include_memory:
+            elif op in ("SHA3", "KECCAK256"):
                 if len(stack) >= 2:
                     try:
                         offset = int(stack[-1], 16) if isinstance(stack[-1], str) else stack[-1]
@@ -413,15 +413,14 @@ class TransactionTracer:
                     # - 64 bytes: standard mapping (keccak256(key, slot))
                     # - 96+ bytes: nested mappings, complex keys
                     # - Up to 256 bytes: deeply nested structures
-                    if 32 <= size <= 256:
+                    if 32 <= size <= 256 and include_memory:
                         preimage = self._extract_memory_slice(memory, offset, size)
-                        if preimage:
-                            pending_sha3 = {
-                                "address": current_storage_address,
-                                "preimage": preimage,
-                                "size": size,
-                                "depth": depth,
-                            }
+                        pending_sha3 = {
+                            "address": current_storage_address,
+                            "preimage": preimage,
+                            "size": size,
+                            "depth": depth,
+                        }
 
         logger.info(f"structLogs parsed: sstores={len(sstores)}, sha3s={len(sha3s)}")
         return sstores, sha3s
@@ -471,7 +470,8 @@ class TransactionTracer:
         - For address keys: 32 bytes (left-padded address) + 32 bytes (slot)
         - For uint keys: 32 bytes (key) + 32 bytes (slot)
 
-        Returns: {normalized_hash: preimage_hex}
+        Returns:
+            preimage_lookup: {normalized_hash: preimage_hex}
         """
         preimage_lookup: dict[str, str] = {}
 
@@ -486,9 +486,7 @@ class TransactionTracer:
                 normalized_hash = self._normalize_slot(hash_value)
                 preimage_lookup[normalized_hash] = preimage
 
-        logger.info(
-            f"Built preimage lookup: {len(preimage_lookup)} entries from {len(sha3_trace)} SHA3 ops"
-        )
+        logger.info(f"Built preimage lookup: {len(preimage_lookup)} entries from {len(sha3_trace)} SHA3 ops")
         return preimage_lookup
 
     def _parse_mapping_preimage(
@@ -1481,14 +1479,10 @@ class TransactionTracer:
                                         old_is_long = (old_bytes[-1] & 1) == 1 if old_bytes else False
                                         new_is_long = (new_bytes[-1] & 1) == 1 if new_bytes else False
 
-                                        if old_is_long != new_is_long:
-                                            # Encoding transition
-                                            if new_is_long:
-                                                variable_path = f"{variable.name} (short→long string)"
-                                            else:
-                                                variable_path = f"{variable.name} (long→short string)"
-                                        elif new_is_long or old_is_long:
-                                            variable_path = f"{variable.name} (string length)"
+                                        # For string base slot, show as length
+                                        # (regardless of short/long encoding transition)
+                                        if old_is_long or new_is_long or old_is_long != new_is_long:
+                                            variable_path = f"{variable.name} (length)"
                                     elif var_type.encoding == "dynamic_array" or (
                                         var_type.element_type and "[]" in (var_type.label or "")
                                     ):

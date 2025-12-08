@@ -1,4 +1,4 @@
-# StorageScan
+# SlotScan
 
 Ethereum smart contract storage analyzer. View storage layouts, decode values, and trace transaction storage changes.
 
