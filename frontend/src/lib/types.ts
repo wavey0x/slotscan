@@ -116,6 +116,8 @@ export interface SlotChangeResponse {
   params: MappingParamResponse[] | null;  // Mapping parameters with types and values
   mapping_base_slot: number | null;
   is_mapping: boolean;
+  is_dynamic_array: boolean;
+  array_index: number | null;
   encoding: string | null;
   value_type: string | null;
   // Summary: initial and final values
@@ -145,6 +147,7 @@ export interface TransactionDiffResponse {
   trace_unavailable: boolean;
   contract_name: string | null;
   layout_available: boolean;
+  execution_order_available: boolean; // True if step values are real EVM execution order
 }
 
 export interface ErrorResponse {

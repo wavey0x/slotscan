@@ -1,6 +1,6 @@
 'use client';
 
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import { Container } from '@/components/layout/Container';
 import { BackLink } from '@/components/layout/BackLink';
@@ -10,10 +10,41 @@ import { BlockSelector } from '@/components/storage/BlockSelector';
 import { DiffTable } from '@/components/diff/DiffTable';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { EtherscanLink } from '@/components/ui/EtherscanLink';
+import { Input } from '@/components/ui/Input';
+import { Button } from '@/components/ui/Button';
 import { truncateHash, truncateAddress } from '@/lib/utils';
 import { getAddressExplorerUrl, getTxExplorerUrl, getBlockExplorerUrl } from '@/lib/constants';
 import { useContract } from '@/lib/hooks/useContract';
 import { useTxDiff } from '@/lib/hooks/useTxDiff';
+
+// Component for transaction hash input
+function TxHashInput({ chainId, address }: { chainId: string; address: string }) {
+  const router = useRouter();
+  const [txInput, setTxInput] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const txHash = txInput.trim();
+    if (txHash && /^0x[a-fA-F0-9]{64}$/.test(txHash)) {
+      router.push(`/${chainId}/${address}?tx=${txHash}`);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="flex gap-1">
+      <Input
+        type="text"
+        value={txInput}
+        onChange={(e) => setTxInput(e.target.value)}
+        placeholder="Transaction hash (0x...)"
+        className="w-80 font-mono text-xs"
+      />
+      <Button type="submit" variant="secondary" size="sm">
+        View
+      </Button>
+    </form>
+  );
+}
 
 interface ContractPageProps {
   params: { chain: string; address: string };
@@ -134,10 +165,13 @@ export default function ContractPage({ params }: ContractPageProps) {
       <div className="mt-8">
         <div className="flex items-center justify-between mb-4">
           <span className="text-xs text-gray-500 uppercase tracking-wide">Storage</span>
-          <BlockSelector
-            currentBlock={displayBlock}
-            onBlockChange={setBlockNumber}
-          />
+          <div className="flex gap-4 items-center">
+            <TxHashInput chainId={chain} address={address} />
+            <BlockSelector
+              currentBlock={displayBlock}
+              onBlockChange={setBlockNumber}
+            />
+          </div>
         </div>
 
         {displayBlock ? (

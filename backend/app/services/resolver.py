@@ -264,7 +264,7 @@ class ContractResolver:
         """Query Sourcify API for verified source."""
         base_url = "https://sourcify.dev/server"
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             try:
                 # Try full match first
                 url = f"{base_url}/files/{chain_id}/{address}"
@@ -360,7 +360,7 @@ class ContractResolver:
             "apikey": api_key,
         }
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             try:
                 response = await client.get(base_url, params=params)
 

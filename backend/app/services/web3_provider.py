@@ -23,7 +23,7 @@ class Web3Provider:
             if not rpc_url:
                 raise ValueError(f"No RPC URL configured for chain {chain_id}")
 
-            provider = AsyncHTTPProvider(rpc_url)
+            provider = AsyncHTTPProvider(rpc_url, request_kwargs={"timeout": 90})
             w3 = AsyncWeb3(provider)
             # Add POA middleware for chains that need it
             w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
@@ -38,7 +38,7 @@ class Web3Provider:
             return None
 
         if chain_id not in self._backup_instances:
-            provider = AsyncHTTPProvider(backup_url)
+            provider = AsyncHTTPProvider(backup_url, request_kwargs={"timeout": 90})
             w3 = AsyncWeb3(provider)
             w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
             self._backup_instances[chain_id] = w3

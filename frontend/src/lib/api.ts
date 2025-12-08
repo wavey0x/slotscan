@@ -7,15 +7,44 @@ import type {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
 
-async function fetchAPI<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ error: 'Request failed', code: 'UNKNOWN' }));
-    const msg = error.error || 'Request failed';
-    const code = error.code ? ` (${error.code})` : '';
-    throw new Error(`${msg}${code}`);
+const API_TIMEOUT_MS = 60000; // 60s hard timeout to fail gracefully in UI
+
+async function fetchWithTimeout(url: string, externalSignal?: AbortSignal): Promise<Response> {
+  const timeoutController = new AbortController();
+  const mergedController = new AbortController();
+  const timer = setTimeout(() => timeoutController.abort(), API_TIMEOUT_MS);
+
+  // Merge external + timeout signals into mergedController
+  const forwardAbort = (signal: AbortSignal) => {
+    signal.addEventListener('abort', () => mergedController.abort(), { once: true });
+  };
+  forwardAbort(timeoutController.signal);
+  if (externalSignal) forwardAbort(externalSignal);
+
+  try {
+    return await fetch(url, { signal: mergedController.signal });
+  } finally {
+    clearTimeout(timer);
   }
-  return res.json();
+}
+
+async function fetchAPI<T>(url: string): Promise<T> {
+  try {
+    const res = await fetchWithTimeout(url);
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Request failed', code: 'UNKNOWN' }));
+      const msg = error.error || 'Request failed';
+      const code = error.code ? ` (${error.code})` : '';
+      throw new Error(`${msg}${code}`);
+    }
+    return res.json();
+  } catch (err: any) {
+    const isAbort = err?.name === 'AbortError';
+    if (isAbort) {
+      throw new Error('Request timed out (60s)');
+    }
+    throw err;
+  }
 }
 
 export async function fetchContract(

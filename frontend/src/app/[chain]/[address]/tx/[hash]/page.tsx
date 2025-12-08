@@ -24,7 +24,7 @@ export default function TxDiffPage({ params }: TxDiffPageProps) {
 
   return (
     <Container>
-      <BackLink href={`/${chain}/${address}`} label="Back to contract" />
+      <BackLink href="/" />
 
       <div className="mt-6">
         <h1 className="text-xl font-medium text-gray-900 mb-4">State Changes</h1>

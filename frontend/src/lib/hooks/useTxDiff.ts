@@ -9,5 +9,6 @@ export function useTxDiff(chainId: string, address: string, txHash: string) {
     queryFn: () => fetchTxDiff(chainId, address, txHash),
     staleTime: Infinity,
     enabled: !!chainId && !!address && !!txHash,
+    retry: false, // fail fast so UI can show an error instead of hanging
   });
 }

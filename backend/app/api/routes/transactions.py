@@ -1,7 +1,7 @@
 """Transaction API routes."""
 
 from collections import defaultdict
-from typing import Optional
+from typing import Optional, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -40,6 +40,56 @@ def _strip_type_prefix(label: str) -> str:
     if label and label.startswith("t_"):
         return label[2:]
     return label
+
+
+def _strip_struct_parent(label: str) -> str:
+    """Strip parent contract/interface name from struct labels.
+
+    e.g., "struct GovStaker.RewardData" → "struct RewardData"
+         "struct RewardDistributorMultiEpoch.RewardType[]" → "struct RewardType[]"
+         "mapping(address => struct Parent.Child)" → "mapping(address => struct Child)"
+    """
+    if not label:
+        return label
+
+    # Handle struct types with parent prefix at the start
+    if label.startswith("struct "):
+        rest = label[7:]  # Remove "struct " prefix
+        # Check for parent.Name pattern
+        if "." in rest:
+            # Split at last dot to handle nested types, preserve array suffix
+            # e.g., "Parent.Child[]" -> "Child[]"
+            parts = rest.rsplit(".", 1)
+            return f"struct {parts[1]}"
+        return label
+
+    # Handle struct references embedded in complex types (mappings, arrays, etc.)
+    # e.g., "mapping(address => struct Parent.Child)"
+    import re
+    def replace_struct(match):
+        struct_type = match.group(1)  # e.g., "Parent.Child" or "Parent.Child[]"
+        if "." in struct_type:
+            # Strip parent, preserve suffix (like [])
+            parts = struct_type.rsplit(".", 1)
+            return f"struct {parts[1]}"
+        return match.group(0)  # Return unchanged if no parent
+
+    # Find and replace all "struct Parent.Child" patterns
+    result = re.sub(r'struct\s+([A-Za-z0-9_.]+(?:\[\])?)', replace_struct, label)
+    return result
+
+
+def _clean_type_label(label: str) -> str:
+    """Clean a type label for display: strip t_ prefix and struct parent names."""
+    result = _strip_type_prefix(label)
+    return _strip_struct_parent(result)
+
+
+def _normalize_contract_label(label: str, kind: str | None = None) -> str:
+    """Convert contract/interface labels to address for display."""
+    if (kind and kind.lower() == "contract") or (label and label.lower().startswith("contract")):
+        return "address"
+    return _clean_type_label(label)
 
 
 def _extract_keys_from_path(variable_path: Optional[str]) -> Optional[str]:
@@ -125,7 +175,24 @@ def _clean_value_type(value_type: Optional[str]) -> Optional[str]:
         end = cleaned.index(")")
         cleaned = cleaned[start:end]
 
-    return _strip_type_prefix(cleaned)
+    # Contract/interface types are just addresses
+    if cleaned.lower().startswith("contract"):
+        cleaned = "address"
+
+    return _clean_type_label(cleaned)
+
+
+def _preserve_large_ints(value: Any, threshold: int = 2**53) -> Any:
+    """Convert large ints to strings to avoid JS precision loss in the API response."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return str(value) if abs(value) >= threshold else value
+    if isinstance(value, list):
+        return [_preserve_large_ints(v, threshold) for v in value]
+    if isinstance(value, dict):
+        return {k: _preserve_large_ints(v, threshold) for k, v in value.items()}
+    return value
 
 
 def _get_struct_definition(
@@ -161,7 +228,7 @@ def _get_struct_definition(
                 members.append(
                     StructMemberResponse(
                         name=member.name,
-                        type_label=_strip_type_prefix(member_type.label if member_type else member.type_id),
+                        type_label=_clean_type_label(member_type.label if member_type else member.type_id),
                         slot_offset=member.slot,  # In members, slot is the offset within the struct
                         byte_offset=member.offset,
                         size=member.size,
@@ -225,7 +292,7 @@ def _get_struct_definition_from_type_id(
         members.append(
             StructMemberResponse(
                 name=member.name,
-                type_label=_strip_type_prefix(member_type.label if member_type else member.type_id),
+                type_label=_clean_type_label(member_type.label if member_type else member.type_id),
                 slot_offset=member.slot,  # In members, slot is the offset within the struct
                 byte_offset=member.offset,
                 size=member.size,
@@ -278,8 +345,8 @@ def _group_changes_by_slot(
             StorageChangeResponse(
                 old_raw=c.old_value,
                 new_raw=c.new_value,
-                old_decoded=c.old_decoded.decoded if c.old_decoded else None,
-                new_decoded=c.new_decoded.decoded if c.new_decoded else None,
+                old_decoded=_preserve_large_ints(c.old_decoded.decoded if c.old_decoded else None),
+                new_decoded=_preserve_large_ints(c.new_decoded.decoded if c.new_decoded else None),
                 old_display=c.old_decoded.display if c.old_decoded else None,
                 new_display=c.new_decoded.display if c.new_decoded else None,
                 pc=c.pc,
@@ -315,12 +382,12 @@ def _group_changes_by_slot(
                         packed_fields.append(
                             PackedFieldResponse(
                                 name=var.name,
-                                type_label=_strip_type_prefix(var_type.label if var_type else var.type_id),
+                                type_label=_clean_type_label(var_type.label if var_type else var.type_id),
                                 offset=var.offset,
                                 size=var.size,
-                                initial_decoded=initial_decoded[var.name].decoded if var.name in initial_decoded else None,
+                                initial_decoded=_preserve_large_ints(initial_decoded[var.name].decoded if var.name in initial_decoded else None),
                                 initial_display=initial_decoded[var.name].display if var.name in initial_decoded else None,
-                                final_decoded=final_decoded[var.name].decoded if var.name in final_decoded else None,
+                                final_decoded=_preserve_large_ints(final_decoded[var.name].decoded if var.name in final_decoded else None),
                                 final_display=final_decoded[var.name].display if var.name in final_decoded else None,
                             )
                         )
@@ -371,12 +438,12 @@ def _group_changes_by_slot(
                             packed_fields.append(
                                 PackedFieldResponse(
                                     name=member.name,
-                                    type_label=_strip_type_prefix(member_type.label if member_type else member.type_id),
+                                    type_label=_clean_type_label(member_type.label if member_type else member.type_id),
                                     offset=member.offset,
                                     size=member.size,
-                                    initial_decoded=initial_decoded[member.name].decoded if member.name in initial_decoded else None,
+                                    initial_decoded=_preserve_large_ints(initial_decoded[member.name].decoded if member.name in initial_decoded else None),
                                     initial_display=initial_decoded[member.name].display if member.name in initial_decoded else None,
-                                    final_decoded=final_decoded[member.name].decoded if member.name in final_decoded else None,
+                                    final_decoded=_preserve_large_ints(final_decoded[member.name].decoded if member.name in final_decoded else None),
                                     final_display=final_decoded[member.name].display if member.name in final_decoded else None,
                                 )
                             )
@@ -392,23 +459,36 @@ def _group_changes_by_slot(
         # Build unified params from mapping key and types
         params = _build_mapping_params(mapping_key, first.variable, layout) if mapping_key else None
 
+        # Calculate is_static_slot - slot < 100 is likely a static slot (not a keccak256 hash)
+        try:
+            slot_int = int(slot, 16) if slot.startswith("0x") else int(slot)
+            is_static_slot = slot_int < 100
+        except ValueError:
+            is_static_slot = False
+
         result.append(
             SlotChangeResponse(
                 slot=slot,
                 slot_decimal=str(int(slot, 16)) if slot.startswith("0x") else slot,
+                is_static_slot=is_static_slot,
                 variable_name=first.variable.name if first.variable else None,
                 variable_path=first.variable_path,
-                type_label=_strip_type_prefix(first.variable.label) if first.variable else None,
+                type_label=_normalize_contract_label(
+                    first.variable.label if first.variable else None,
+                    layout.get_type(first.variable.type_id).kind if (layout and first.variable and layout.get_type(first.variable.type_id)) else None
+                ) if first.variable else None,
                 params=params,
                 mapping_base_slot=first.mapping_base_slot,
                 is_mapping=first.is_mapping,
+                is_dynamic_array=first.encoding == "dynamic_array",
+                array_index=first.array_index,
                 encoding=first.encoding,
                 value_type=_clean_value_type(first.value_type) if first.value_type else None,
                 # Summary values: initial (before first change) and final (after last change)
                 initial_raw=first.old_value,
                 final_raw=last.new_value,
-                initial_decoded=first.old_decoded.decoded if first.old_decoded else None,
-                final_decoded=last.new_decoded.decoded if last.new_decoded else None,
+                initial_decoded=_preserve_large_ints(first.old_decoded.decoded if first.old_decoded else None),
+                final_decoded=_preserve_large_ints(last.new_decoded.decoded if last.new_decoded else None),
                 initial_display=first.old_decoded.display if first.old_decoded else None,
                 final_display=last.new_decoded.display if last.new_decoded else None,
                 # Packed storage fields
@@ -419,8 +499,17 @@ def _group_changes_by_slot(
             )
         )
 
-    # Sort slots by the first change's execution order
-    result.sort(key=lambda x: x.changes[0].step if x.changes else 0)
+    # Sort slots by the first change's execution order (step)
+    # Step is the sequential execution index - this determines actual execution order
+    # PC is just bytecode position which doesn't indicate when code ran
+    def get_sort_key(x):
+        if not x.changes:
+            return (float('inf'), float('inf'))
+        first_change = x.changes[0]
+        step_val = first_change.step if first_change.step is not None else float('inf')
+        return (step_val, first_change.pc or 0)
+
+    result.sort(key=get_sort_key)
 
     return result
 
@@ -510,6 +599,7 @@ async def get_tx_diff(
             is_complete=False,
             is_verified=layout is not None,
             trace_unavailable=True,
+            execution_order_available=False,
         )
     except RPCError as e:
         raise HTTPException(
@@ -531,4 +621,5 @@ async def get_tx_diff(
         trace_unavailable=diff.trace_unavailable,
         contract_name=metadata.name,
         layout_available=layout is not None,
+        execution_order_available=diff.execution_order_available,
     )

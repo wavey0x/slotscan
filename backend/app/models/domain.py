@@ -60,15 +60,20 @@ class StorageLayout:
     def get_variable_for_slot(self, slot: int) -> Optional[StorageVariable]:
         """
         Find variable that spans the given slot, accounting for multi-slot values.
-        Does not attempt to resolve mapping/dynamic array elements (requires keys/indices).
+
+        For mappings/dynamic arrays, only matches the exact base slot (which stores
+        nothing for mappings, or the array length for dynamic arrays).
+        Does not attempt to resolve hashed element slots (requires keys/indices).
         """
         for var in self.variables:
             var_type = self.types.get(var.type_id)
             if not var_type:
                 continue
 
-            # Skip mappings/dynamic arrays; without keys/indices we can't map hashed slots
+            # For mappings/dynamic arrays, only match the exact base slot
             if var_type.encoding in ("mapping", "dynamic_array"):
+                if var.slot == slot:
+                    return var
                 continue
 
             span_slots = max(1, (var.size + 31) // 32 if var.size else 1)
@@ -101,8 +106,104 @@ class StorageLayout:
         return None
 
     def get_type(self, type_id: str) -> Optional[StorageType]:
-        """Get type definition by ID."""
-        return self.types.get(type_id)
+        """Get type definition by ID, synthesizing primitives if not found."""
+        if type_id in self.types:
+            return self.types[type_id]
+
+        # Synthesize common primitive types if not in dictionary
+        return self._synthesize_primitive_type(type_id)
+
+    def _synthesize_primitive_type(self, type_id: str) -> Optional[StorageType]:
+        """Create StorageType for common primitive types not in the types dict."""
+        import re
+
+        # uint types: t_uint8, t_uint16, ..., t_uint256
+        uint_match = re.match(r'^t_uint(\d+)$', type_id)
+        if uint_match:
+            bits = int(uint_match.group(1))
+            return StorageType(
+                id=type_id,
+                label=f"uint{bits}",
+                kind="value",
+                encoding="inplace",
+                num_bytes=bits // 8,
+            )
+
+        # int types: t_int8, t_int16, ..., t_int256
+        int_match = re.match(r'^t_int(\d+)$', type_id)
+        if int_match:
+            bits = int(int_match.group(1))
+            return StorageType(
+                id=type_id,
+                label=f"int{bits}",
+                kind="value",
+                encoding="inplace",
+                num_bytes=bits // 8,
+            )
+
+        # address type
+        if type_id == 't_address':
+            return StorageType(
+                id=type_id,
+                label="address",
+                kind="value",
+                encoding="inplace",
+                num_bytes=20,
+            )
+
+        # address payable type
+        if type_id == 't_address_payable':
+            return StorageType(
+                id=type_id,
+                label="address payable",
+                kind="value",
+                encoding="inplace",
+                num_bytes=20,
+            )
+
+        # bool type
+        if type_id == 't_bool':
+            return StorageType(
+                id=type_id,
+                label="bool",
+                kind="value",
+                encoding="inplace",
+                num_bytes=1,
+            )
+
+        # bytesN types: t_bytes1, t_bytes2, ..., t_bytes32
+        bytes_match = re.match(r'^t_bytes(\d+)$', type_id)
+        if bytes_match:
+            n = int(bytes_match.group(1))
+            return StorageType(
+                id=type_id,
+                label=f"bytes{n}",
+                kind="value",
+                encoding="inplace",
+                num_bytes=n,
+            )
+
+        # string storage (dynamic)
+        if type_id == 't_string_storage':
+            return StorageType(
+                id=type_id,
+                label="string",
+                kind="value",
+                encoding="bytes",
+                num_bytes=32,
+            )
+
+        # bytes storage (dynamic)
+        if type_id == 't_bytes_storage':
+            return StorageType(
+                id=type_id,
+                label="bytes",
+                kind="value",
+                encoding="bytes",
+                num_bytes=32,
+            )
+
+        return None
 
     def get_all_static_slots(self) -> list[tuple[int, StorageVariable]]:
         """Get all statically-known slots."""
@@ -296,6 +397,7 @@ class TransactionDiff:
     layout: Optional[StorageLayout] = None
     trace_unavailable: bool = False
     contract_name: Optional[str] = None  # Name of the contract
+    execution_order_available: bool = False  # True if step values are real EVM execution order
 
     def to_dict(self) -> dict:
         """Serialize for caching."""
@@ -307,6 +409,7 @@ class TransactionDiff:
             "is_complete": self.is_complete,
             "trace_unavailable": self.trace_unavailable,
             "contract_name": self.contract_name,
+            "execution_order_available": self.execution_order_available,
             "changes": [
                 {
                     "slot": c.slot,
@@ -388,6 +491,7 @@ class TransactionDiff:
             trace_unavailable=data.get("trace_unavailable", False),
             layout=None,
             contract_name=data.get("contract_name"),
+            execution_order_available=data.get("execution_order_available", False),
         )
 
 

@@ -44,6 +44,29 @@ export function formatNumber(value: number | string): string {
   return num.toLocaleString();
 }
 
+// Abbreviate extremely large integers (>= 1e30) for display while preserving readability
+const BIG_ABBREV_THRESHOLD = 10n ** 30n;
+
+function tryParseBigInt(value: string): bigint | null {
+  const cleaned = value.replace(/,/g, '');
+  if (/^-?\d+$/.test(cleaned)) {
+    try {
+      return BigInt(cleaned);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function abbreviateBigInt(value: bigint): string {
+  const isNegative = value < 0;
+  const absStr = (isNegative ? -value : value).toString();
+  const mantissa = absStr.length > 1 ? `${absStr[0]}.${absStr.slice(1, 5)}` : absStr;
+  const exponent = absStr.length - 1;
+  return `${isNegative ? '-' : ''}${mantissa}e${exponent}`;
+}
+
 const RECENT_SEARCHES_KEY = 'storagescan_recent_searches';
 const MAX_RECENT = 5;
 
@@ -215,6 +238,17 @@ export function formatDecodedValue(value: unknown): string {
 
   const str = String(value);
 
+  // Render objects more usefully than "[object Object]"
+  if (typeof value === 'object') {
+    return formatObjectMultiline(value as Record<string, unknown>);
+  }
+
+  // Try BigInt parsing (handles comma-separated integers)
+  const big = tryParseBigInt(str);
+  if (big !== null) {
+    return formatBigNumber(big);
+  }
+
   // If it's a number string, format with commas
   if (/^-?\d+(\.\d+)?$/.test(str)) {
     return formatBigNumber(str);
@@ -226,4 +260,93 @@ export function formatDecodedValue(value: unknown): string {
   }
 
   return str;
+}
+// Render object fields as multi-line type name + value when both are available
+export function formatObjectMultiline(value: Record<string, unknown>): string {
+  return Object.entries(value)
+    .map(([k, v]) => {
+      // Try to infer simple type label for display
+      let typeLabel = '';
+      if (typeof v === 'string') {
+        typeLabel = v.startsWith('0x') ? 'address' : 'string';
+      } else if (typeof v === 'number' || typeof v === 'bigint') {
+        typeLabel = 'uint256';
+      } else if (typeof v === 'boolean') {
+        typeLabel = 'bool';
+      }
+      const renderedVal = typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v);
+      return `${typeLabel ? typeLabel + ' ' : ''}${k} = ${renderedVal}`;
+    })
+    .join('\n');
+}
+
+export function getCopyValue(
+  decoded: unknown,
+  display: string | null,
+  raw: string
+): string {
+  const isSci = (s: string) => /^-?\d+(?:\.\d+)?e[+-]?\d+$/i.test(s);
+  // Prefer decoded when it is trustworthy; otherwise fall back to raw.
+  try {
+    if (decoded === null || decoded === undefined) return raw;
+    if (typeof decoded === 'bigint') return decoded.toString();
+    if (typeof decoded === 'number') {
+      if (!Number.isFinite(decoded)) return raw;
+      // For potentially large ints, derive from raw if it looks like a full 32-byte hex
+      if (Math.abs(decoded) >= 1e15 && /^0x[0-9a-fA-F]{64}$/.test(raw)) {
+        return BigInt(raw).toString();
+      }
+      return decoded.toString();
+    }
+    if (typeof decoded === 'string') {
+      const cleaned = decoded.replace(/,/g, '');
+      if (/^-?\d+$/.test(cleaned)) return cleaned;
+      if (isSci(cleaned) && /^0x[0-9a-fA-F]+$/.test(raw)) {
+        try {
+          return BigInt(raw).toString();
+        } catch {
+          return cleaned;
+        }
+      }
+      return decoded;
+    }
+    if (typeof decoded === 'object') {
+      return JSON.stringify(decoded);
+    }
+  } catch {
+    // ignore and fall through
+  }
+  return display ?? raw;
+}
+
+export function formatScientific(value: string | number | bigint): string | null {
+  try {
+    if (typeof value === 'bigint') {
+      const s = value < 0 ? (-value).toString() : value.toString();
+      if (s === '0') return '0';
+      const mantissa = s.length > 1 ? `${s[0]}.${s.slice(1, 5)}` : s;
+      const exp = s.length - 1;
+      return `${value < 0 ? '-' : ''}${mantissa}e${exp}`;
+    }
+    const str = typeof value === 'number' ? value.toString() : String(value);
+    const cleaned = str.replace(/,/g, '');
+    if (/^-?\d+$/.test(cleaned)) {
+      const big = BigInt(cleaned);
+      return formatScientific(big);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function getTooltipValue(
+  decoded: unknown,
+  display: string | null,
+  raw: string
+): string {
+  const fallback = display ?? raw;
+  if (decoded === null || decoded === undefined) return fallback;
+  const sci = formatScientific(decoded as any);
+  return sci ?? fallback;
 }

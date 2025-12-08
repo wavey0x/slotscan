@@ -19,6 +19,8 @@ interface HoverCellProps {
   className?: string;
   /** Text color class */
   colorClass?: string;
+  /** Force actions to be visible even when display === value */
+  forceActions?: boolean;
 }
 
 function getEtherscanUrl(chainId: string | number, value: string): string | null {
@@ -53,9 +55,10 @@ export function HoverCell({
   tooltip,
   className,
   colorClass = 'text-gray-900',
+  forceActions = false,
 }: HoverCellProps) {
   const etherscanUrl = chainId ? getEtherscanUrl(chainId, value) : null;
-  const showActions = display !== value || etherscanUrl;
+  const showActions = forceActions || display !== value || etherscanUrl;
 
   const tooltipContent = tooltip || (
     <span className="font-mono break-all max-w-xs">{value}</span>

@@ -186,6 +186,7 @@ class TransactionDiffResponse(BaseModel):
     trace_unavailable: bool = False
     contract_name: Optional[str] = None  # Name of the contract
     layout_available: bool = False  # Whether storage layout was available
+    execution_order_available: bool = False  # True if step values are real EVM execution order
 
 
 class ErrorResponse(BaseModel):

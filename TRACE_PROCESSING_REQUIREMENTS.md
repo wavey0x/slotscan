@@ -107,6 +107,28 @@ Must capture ALL writes to a slot, not just the final diff:
 
 **Implementation**: `_build_changes_from_sstore_trace()`
 
+### REQ-TRACE-008: No-Drop Guarantee on SSTORE Events
+
+**Status**: ✅ Implemented (must remain)
+
+Must never drop or filter SSTORE entries after collection, even if later decoding/matching fails:
+- Every captured SSTORE must appear in the decoded change list with raw values intact
+- Decoding/matching errors must be logged and surfaced but must not remove the change
+- Unmatched slots still return `variable_name = null` with raw `old_value/new_value`
+
+**Implementation**: `_decode_changes()` must propagate all collected writes regardless of decode/match outcome
+
+### REQ-TRACE-009: Prestate Reconciliation
+
+**Status**: ✅ Implemented
+
+Must merge `prestateTracer` diffs with the SSTORE tracer output so missing writes are never dropped:
+- Compare slots captured by SSTORE against pre/post-state diff
+- Any slots present only in the pre/post diff are added as synthetic changes
+- Execution order is downgraded (marked unordered) when synthetic entries are merged
+
+**Implementation**: `TransactionTracer.trace_transaction()` merges `_extract_contract_changes()` output into SSTORE results and disables strict ordering when synthetic slots are added
+
 ---
 
 ## Slot Matching Requirements
@@ -284,6 +306,27 @@ Must format decoded values for display:
 
 **Implementation**: `TypeDecoder.format_value()`
 
+### REQ-DECODE-007: Custom Struct Decoding (Per-Known ABI)
+
+**Status**: ⚠️ Partially Implemented
+
+Must decode known ABI structs into per-field objects (not a single bigint/hex):
+- Use metadata/ABI/layout to recognize structs such as `ResupplyPairCore.CurrentRateInfo`, `ResupplyPairCore.ExchangeRateInfo`, `RewardDistributorMultiEpoch.RewardType`
+- For packed single-slot structs, split fields by declared widths/order
+- For multi-slot structs/struct arrays, decode each slot by offset and assemble a field map
+- Preserve both structured `decoded` and human-readable `display`
+
+**Implementation Gap**: Add per-struct decoders and array-element handling in `TypeDecoder` / tracer; ensure arrays of structs return element-level decoded objects.
+
+### REQ-DECODE-008: Decode-Fallback Safety
+
+**Status**: ✅ Implemented (must remain)
+
+Decoding errors must not break response construction:
+- If typed decoding fails, fall back to heuristic decoding
+- If heuristic decoding fails, return raw hex as display/decoded
+- Never raise exceptions that prevent a change from being returned
+
 ---
 
 ## API Response Requirements
@@ -398,6 +441,26 @@ Must provide element type ID for dynamic array struct lookup:
 - Used to look up struct members when array contains structs
 
 **Implementation**: `element_type_id` field in `StorageChange`
+
+### REQ-API-011: Preserve Raw Values and Change Count
+
+**Status**: ✅ Implemented (must remain)
+
+Must return every captured change with raw values even if decoding/matching is partial:
+- Do not drop or filter changes because type/struct decoding failed
+- `initial_raw` / `final_raw` must always be present
+- Slot list length must equal the number of captured slots (after grouping by slot)
+
+### REQ-API-012: Struct and Array Value Shape
+
+**Status**: ⚠️ Partially Implemented
+
+Must represent decoded structs/arrays as structured JSON in the API:
+- Structs: object with field names/values, not a single bigint
+- Arrays of structs: array of per-element objects, not just length
+- Packed struct base slots must include per-field `packed_fields` metadata when applicable
+
+**Implementation Gap**: Ensure tracer and decoder emit structured `decoded`/`display` for known structs and arrays.
 
 ---
 

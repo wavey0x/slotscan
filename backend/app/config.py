@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     # Limits
     max_slots_per_contract: int = Field(default=10000, alias="MAX_SLOTS_PER_CONTRACT")
     max_sstore_ops: int = Field(default=10000, alias="MAX_SSTORE_OPS")
-    request_timeout_seconds: int = Field(default=15, alias="REQUEST_TIMEOUT_SECONDS")
+    request_timeout_seconds: int = Field(default=45, alias="REQUEST_TIMEOUT_SECONDS")
 
     model_config = {
         "env_file": "../.env",

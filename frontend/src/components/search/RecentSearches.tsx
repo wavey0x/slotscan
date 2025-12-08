@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { getRecentSearches, RecentSearch, truncateAddress, clearRecentSearches } from '@/lib/utils';
+import { getRecentSearches, RecentSearch, truncateAddress, truncateHash, clearRecentSearches } from '@/lib/utils';
 import { getChainName } from '@/lib/constants';
 
 interface RecentSearchesProps {
@@ -53,7 +53,7 @@ export function RecentSearches({ className }: RecentSearchesProps) {
               </div>
               <div className="text-xs text-gray-500">
                 {getChainName(search.chain)}
-                {search.blockOrTx && ` · ${search.blockOrTx.startsWith('0x') ? 'TX' : `Block ${search.blockOrTx}`}`}
+                {search.blockOrTx && ` · ${search.blockOrTx.startsWith('0x') ? `TX ${truncateHash(search.blockOrTx)}` : `Block ${search.blockOrTx}`}`}
               </div>
             </Link>
           );

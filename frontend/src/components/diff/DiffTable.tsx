@@ -18,13 +18,13 @@ export function DiffTable({ chainId, address, txHash }: DiffTableProps) {
   const { data, isLoading, error } = useTxDiff(chainId, address, txHash);
   const [showHex, setShowHex] = useState(false);
 
-  // Sort slots by program counter (PC) - must be called before early returns
+  // Sort slots by step (execution order) - must be called before early returns
   const sortedSlots = useMemo(() => {
     if (!data?.slots) return [];
     return [...data.slots].sort((a: SlotChangeResponse, b: SlotChangeResponse) => {
-      const pcA = a.changes.length > 0 ? (a.changes[0].pc ?? Infinity) : Infinity;
-      const pcB = b.changes.length > 0 ? (b.changes[0].pc ?? Infinity) : Infinity;
-      return pcA - pcB;
+      const stepA = a.changes.length > 0 ? a.changes[0].step : Infinity;
+      const stepB = b.changes.length > 0 ? b.changes[0].step : Infinity;
+      return stepA - stepB;
     });
   }, [data?.slots]);
 
@@ -74,11 +74,15 @@ export function DiffTable({ chainId, address, txHash }: DiffTableProps) {
         <table className="w-full min-w-[500px]">
           <thead className="bg-gray-50">
             <tr>
-              <th className="w-6 px-1 py-1"></th>
-              <th className="text-left px-1 py-1 text-[10px] font-medium text-gray-500 uppercase min-w-[180px]">Variable</th>
+              <th className="w-5 px-1 py-1"></th>
+              <th className="text-left px-1 py-1 text-[10px] font-medium text-gray-500 uppercase w-48">Variable</th>
               <th className="text-left px-1 py-1 text-[10px] font-medium text-gray-500 uppercase">Value</th>
-              <th className="text-left px-1 py-1 text-[10px] font-medium text-gray-500 uppercase w-10">Slot</th>
-              <th className="text-right px-1 py-1 text-[10px] font-medium text-gray-500 uppercase">PC</th>
+              <th className="text-left px-1 py-1 text-[10px] font-medium text-gray-500 uppercase w-8">Slot</th>
+              {data?.execution_order_available && (
+                <th className="text-right px-1 py-1 text-[10px] font-medium text-gray-500 uppercase w-10">
+                  Step
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -88,6 +92,7 @@ export function DiffTable({ chainId, address, txHash }: DiffTableProps) {
                 slot={slot}
                 showHex={showHex}
                 chainId={chainId}
+                showStep={data?.execution_order_available ?? false}
               />
             ))}
           </tbody>

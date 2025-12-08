@@ -6,16 +6,21 @@ import {
   cn,
   formatSlotShort,
   formatDecodedValue,
+  formatObjectMultiline,
+  getCopyValue,
+  getTooltipValue,
   truncateAddress,
   truncateHash,
 } from '@/lib/utils';
 import { HoverCell } from '@/components/ui/HoverCell';
+import { HoverCard, HoverCardSection, HoverCardDivider, HoverCardRow } from '@/components/ui/HoverCard';
 import { Tooltip } from '@/components/ui/Tooltip';
 
 interface SlotRowProps {
   slot: SlotChangeResponse;
   showHex: boolean;
   chainId: string;
+  showStep?: boolean;
 }
 
 // Helper to check if a packed field has changed
@@ -23,6 +28,27 @@ const hasFieldChanged = (f: PackedFieldResponse): boolean => {
   const initialDisplay = f.initial_display ?? formatDecodedValue(f.initial_decoded);
   const finalDisplay = f.final_display ?? formatDecodedValue(f.final_decoded);
   return initialDisplay !== finalDisplay;
+};
+
+const stringifyValue = (val: unknown, fallback: string): string => {
+  if (val === null || val === undefined) return fallback;
+  if (typeof val === 'object') {
+    // Render objects as multiline fields instead of compact JSON
+    return formatObjectMultiline(val as Record<string, unknown>);
+  }
+  return String(val);
+};
+
+const stringifyValueForCopy = (val: unknown, fallback: string): string => {
+  if (val === null || val === undefined) return fallback;
+  if (typeof val === 'object') {
+    try {
+      return JSON.stringify(val);
+    } catch {
+      return fallback;
+    }
+  }
+  return String(val);
 };
 
 // Helper to check if a value represents zero (handles various formats)
@@ -68,9 +94,13 @@ const PackedFieldsVariableDisplay = ({
 const PackedFieldsValueDisplay = ({
   fields,
   chainId,
+  initialRaw,
+  finalRaw,
 }: {
   fields: PackedFieldResponse[];
   chainId: string;
+  initialRaw: string;
+  finalRaw: string;
 }) => {
   const changedFields = getChangedPackedFields(fields);
 
@@ -86,18 +116,28 @@ const PackedFieldsValueDisplay = ({
             <div className={cn('text-xs font-mono leading-tight flex items-center gap-1', isInitialZero ? 'text-gray-300' : 'text-gray-500')}>
               <HoverCell
                 display={initialDisplay}
-                value={f.initial_decoded !== null ? String(f.initial_decoded) : initialDisplay}
+                {...makeHoverProps(
+                  f.initial_decoded,
+                  f.initial_display ?? initialDisplay,
+                  initialRaw
+                )}
                 chainId={chainId}
                 colorClass={cn('text-xs font-mono', isInitialZero ? 'text-gray-300' : 'text-gray-500')}
+                forceActions
               />
               <span className="text-gray-400">→</span>
             </div>
-            <div className={cn('text-xs font-mono leading-tight font-bold', isFinalZero ? 'text-gray-300' : 'text-gray-900')}>
+            <div className={cn('text-xs font-mono leading-tight', isFinalZero ? 'text-gray-300' : 'text-gray-900')}>
               <HoverCell
                 display={finalDisplay}
-                value={f.final_decoded !== null ? String(f.final_decoded) : finalDisplay}
+                {...makeHoverProps(
+                  f.final_decoded,
+                  f.final_display ?? finalDisplay,
+                  finalRaw
+                )}
                 chainId={chainId}
-                colorClass={cn('text-xs font-mono font-bold', isFinalZero ? 'text-gray-300' : 'text-gray-900')}
+                colorClass={cn('text-xs font-mono', isFinalZero ? 'text-gray-300' : 'text-gray-900')}
+                forceActions
               />
             </div>
           </div>
@@ -107,37 +147,150 @@ const PackedFieldsValueDisplay = ({
   );
 };
 
+const isPlainObject = (val: unknown): val is Record<string, unknown> =>
+  val !== null && typeof val === 'object' && !Array.isArray(val);
+
+const makeHoverProps = (decoded: unknown, display: string | null, raw: string) => {
+  return {
+    value: decoded !== null && decoded !== undefined ? getCopyValue(decoded, display ?? raw, raw) : (display ?? raw),
+    tooltip: getTooltipValue(decoded, display ?? raw, raw),
+  };
+};
+
+const guessTypeLabel = (v: unknown): string => {
+  if (typeof v === 'string') {
+    if (/^0x[a-fA-F0-9]{40}$/.test(v)) return 'address';
+    if (/^0x[a-fA-F0-9]+$/.test(v)) return 'bytes';
+    return 'string';
+  }
+  if (typeof v === 'number' || typeof v === 'bigint') return 'uint256';
+  if (typeof v === 'boolean') return 'bool';
+  return '';
+};
+
+const StructDiffDisplay = ({
+  initial,
+  final,
+  chainId,
+}: {
+  initial: Record<string, unknown> | null;
+  final: Record<string, unknown> | null;
+  chainId: string;
+}) => {
+  const [expanded, setExpanded] = useState(false);
+  const keys = Array.from(new Set([...(initial ? Object.keys(initial) : []), ...(final ? Object.keys(final) : [])]));
+  const labelWidth = Math.max(
+    ...keys.map((key) => {
+      const val = final?.[key] ?? initial?.[key];
+      const typeLabel = guessTypeLabel(val);
+      const label = `${typeLabel ? `${typeLabel} ` : ''}${key}`;
+      return label.length;
+    }),
+    0
+  );
+
+  return (
+    <div className="space-y-0.5">
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        className="text-[10px] text-gray-500 font-mono flex items-center gap-1 hover:text-gray-800"
+      >
+        <span className="w-3 inline-block text-center">{expanded ? '−' : '+'}</span>
+        <span>struct ({keys.length} {keys.length === 1 ? 'field' : 'fields'})</span>
+      </button>
+      {expanded && (
+        <>
+          {keys.map((key) => {
+            const beforeVal = initial ? initial[key] : undefined;
+            const afterVal = final ? final[key] : undefined;
+            const typeLabel = guessTypeLabel(afterVal ?? beforeVal);
+            const beforeDisplay = beforeVal !== undefined ? formatDecodedValue(beforeVal) : '—';
+            const afterDisplay = afterVal !== undefined ? formatDecodedValue(afterVal) : '—';
+            const label = `${typeLabel ? `${typeLabel} ` : ''}${key}`;
+            const pad = Math.max(0, labelWidth - label.length);
+            const paddedLabel = label + ' '.repeat(pad);
+            return (
+              <div key={key} className="flex flex-col text-xs font-mono leading-tight">
+                <div className="flex items-center gap-1">
+                  <span className="text-gray-500 whitespace-pre">
+                    {paddedLabel}
+                  </span>
+                <HoverCell
+                  display={beforeDisplay}
+                  {...makeHoverProps(beforeVal, beforeDisplay, '')}
+                  chainId={chainId}
+                  colorClass="text-gray-500 text-xs font-mono"
+                  forceActions
+                />
+                <span className="text-gray-400">→</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-gray-500 whitespace-pre opacity-0">
+                  {paddedLabel}
+                </span>
+                <HoverCell
+                  display={afterDisplay}
+                  {...makeHoverProps(afterVal, afterDisplay, '')}
+                  chainId={chainId}
+                  colorClass="text-gray-900 text-xs font-mono"
+                  forceActions
+                />
+              </div>
+            </div>
+          );
+        })}
+        </>
+      )}
+    </div>
+  );
+};
+
 export function SlotRow({
   slot,
   showHex,
   chainId,
+  showStep = true,
 }: SlotRowProps) {
   const [expanded, setExpanded] = useState(false);
   const hasInterimChanges = slot.changes.length > 1;
   const hasPacked = slot.packed_fields && slot.packed_fields.length > 1;
   const hasParams = slot.params && slot.params.length > 0;
-  // Show expand button if there are params or interim changes
-  const canExpand = hasParams || hasInterimChanges;
+  const isDynamicArray = slot.is_dynamic_array && slot.array_index !== null;
+  // Show expand button only for interim changes (params/array moved to HoverCard)
+  const canExpand = hasInterimChanges;
 
   const variableName = slot.variable_name || formatSlotShort(slot.slot, 4);
 
   // Format slot number for the SLOT column
-  // When HEX mode is on: always show abbreviated hex
-  // When HEX mode is off: show decimal for small slots, abbreviated hex for large slots
+  // Non-hex mode: show decimal up to 999, then abbreviate aggressively
+  // Hex mode: show hex, max 6 chars including 0x (e.g., 0x3e7, 0xa..)
   const formatSlotNumber = (slotHex: string): string => {
-    if (showHex) {
-      // HEX mode: always show abbreviated hex
-      return formatSlotShort(slotHex, 4);
-    }
     try {
       const slotBigInt = BigInt(slotHex);
-      // Only show decimal for small static slots (< 100)
-      if (slotBigInt < BigInt(100)) {
-        return slotBigInt.toString();
+
+      if (showHex) {
+        // Hex mode: max 6 chars including "0x" = 4 hex digits
+        const hexStr = slotBigInt.toString(16);
+        if (hexStr.length <= 4) {
+          return '0x' + hexStr;
+        }
+        // Abbreviate: 0x + first 2 chars + ..
+        return '0x' + hexStr.slice(0, 2) + '..';
+      } else {
+        // Non-hex mode: show decimal up to 999
+        if (slotBigInt <= BigInt(999)) {
+          return slotBigInt.toString();
+        }
+        // For large numbers, show abbreviated hex (max 6 chars)
+        const hexStr = slotBigInt.toString(16);
+        if (hexStr.length <= 4) {
+          return '0x' + hexStr;
+        }
+        return '0x' + hexStr.slice(0, 2) + '..';
       }
-      // Always abbreviate large slots (keccak256 hashes) to short hex
-      return formatSlotShort(slotHex, 4);
     } catch {
+      // Fallback for invalid input
       return formatSlotShort(slotHex, 4);
     }
   };
@@ -157,6 +310,8 @@ export function SlotRow({
   // Use packed fields display if available and not in hex mode
   const initialValue = getDisplayValue(slot.initial_display, slot.initial_decoded, slot.initial_raw);
   const finalValue = getDisplayValue(slot.final_display, slot.final_decoded, slot.final_raw);
+  const structInitial = isPlainObject(slot.initial_decoded) ? (slot.initial_decoded as Record<string, unknown>) : null;
+  const structFinal = isPlainObject(slot.final_decoded) ? (slot.final_decoded as Record<string, unknown>) : null;
 
   const formatKey = (key: string | null): { display: string; full: string } | null => {
     if (!key) return null;
@@ -169,8 +324,8 @@ export function SlotRow({
     return { display: key, full: key };
   };
 
-  // Get the first PC for the slot (from first change)
-  const firstPc = slot.changes.length > 0 ? slot.changes[0].pc : null;
+  // Get the first step for the slot (from first change) - execution order
+  const firstStep = slot.changes.length > 0 ? slot.changes[0].step : null;
 
   // Render struct definition with highlighted modified member
   const renderStructDefinition = (structDef: StructDefinitionResponse, modifiedField: string | null) => (
@@ -231,25 +386,122 @@ export function SlotRow({
     </div>
   );
 
-  // Tooltip shows the opposite of what's displayed: hex shows name, name shows hex
-  const variableTooltip = (
-    <div className="space-y-1.5 text-xs">
-      {showHex ? (
-        // When showing hex, tooltip shows variable name (if available)
-        slot.variable_name && <div className="font-medium">{slot.variable_name}</div>
-      ) : (
-        // When showing name, tooltip shows full hex slot
-        <div className="font-mono">{slot.slot}</div>
+  // Determine if we should show type_label (skip when redundant with struct/packed)
+  const hasStructInfo = !!slot.struct_definition;
+  const showTypeLabel = slot.type_label && !hasStructInfo && !hasPacked;
+
+  // HoverCard content shows detailed variable info in a larger, interactive card
+  const variableHoverContent = (
+    <div className="space-y-2 min-w-[280px]">
+      {/* Header: Variable name */}
+      {slot.variable_name && (
+        <div className="font-medium text-gray-100 text-sm">
+          {slot.variable_name}
+        </div>
       )}
-      {slot.type_label && <div className="text-gray-400">{slot.type_label}</div>}
-      {slot.struct_definition && renderStructDefinition(slot.struct_definition, slot.struct_field)}
+
+      {/* Slot - just the hex for copying (decimal already in SLOT column) */}
+      <HoverCardSection title="Slot">
+        <div className="font-mono text-xs text-gray-300 break-all select-all">
+          {slot.slot}
+        </div>
+      </HoverCardSection>
+
+      {/* Type information - only show when not redundant with struct/packed */}
+      {showTypeLabel && (
+        <>
+          <HoverCardDivider />
+          <HoverCardSection title="Type">
+            <div className="font-mono text-xs text-gray-300">
+              {slot.type_label}
+            </div>
+          </HoverCardSection>
+        </>
+      )}
+
+      {/* Value type for mappings - only when different and useful */}
+      {slot.value_type && slot.value_type !== slot.type_label && !hasStructInfo && (
+        <>
+          <HoverCardDivider />
+          <HoverCardSection title="Value Type">
+            <div className="font-mono text-xs text-gray-300">
+              {slot.value_type}
+            </div>
+          </HoverCardSection>
+        </>
+      )}
+
+      {/* Struct definition */}
+      {slot.struct_definition && (
+        <>
+          <HoverCardDivider />
+          {renderStructDefinition(slot.struct_definition, slot.struct_field)}
+        </>
+      )}
+
+      {/* Packed fields info */}
+      {hasPacked && slot.packed_fields && (
+        <>
+          <HoverCardDivider />
+          <HoverCardSection title="Packed Fields">
+            {renderPackedFieldsTooltip(slot.packed_fields)}
+          </HoverCardSection>
+        </>
+      )}
+
+      {/* Dynamic array index - interactive with copy */}
+      {isDynamicArray && (
+        <>
+          <HoverCardDivider />
+          <HoverCardSection title="Array Index">
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500 text-xs font-mono">uint256</span>
+              <HoverCell
+                display={String(slot.array_index)}
+                value={String(slot.array_index)}
+                chainId={chainId}
+                colorClass="text-gray-200 text-xs font-mono"
+                forceActions
+              />
+            </div>
+          </HoverCardSection>
+        </>
+      )}
+
+      {/* Mapping params - interactive with copy */}
+      {hasParams && slot.params && (
+        <>
+          <HoverCardDivider />
+          <HoverCardSection title={slot.params.length > 1 ? 'Mapping Keys' : 'Mapping Key'}>
+            <div className="space-y-1">
+              {slot.params.map((param, idx) => {
+                const formatted = formatKey(param.value);
+                return (
+                  <div key={idx} className="flex items-center gap-2">
+                    <span className="text-gray-500 text-xs font-mono">{param.type}</span>
+                    {formatted && (
+                      <HoverCell
+                        display={param.label || formatted.display}
+                        value={formatted.full}
+                        chainId={chainId}
+                        colorClass="text-gray-200 text-xs font-mono"
+                        forceActions
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </HoverCardSection>
+        </>
+      )}
     </div>
   );
 
   return (
     <>
       <tr className={cn('hover:bg-gray-50 border-t border-gray-100', expanded && 'bg-gray-50')}>
-        <td className="px-1 py-0.5 w-6">
+        <td className="px-1 py-0.5 w-5">
           {canExpand ? (
             <button
               onClick={() => setExpanded(!expanded)}
@@ -262,9 +514,9 @@ export function SlotRow({
           )}
         </td>
 
-        <td className="px-1 py-0.5 align-top">
-          <Tooltip content={variableTooltip} position="bottom" delay={200}>
-            <div className="space-y-0">
+        <td className="px-1 py-0.5 align-top w-48 whitespace-normal">
+          <HoverCard content={variableHoverContent} delay={200} maxWidth="max-w-sm">
+            <div className="space-y-0 break-words">
               {/* Top line: struct type + variable name (for struct mappings) */}
               {slot.struct_definition?.name && (
                 <div className="text-xs font-mono leading-tight">
@@ -296,8 +548,8 @@ export function SlotRow({
               ) : !slot.struct_definition?.name && !slot.is_mapping ? (
                 /* Regular variable (no struct, no mapping) */
                 <div className="text-xs font-mono leading-tight">
-                  {slot.value_type && (
-                    <><span className="text-gray-400">{slot.value_type}</span>{' '}</>
+                  {(slot.value_type || slot.type_label) && (
+                    <><span className="text-gray-400">{slot.value_type || slot.type_label}</span>{' '}</>
                   )}
                   <span className="text-gray-900 font-medium">{variableName}</span>
                 </div>
@@ -307,86 +559,71 @@ export function SlotRow({
                 <PackedFieldsVariableDisplay fields={slot.packed_fields!} />
               )}
             </div>
-          </Tooltip>
+          </HoverCard>
         </td>
 
         <td className="px-1 py-0.5 align-top">
           {hasPacked && !showHex ? (
-            <PackedFieldsValueDisplay fields={slot.packed_fields!} chainId={chainId} />
+            <PackedFieldsValueDisplay fields={slot.packed_fields!} chainId={chainId} initialRaw={slot.initial_raw} finalRaw={slot.final_raw} />
+          ) : (structInitial || structFinal) && !showHex ? (
+            <StructDiffDisplay initial={structInitial} final={structFinal} chainId={chainId} />
           ) : (
             <div className="space-y-0">
               <div className={cn('text-xs font-mono leading-tight flex items-center gap-1', isZeroValue(slot.initial_raw, slot.initial_decoded) ? 'text-gray-300' : 'text-gray-500')}>
                 <HoverCell
                   display={initialValue}
-                  value={slot.initial_decoded !== null ? String(slot.initial_decoded) : slot.initial_raw}
+                  {...makeHoverProps(
+                    slot.initial_decoded,
+                    slot.initial_display ?? slot.initial_raw,
+                    slot.initial_raw
+                  )}
                   chainId={chainId}
                   colorClass={cn('text-xs font-mono', isZeroValue(slot.initial_raw, slot.initial_decoded) ? 'text-gray-300' : 'text-gray-500')}
+                  forceActions
                 />
                 <span className="text-gray-400">→</span>
               </div>
-              <div className={cn('text-xs font-mono leading-tight font-bold', isZeroValue(slot.final_raw, slot.final_decoded) ? 'text-gray-300' : 'text-gray-900')}>
+              <div className={cn('text-xs font-mono leading-tight', isZeroValue(slot.final_raw, slot.final_decoded) ? 'text-gray-300' : 'text-gray-900')}>
                 <HoverCell
                   display={finalValue}
-                  value={slot.final_decoded !== null ? String(slot.final_decoded) : slot.final_raw}
+                  {...makeHoverProps(
+                    slot.final_decoded,
+                    slot.final_display ?? slot.final_raw,
+                    slot.final_raw
+                  )}
                   chainId={chainId}
-                  colorClass={cn('text-xs font-mono font-bold', isZeroValue(slot.final_raw, slot.final_decoded) ? 'text-gray-300' : 'text-gray-900')}
+                  colorClass={cn('text-xs font-mono', isZeroValue(slot.final_raw, slot.final_decoded) ? 'text-gray-300' : 'text-gray-900')}
+                  forceActions
                 />
               </div>
             </div>
           )}
         </td>
 
-        <td className="px-1 py-0.5">
-          <Tooltip content={slot.slot} position="bottom" delay={200}>
-            <span className="text-xs text-gray-500 font-mono">
-              {slotNumber}
-            </span>
-          </Tooltip>
+        <td className="px-1 py-0.5 w-8">
+          <HoverCard content={<div className="font-mono text-xs text-gray-100 break-all">{slot.slot}</div>} position="top">
+            <HoverCell
+              display={slotNumber}
+              value={slot.slot}
+              chainId={chainId}
+              colorClass="text-xs text-gray-500 font-mono"
+              forceActions
+            />
+          </HoverCard>
         </td>
 
-        <td className="px-1 py-0.5 text-right">
-          {firstPc !== null && (
-            <span className="text-[10px] text-gray-400 font-mono">
-              {firstPc}
-            </span>
-          )}
-        </td>
-      </tr>
-
-      {/* Expanded details row - show mapping keys and other metadata */}
-      {expanded && hasParams && (
-        <tr className="bg-gray-50">
-          <td className="px-1 py-0.5" />
-          <td colSpan={4} className="px-1 py-1.5">
-            <div className="pl-2 space-y-1">
-              {/* Mapping Params Section */}
-              <div className="flex items-start gap-2">
-                <span className="text-[10px] text-gray-400 font-medium w-12 flex-shrink-0">
-                  {slot.variable_name ? slot.variable_name : 'Params'}
+        {showStep && (
+          <td className="px-1 py-0.5 text-right w-8">
+            {firstStep !== null && firstStep !== undefined && (
+              <HoverCard content={<div className="font-mono text-[10px] text-gray-100">Step: {firstStep}</div>} position="top">
+                <span className="text-[10px] text-gray-400 font-mono cursor-default">
+                  {firstStep}
                 </span>
-                <div className="space-y-0.5">
-                  {slot.params!.map((param, idx) => {
-                    const formatted = formatKey(param.value);
-                    return (
-                      <div key={idx} className="text-[10px] font-mono leading-tight flex items-center gap-1">
-                        <span className="text-gray-400 w-16">{param.type}</span>
-                        {formatted && (
-                          <HoverCell
-                            display={param.label || formatted.display}
-                            value={formatted.full}
-                            chainId={chainId}
-                            colorClass="text-gray-600 text-[10px]"
-                          />
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
+              </HoverCard>
+            )}
           </td>
-        </tr>
-      )}
+        )}
+      </tr>
 
       {/* Expanded interim changes rows */}
       {expanded && hasInterimChanges && slot.changes.map((change, idx) => {
@@ -406,30 +643,40 @@ export function SlotRow({
                 <div className={cn('text-xs font-mono leading-tight flex items-center gap-1', isZeroValue(change.old_raw, change.old_decoded) ? 'text-gray-300' : 'text-gray-500')}>
                   <HoverCell
                     display={oldVal}
-                    value={change.old_decoded !== null ? String(change.old_decoded) : change.old_raw}
+                    {...makeHoverProps(
+                      change.old_decoded,
+                      change.old_display ?? change.old_raw,
+                      change.old_raw
+                    )}
                     chainId={chainId}
                     colorClass={cn('text-xs font-mono', isZeroValue(change.old_raw, change.old_decoded) ? 'text-gray-300' : 'text-gray-500')}
                   />
                   <span className="text-gray-400">→</span>
                 </div>
-                <div className={cn('text-xs font-mono leading-tight font-bold', isZeroValue(change.new_raw, change.new_decoded) ? 'text-gray-300' : 'text-gray-900')}>
+                <div className={cn('text-xs font-mono leading-tight', isZeroValue(change.new_raw, change.new_decoded) ? 'text-gray-300' : 'text-gray-900')}>
                   <HoverCell
                     display={newVal}
-                    value={change.new_decoded !== null ? String(change.new_decoded) : change.new_raw}
+                    {...makeHoverProps(
+                      change.new_decoded,
+                      change.new_display ?? change.new_raw,
+                      change.new_raw
+                    )}
                     chainId={chainId}
-                    colorClass={cn('text-xs font-mono font-bold', isZeroValue(change.new_raw, change.new_decoded) ? 'text-gray-300' : 'text-gray-900')}
+                    colorClass={cn('text-xs font-mono', isZeroValue(change.new_raw, change.new_decoded) ? 'text-gray-300' : 'text-gray-900')}
                   />
                 </div>
               </div>
             </td>
             <td className="px-1 py-0.5" />
-            <td className="px-1 py-0.5 text-right">
-              {change.pc !== null && (
-                <span className="text-[10px] text-gray-400 font-mono">
-                  {change.pc}
-                </span>
-              )}
-            </td>
+            {showStep && (
+              <td className="px-1 py-0.5 text-right">
+                {change.step !== null && change.step !== undefined && (
+                  <span className="text-[10px] text-gray-400 font-mono">
+                    {change.step}
+                  </span>
+                )}
+              </td>
+            )}
           </tr>
         );
       })}
