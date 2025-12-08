@@ -347,6 +347,39 @@ export function getTooltipValue(
 ): string {
   const fallback = display ?? raw;
   if (decoded === null || decoded === undefined) return fallback;
-  const sci = formatScientific(decoded as any);
-  return sci ?? fallback;
+
+  // Only show scientific notation for large numbers (>= 1e9)
+  // For smaller numbers, just show the value as-is
+  try {
+    let numValue: bigint | number;
+    if (typeof decoded === 'bigint') {
+      numValue = decoded;
+    } else if (typeof decoded === 'number') {
+      numValue = decoded;
+    } else if (typeof decoded === 'string') {
+      const cleaned = decoded.replace(/,/g, '');
+      if (/^-?\d+$/.test(cleaned)) {
+        numValue = BigInt(cleaned);
+      } else {
+        return fallback;
+      }
+    } else {
+      return fallback;
+    }
+
+    // Check if magnitude is >= 1e9 (1 billion)
+    const magnitude = typeof numValue === 'bigint'
+      ? (numValue < 0n ? -numValue : numValue)
+      : Math.abs(numValue);
+
+    const threshold = typeof numValue === 'bigint' ? BigInt(1e9) : 1e9;
+    if (magnitude >= threshold) {
+      const sci = formatScientific(numValue);
+      return sci ?? fallback;
+    }
+
+    return fallback;
+  } catch {
+    return fallback;
+  }
 }

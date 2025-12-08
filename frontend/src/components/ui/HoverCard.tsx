@@ -5,9 +5,9 @@
  *
  * Goals for UX:
  * - Always render in the viewport (portal to body, fixed positioning)
- * - Prefer top-right of the cursor with a small offset
- * - Light/fast: minimal delay, no container clipping
- * - Repositions on mouse move without jank
+ * - Position locks when card appears (no jittery following)
+ * - User can move cursor into card to select text / interact
+ * - Repositions only on scroll/resize (edge cases)
  */
 
 import { useState, useRef, useEffect, useLayoutEffect, ReactNode, useCallback } from 'react';
@@ -40,7 +40,8 @@ export function HoverCard({
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const triggerRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
-  const pointerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  // Stores cursor position at moment of hover start (locked position)
+  const anchorRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   // Ensure we only render portal on client
   useEffect(() => {
@@ -52,7 +53,7 @@ export function HoverCard({
       const offset = 12;
       const vw = window.innerWidth;
       const vh = window.innerHeight;
-      const { x, y } = pointerRef.current;
+      const { x, y } = anchorRef.current;
 
       const width = size?.width ?? cardSize.width;
       const height = size?.height ?? cardSize.height;
@@ -83,6 +84,7 @@ export function HoverCard({
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
     }
+    // Calculate position once based on locked anchor point
     calculatePosition();
     timeoutRef.current = setTimeout(() => setIsVisible(true), delay);
   };
@@ -109,32 +111,19 @@ export function HoverCard({
     };
   }, []);
 
-  // Track mouse position while hovering trigger
-  const handlePointerMove = useCallback(
-    (event: MouseEvent) => {
-      pointerRef.current = { x: event.clientX, y: event.clientY };
-      if (isVisible) {
-        calculatePosition();
-      }
-    },
-    [calculatePosition, isVisible]
-  );
-
-  // Recalculate position on scroll/resize while visible
+  // Recalculate position on scroll/resize while visible (keeps card in viewport)
   useEffect(() => {
     if (!isVisible) return;
 
-    const handleScroll = () => calculatePosition();
-    window.addEventListener('scroll', handleScroll, true);
-    window.addEventListener('resize', handleScroll);
-    window.addEventListener('mousemove', handlePointerMove, true);
+    const handleScrollOrResize = () => calculatePosition();
+    window.addEventListener('scroll', handleScrollOrResize, true);
+    window.addEventListener('resize', handleScrollOrResize);
 
     return () => {
-      window.removeEventListener('scroll', handleScroll, true);
-      window.removeEventListener('resize', handleScroll);
-      window.removeEventListener('mousemove', handlePointerMove, true);
+      window.removeEventListener('scroll', handleScrollOrResize, true);
+      window.removeEventListener('resize', handleScrollOrResize);
     };
-  }, [isVisible, calculatePosition, handlePointerMove]);
+  }, [isVisible, calculatePosition]);
 
   // Measure card size after it renders to refine positioning
   useLayoutEffect(() => {
@@ -187,14 +176,11 @@ export function HoverCard({
         ref={triggerRef}
         className={cn('inline-block', className)}
         onMouseEnter={(e) => {
-          pointerRef.current = { x: e.clientX, y: e.clientY };
+          // Lock anchor position at hover start
+          anchorRef.current = { x: e.clientX, y: e.clientY };
           showCard();
         }}
         onMouseLeave={hideCard}
-        onMouseMove={(e) => {
-          pointerRef.current = { x: e.clientX, y: e.clientY };
-          if (isVisible) calculatePosition();
-        }}
       >
         {children}
       </div>

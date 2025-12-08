@@ -93,22 +93,30 @@ class TypeDecoder:
             return self._decode_address(data)
 
         # Known custom structs (manually decoded)
+        # Skip if this is an array type - array base slots store length, not struct data
         lower_label = label.lower()
+        is_array_type = "[]" in lower_label or type_info.encoding == "dynamic_array"
 
-        if "currentrateinfo" in lower_label:
-            return self._decode_current_rate_info(data)
-        if "exchangerateinfo" in lower_label:
-            return self._decode_exchange_rate_info(data)
-        if "rewardtype" in lower_label:
-            return self._decode_reward_type(data)
+        if not is_array_type:
+            if "currentrateinfo" in lower_label:
+                return self._decode_current_rate_info(data)
+            if "exchangerateinfo" in lower_label:
+                return self._decode_exchange_rate_info(data)
+            if "rewardtype" in lower_label:
+                return self._decode_reward_type(data)
 
         # Struct type (without known members) - use heuristic decoding
         # This handles nested structs where members aren't available in the layout
-        if type_info.kind == "struct" or "struct" in label:
+        # Skip array types - their base slot stores length (uint256), not struct data
+        if not is_array_type and (type_info.kind == "struct" or "struct" in label):
             # Pad back to 32 bytes and apply heuristic decoding
             padded = data.rjust(32, b"\x00")
             heuristic_result = self.decode_heuristic(padded)
             return heuristic_result.decoded
+
+        # Dynamic array base slot stores length - decode as uint256
+        if is_array_type:
+            return self._decode_uint(data)
 
         # Default to hex
         return "0x" + data.hex()
@@ -252,8 +260,18 @@ class TypeDecoder:
         return DecodedValue(raw=raw_hex, decoded=decoded, type_label="struct RewardDistributorMultiEpoch.RewardType", display=display)
 
     def _decode_struct_slot(self, raw_value: bytes, type_info: StorageType, slot_offset: int) -> DecodedValue | None:
-        """Attempt slot-aware struct decoding for known structs."""
+        """Attempt slot-aware struct decoding for known structs.
+
+        Only applies to actual struct types, not arrays of structs.
+        Array base slots store length (uint256), not struct data.
+        """
         label = (type_info.label or "").lower()
+
+        # Skip array types - their base slots store length, not struct data
+        # Array types have labels like "struct RewardType[]" or encoding="dynamic_array"
+        if "[]" in label or type_info.encoding == "dynamic_array":
+            return None
+
         if "exchangerateinfo" in label:
             return self._decode_exchange_rate_info_slot(raw_value, slot_offset)
         if "rewardtype" in label:
@@ -515,8 +533,8 @@ class TypeDecoder:
             return DecodedValue(
                 raw=raw_hex,
                 decoded=length,
-                type_label=f"{type_label} (long)",
-                display=f"length={length} bytes",
+                type_label=f"{type_label} length",
+                display=str(length),
             )
 
     def decode_dynamic_bytes_data_slot(

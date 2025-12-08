@@ -178,6 +178,33 @@ Font:       text-xs
 
 ---
 
+## Struct Value Display
+
+When displaying struct changes (before → after), use a multi-line format with each field on its own line:
+
+```
+datatype field_name    BEFORE_VALUE →
+                       AFTER_VALUE
+```
+
+**Rules:**
+- Each struct member on its own line
+- Type label in gray, field name in default color
+- Before value on first line with arrow
+- After value on second line, vertically aligned with before value
+- Use consistent left padding for alignment
+- Never display as JSON - always use the line-per-field format
+
+**Example:**
+```
+address reward_token      0x0000...0000 →
+                          0x7932...e278
+bool    is_non_claimable  false →
+                          false
+```
+
+---
+
 ## Do / Don't
 
 **Do:**
@@ -185,6 +212,7 @@ Font:       text-xs
 - Align elements to grid
 - Keep UI sparse and clean
 - Use whitespace generously
+- Display struct fields on separate lines (not JSON)
 
 **Don't:**
 - Use colors beyond the palette
@@ -192,3 +220,4 @@ Font:       text-xs
 - Add shadows or gradients
 - Use decorative elements
 - Mix font families
+- Display structs as JSON objects

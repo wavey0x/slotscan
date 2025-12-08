@@ -158,80 +158,6 @@ class TransactionTracer:
             raise TransactionNotFoundError(tx_hash)
         return receipt
 
-    # Custom JS tracer to capture SSTORE operations with program counters and execution order
-    SSTORE_TRACER = """{
-        sstores: [],
-        index: 0,
-        step: function(log, db) {
-            if (log.op.toString() === "SSTORE") {
-                this.sstores.push({
-                    address: toHex(log.contract.getAddress()),
-                    pc: log.getPC(),
-                    slot: toHex(log.stack.peek(0)),
-                    value: toHex(log.stack.peek(1)),
-                    depth: log.getDepth(),
-                    index: this.index++
-                });
-            }
-        },
-        fault: function(log, db) {},
-        result: function(ctx, db) {
-            return {sstores: this.sstores};
-        }
-    }"""
-
-    # Combined tracer that captures both SSTORE and SHA3 (keccak256) operations
-    # SHA3 preimages let us decode mapping keys from the hash
-    STORAGE_TRACER = """{
-        sstores: [],
-        sha3s: [],
-        stepCounter: 0,
-        pendingSha3: null,
-        step: function(log, db) {
-            var currentStep = this.stepCounter++;
-            var op = log.op.toString();
-
-            // If we have a pending SHA3, capture its result (now on top of stack)
-            if (this.pendingSha3 !== null) {
-                this.pendingSha3.hash = toHex(log.stack.peek(0));
-                this.sha3s.push(this.pendingSha3);
-                this.pendingSha3 = null;
-            }
-
-            if (op === "SSTORE") {
-                this.sstores.push({
-                    address: toHex(log.contract.getAddress()),
-                    pc: log.getPC(),
-                    slot: toHex(log.stack.peek(0)),
-                    value: toHex(log.stack.peek(1)),
-                    depth: log.getDepth(),
-                    index: currentStep
-                });
-            } else if (op === "SHA3" || op === "KECCAK256") {
-                // SHA3/KECCAK256: stack has [offset, size]
-                // Read the preimage from memory
-                var offset = log.stack.peek(0).valueOf();
-                var size = log.stack.peek(1).valueOf();
-                // Only capture mapping-sized preimages (64 bytes = 2 words for single mapping)
-                // or 96 bytes for nested mappings, etc.
-                if (size >= 64 && size <= 128) {
-                    var preimage = toHex(log.memory.slice(offset, offset + size));
-                    // Store pending - we'll get the hash result on the next step
-                    this.pendingSha3 = {
-                        address: toHex(log.contract.getAddress()),
-                        preimage: preimage,
-                        size: size,
-                        depth: log.getDepth()
-                    };
-                }
-            }
-        },
-        fault: function(log, db) {},
-        result: function(ctx, db) {
-            return {sstores: this.sstores, sha3s: this.sha3s};
-        }
-    }"""
-
     async def _execute_trace(self, chain_id: int, tx_hash: str) -> dict:
         """Execute debug_traceTransaction with prestateTracer."""
         web3 = self.web3_provider.get_web3(chain_id)
@@ -263,60 +189,21 @@ class TransactionTracer:
 
         return result.get("result", {})
 
-    async def _execute_sstore_trace(self, chain_id: int, tx_hash: str) -> list[dict]:
-        """Execute debug_traceTransaction with custom SSTORE tracer to get PCs."""
-        web3 = self.web3_provider.get_web3(chain_id)
-
-        try:
-            result = await web3.provider.make_request(
-                "debug_traceTransaction", [tx_hash, {"tracer": self.SSTORE_TRACER}]
-            )
-        except Exception as e:
-            logger.warning(f"SSTORE tracer failed for {tx_hash}: {e}")
-            return []
-
-        if "error" in result:
-            logger.warning(f"SSTORE tracer error for {tx_hash}: {result['error']}")
-            return []
-
-        trace_result = result.get("result", {})
-        return trace_result.get("sstores", [])
-
     async def _execute_storage_trace(
         self, chain_id: int, tx_hash: str, tx_to_address: str | None = None
     ) -> tuple[list[dict], list[dict]]:
         """
         Execute debug_traceTransaction to capture SSTORE and SHA3 operations.
 
-        Tries two methods:
-        1. Custom JS tracer (Geth-compatible) - preferred, captures both in one call
-        2. structLogs tracer (Reth-compatible) - fallback, parses raw EVM execution
+        Uses structLogs tracer which works on Reth and all nodes with debug enabled.
+        Parses raw EVM execution to extract storage operations with proper address
+        tracking for CALL, DELEGATECALL, and CREATE opcodes.
 
         Args:
-            tx_to_address: The transaction's "to" address (for structLogs address tracking)
+            tx_to_address: The transaction's "to" address (for address tracking)
 
         Returns (sstores, sha3s) where sha3s contains preimage data.
         """
-        web3 = self.web3_provider.get_web3(chain_id)
-
-        # Try custom JS tracer first (works on Geth and some Geth-compatible nodes)
-        try:
-            result = await web3.provider.make_request(
-                "debug_traceTransaction", [tx_hash, {"tracer": self.STORAGE_TRACER}]
-            )
-            if "error" not in result:
-                trace_result = result.get("result", {})
-                sstores = trace_result.get("sstores", [])
-                sha3s = trace_result.get("sha3s", [])
-                if sstores or sha3s:
-                    logger.info(f"JS tracer success: sstores={len(sstores)}, sha3s={len(sha3s)}")
-                    return sstores, sha3s
-            # JS tracer returned error or empty, try structLogs
-            logger.info(f"JS tracer returned error or empty, trying structLogs")
-        except Exception as e:
-            logger.info(f"JS tracer not supported, trying structLogs: {e}")
-
-        # Fallback: Use structLogs tracer (works on Reth and all nodes with debug enabled)
         return await self._execute_structlogs_trace(chain_id, tx_hash, tx_to_address)
 
     async def _execute_structlogs_trace(
@@ -332,6 +219,11 @@ class TransactionTracer:
         - When the opcode executes, stack has [offset, size]
         - Memory contains the preimage at memory[offset:offset+size]
         - The hash result appears on the stack in the NEXT step
+
+        Address tracking handles:
+        - CALL/STATICCALL: New context with target's storage
+        - DELEGATECALL/CALLCODE: Code from target but storage stays with caller
+        - CREATE/CREATE2: New contract created, constructor writes to new contract's storage
 
         Args:
             tx_to_address: The transaction's "to" address (top-level contract at depth=1)
@@ -390,16 +282,46 @@ class TransactionTracer:
 
         logger.info(f"structLogs trace: {len(struct_logs)} steps (memory={'enabled' if include_memory else 'disabled'})")
 
+        # === PASS 1: Find all CREATE/CREATE2 and their resulting addresses ===
+        # We need to know what contracts are created so we can attribute their constructor SSTOREs
+        create_info: dict[int, dict] = {}  # step_index -> {start_step, end_step, created_address, depth}
+
+        for i, log in enumerate(struct_logs):
+            op = log.get("op", "")
+            if op in ("CREATE", "CREATE2"):
+                depth = log.get("depth", 1)
+                # Find when constructor ends (when we return to this depth)
+                for j in range(i + 1, len(struct_logs)):
+                    if struct_logs[j].get("depth", 1) == depth:
+                        # Constructor ended, created address is on stack
+                        stack = struct_logs[j].get("stack", [])
+                        if stack:
+                            created_addr = "0x" + stack[-1][-40:].lower()
+                            if created_addr != "0x" + "0" * 40:  # Not a failed create
+                                create_info[i] = {
+                                    "start_step": i,
+                                    "end_step": j,
+                                    "created_address": created_addr,
+                                    "constructor_depth": depth + 1,
+                                }
+                        break
+
+        logger.info(f"Found {len(create_info)} CREATE/CREATE2 operations")
+
+        # === PASS 2: Parse SSTOREs and SHA3s with proper address tracking ===
         sstores = []
         sha3s = []
         pending_sha3 = None
 
-        # Track contract address at each depth (for nested calls)
-        # depth 1 = top-level contract, increases with CALL/DELEGATECALL
-        depth_to_address: dict[int, str] = {}
+        # Track storage_address at each depth (who OWNS the storage)
+        # This is different from code_address for DELEGATECALL
+        # Stack of (storage_address, code_address) tuples
+        call_stack: list[tuple[str, str]] = []
         if tx_to_address:
-            # Initialize depth=1 with the transaction's "to" address
-            depth_to_address[1] = tx_to_address.lower()
+            call_stack.append((tx_to_address.lower(), tx_to_address.lower()))
+
+        # Track which CREATE we're currently inside (if any)
+        active_creates: list[dict] = []
 
         for i, log in enumerate(struct_logs):
             op = log.get("op", "")
@@ -408,10 +330,24 @@ class TransactionTracer:
             stack = log.get("stack", [])
             memory = log.get("memory", [])
 
+            # Pop from call_stack when depth decreases
+            while len(call_stack) > depth:
+                call_stack.pop()
+
+            # Pop from active_creates when we've passed their end
+            while active_creates and i >= active_creates[-1]["end_step"]:
+                active_creates.pop()
+
+            # Check if we're entering a CREATE context
+            if i in create_info:
+                info = create_info[i]
+                active_creates.append(info)
+                # Push the created address onto call stack for constructor execution
+                call_stack.append((info["created_address"], info["created_address"]))
+
             # If we have a pending SHA3, capture its result from current stack top
             if pending_sha3 is not None:
                 if stack:
-                    # Stack is bottom-to-top in structLogs, so last element is top
                     hash_result = stack[-1] if stack else None
                     if hash_result:
                         pending_sha3["hash"] = self._normalize_slot(hash_result)
@@ -419,45 +355,48 @@ class TransactionTracer:
                 pending_sha3 = None
 
             # Track addresses from CALL opcodes for proper attribution
-            if op in ("CALL", "STATICCALL", "DELEGATECALL", "CALLCODE"):
-                # For CALL: stack has [..., gas, addr, value, ...]
-                # For STATICCALL: stack has [..., gas, addr, ...]
+            if op in ("CALL", "STATICCALL"):
+                # CALL/STATICCALL: New context with target's storage
                 if len(stack) >= 2:
-                    # Address is second from top (index -2)
                     addr_hex = stack[-2]
                     if addr_hex:
                         try:
-                            # Convert to checksummed address
-                            addr_clean = addr_hex[-40:] if len(addr_hex) > 40 else addr_hex.zfill(40)
-                            depth_to_address[depth + 1] = "0x" + addr_clean.lower()
+                            addr_clean = "0x" + addr_hex[-40:].lower()
+                            call_stack.append((addr_clean, addr_clean))
                         except Exception:
                             pass
 
-            # Get current contract address for this depth
-            # Note: structLogs doesn't directly give us the contract address
-            # We'd need to track it from the transaction context or CALL opcodes
-            # For now, we'll store depth and let the caller filter by address
-            current_address = depth_to_address.get(depth, "")
+            elif op in ("DELEGATECALL", "CALLCODE"):
+                # DELEGATECALL/CALLCODE: Code from target but storage stays with caller
+                if len(stack) >= 2:
+                    addr_hex = stack[-2]
+                    if addr_hex:
+                        try:
+                            code_addr = "0x" + addr_hex[-40:].lower()
+                            # Storage stays with current context
+                            current_storage = call_stack[-1][0] if call_stack else ""
+                            call_stack.append((current_storage, code_addr))
+                        except Exception:
+                            pass
+
+            # Get current storage address (who owns the storage for SSTOREs at this depth)
+            current_storage_address = call_stack[-1][0] if call_stack else ""
 
             if op == "SSTORE":
                 # SSTORE: stack has [..., value, slot] (slot on top)
-                # EVM pops slot first, then value: SSTORE(slot, value)
                 if len(stack) >= 2:
-                    slot = stack[-1]  # Top (slot)
-                    value = stack[-2]  # Second (value)
+                    slot = stack[-1]
+                    value = stack[-2]
                     sstores.append({
-                        "address": current_address,
+                        "address": current_storage_address,
                         "pc": pc,
                         "slot": self._normalize_slot(slot),
                         "value": self._normalize_value(value),
                         "depth": depth,
-                        "index": i,  # Use actual EVM step number from enumerate
+                        "index": i,
                     })
 
             elif op in ("SHA3", "KECCAK256") and include_memory:
-                # SHA3/KECCAK256: pops offset (top), then size (second)
-                # stack[-1] is top (offset), stack[-2] is second (size)
-                # Skip when memory is disabled - we can't extract preimages
                 if len(stack) >= 2:
                     try:
                         offset = int(stack[-1], 16) if isinstance(stack[-1], str) else stack[-1]
@@ -465,14 +404,11 @@ class TransactionTracer:
                     except (ValueError, TypeError):
                         continue
 
-                    # Only capture mapping-sized preimages (64-128 bytes)
                     if 64 <= size <= 128:
-                        # Extract preimage from memory
                         preimage = self._extract_memory_slice(memory, offset, size)
                         if preimage:
-                            # Store pending - we'll capture hash from next step's stack
                             pending_sha3 = {
-                                "address": current_address,
+                                "address": current_storage_address,
                                 "preimage": preimage,
                                 "size": size,
                                 "depth": depth,
@@ -863,12 +799,30 @@ class TransactionTracer:
             slot = self._normalize_slot(op.get("slot", "0x0"))
 
             address_matches = op_addr == contract_address_lower
-            addr_unknown_top = (not op_addr) and depth == 1
-            if addr_unknown_top:
+            slot_in_valid = slot in valid_slots
+            addr_unknown = not op_addr
+
+            if addr_unknown:
                 had_unknown_address = True
 
-            # Accept if address matches the contract
-            if not address_matches:
+            # Accept SSTORE if:
+            # 1. Address matches our target contract (reliable when tracking works), OR
+            # 2. Address is unknown AND slot is in valid_slots (prestateTracer fallback)
+            #
+            # The slot validation uses prestateTracer as ground truth - it knows exactly
+            # which slots changed for our contract. This handles cases where address
+            # tracking fails (e.g., complex DELEGATECALL chains, edge cases).
+            #
+            # We require BOTH conditions for the fallback (unknown address + valid slot)
+            # to avoid false positives from other contracts with same static slots.
+            should_accept = address_matches or (addr_unknown and slot_in_valid)
+
+            if not should_accept:
+                continue
+
+            # Additional safety: always verify slot belongs to our contract
+            # This catches any remaining edge cases in address tracking
+            if not slot_in_valid:
                 continue
 
             new_value = self._normalize_value(op.get("value", zero_value))
@@ -1195,7 +1149,14 @@ class TransactionTracer:
         index: dict[int, tuple[StorageVariable, int, StorageType | None]] = {}
         for var in layout.variables:
             var_type = layout.get_type(var.type_id)
-            if not var_type or var_type.encoding != "dynamic_array":
+            if not var_type:
+                continue
+            # Detect dynamic array via encoding OR presence of element_type with [] in label
+            is_dynamic_array = (
+                var_type.encoding == "dynamic_array"
+                or (var_type.element_type and "[]" in (var_type.label or ""))
+            )
+            if not is_dynamic_array:
                 continue
 
             # Compute keccak256(base_slot) - where array data starts
@@ -1264,7 +1225,7 @@ class TransactionTracer:
                     "variable": var,
                     "base_slot": var.slot,
                     "data_offset": offset_from_start,
-                    "path": f"{var.name}_{offset_from_start}",
+                    "path": f"{var.name} ({offset_from_start})",
                     "encoding": "bytes",
                 }
 
@@ -1426,11 +1387,34 @@ class TransactionTracer:
                                         new_decoded = self.decoder.decode_dynamic_bytes_slot(
                                             new_bytes, type_label
                                         )
-                                        # For long strings (lowest bit = 1), add _length suffix
+                                        # For long strings (lowest bit = 1), mark as length slot
                                         # Check either old or new value to detect long string mode
                                         is_long = (new_bytes[-1] & 1) == 1 if new_bytes else (old_bytes[-1] & 1) == 1 if old_bytes else False
                                         if is_long:
-                                            variable_path = f"{variable.name}_length"
+                                            variable_path = f"{variable.name} (string length)"
+                                    elif var_type.encoding == "dynamic_array" or (
+                                        var_type.element_type and "[]" in (var_type.label or "")
+                                    ):
+                                        # Dynamic array BASE slot stores the array LENGTH (uint256)
+                                        # NOT the element data - elements are at keccak256(slot)
+                                        # Detect via encoding OR presence of element_type with [] in label
+                                        encoding = "dynamic_array"
+                                        is_dynamic_array = True
+                                        old_length = int.from_bytes(old_bytes, "big")
+                                        new_length = int.from_bytes(new_bytes, "big")
+                                        old_decoded = DecodedValue(
+                                            raw=old_value,
+                                            decoded=old_length,
+                                            type_label="uint256",
+                                            display=str(old_length),
+                                        )
+                                        new_decoded = DecodedValue(
+                                            raw=new_value,
+                                            decoded=new_length,
+                                            type_label="uint256",
+                                            display=str(new_length),
+                                        )
+                                        variable_path = f"{variable.name} (array length)"
                                     elif decode_type:
                                         # For multi-slot structs, pass slot offset so field-specific decode can occur
                                         slot_offset = slot_int - variable.slot if variable else 0
