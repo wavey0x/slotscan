@@ -114,42 +114,34 @@ Given `(chain, address, block OR transaction)`, provide:
 ## 3. Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Web Frontend                            │
-│                    (Next.js + Tailwind CSS)                     │
-└─────────────────────────────────────────────────────────────────┘
-                                 │
-                                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        API Server                               │
-│                   (Python FastAPI + web3.py)                    │
-├─────────────────────────────────────────────────────────────────┤
-│  Services:                                                      │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────────┐ │
-│  │  Contract    │ │   Storage    │ │      Change              │ │
-│  │  Resolver    │ │   Reader     │ │      Detector            │ │
-│  └──────────────┘ └──────────────┘ └──────────────────────────┘ │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────────┐ │
-│  │   Layout     │ │    Type      │ │       Cache              │ │
-│  │   Parser     │ │   Decoder    │ │       Manager            │ │
-│  └──────────────┘ └──────────────┘ └──────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────┘
-         │                   │                    │
-         ▼                   ▼                    ▼
-┌─────────────┐    ┌─────────────────┐    ┌─────────────┐
-│  Postgres   │    │   Redis Cache   │    │  RPC Nodes  │
-│  (metadata, │    │   (hot cache)   │    │  (tracing)  │
-│   layouts)  │    │                 │    │             │
-└─────────────┘    └─────────────────┘    └─────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              External Services                                  │
-│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐        │
-│  │   Sourcify    │  │   Etherscan   │  │  Chain RPCs   │        │
-│  │   (sources)   │  │   (sources)   │  │  (data)       │        │
-│  └───────────────┘  └───────────────┘  └───────────────┘        │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│                  Web Frontend                 │
+│             (Next.js + Tailwind)              │
+└──────────────────────────────────────────────┘
+                     │
+                     ▼
+┌──────────────────────────────────────────────┐
+│                 API Server                    │
+│          (FastAPI + web3.py, async)           │
+├──────────────────────────────────────────────┤
+│  Contract resolver, layout parser,            │
+│  storage reader, tx change detector,          │
+│  type decoder. All compute is in-request.     │
+└──────────────────────────────────────────────┘
+      │                         │
+      ▼                         ▼
+┌──────────────┐        ┌──────────────┐
+│   Postgres   │        │   RPC Node   │
+│  (metadata & │        │ (tracing +   │
+│ cached JSON) │        │  execution)  │
+└──────────────┘        └──────────────┘
+                     │
+                     ▼
+          ┌────────────────────┐
+          │ External Sources   │
+          │ (Sourcify,         │
+          │  Etherscan)        │
+          └────────────────────┘
 ```
 
 ### Component Responsibilities
@@ -161,7 +153,7 @@ Given `(chain, address, block OR transaction)`, provide:
 | **Storage Reader** | Batch `eth_getStorageAt` calls, handle slot computation |
 | **Change Detector** | Trace transactions, extract SSTORE operations, map to layout |
 | **Type Decoder** | Decode raw bytes32 values to Solidity types |
-| **Cache Manager** | Coordinate Redis/Postgres caching strategies |
+| **Cache Layer (Postgres)** | Store computed layouts, storage snapshots, and tx diffs as JSON blobs for reuse |
 
 ---
 
@@ -174,9 +166,9 @@ Given `(chain, address, block OR transaction)`, provide:
 | **Language** | Python 3.11+ | Ecosystem, web3.py compatibility |
 | **Framework** | FastAPI | Async support, automatic OpenAPI docs, type hints |
 | **Ethereum** | web3.py | De facto Python Ethereum library |
-| **Database** | PostgreSQL | JSONB for layouts, reliable persistence |
-| **Cache** | Redis | Fast ephemeral cache for hot data |
-| **Task Queue** | None (v1) | Synchronous processing initially |
+| **Database** | PostgreSQL | JSONB for layouts and cached responses |
+| **Cache** | Postgres JSONB blobs | Reuse last-computed layouts/snapshots/diffs; no Redis |
+| **Task Queue** | None (v1) | All work is in-request |
 
 ### Frontend
 
@@ -338,11 +330,11 @@ Support the following proxy patterns:
 
 | Pattern | Implementation Slot | Notes |
 |---------|---------------------|-------|
-| EIP-1967 Implementation | `0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc` | Most common |
-| EIP-1967 Beacon | `0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50` | Beacon proxy |
-| EIP-1967 Admin | `0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103` | Admin slot |
-| EIP-1822 (UUPS) | `0xc5f16f0fcc639fa48a6947836d9850f504798523bf8c9a3a87d5876cf622bcf7` | Proxiable |
-| OpenZeppelin Legacy | `0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3` | Older OZ proxies |
+| EIP-1967 Implementation | `0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc` | Covers transparent + UUPS proxies |
+| EIP-1967 Admin | `0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103` | Read-only, informative |
+| EIP-1822 (UUPS proxiable) | `0xc5f16f0fcc639fa48a6947836d9850f504798523bf8c9a3a87d5876cf622bcf7` | Optional sanity check |
+
+*Out of v1 scope: beacon proxies, diamonds, legacy OZ slots.*
 
 ### 5.3 Layout Schema
 
@@ -410,9 +402,9 @@ For `(chainId, address, blockNumber)`:
 - Parallel `eth_getStorageAt` calls with batching
 
 **Unverified Contracts:**
-- Read slots discovered via historical traces
-- Optionally scan slot range 0-1024 for non-zero values
-- Store discovered slots for future queries
+- Shallow slot scan (e.g., 0–256) for non-zero values
+- Add slots touched in the current request’s transaction trace
+- Hex-first display; optionally persist scanned slots for reuse
 
 ### 6.2 Transaction Diff
 
@@ -513,12 +505,10 @@ def decode_slot_value(
 
 Since mapping keys cannot be enumerated from storage:
 
-1. **From traces:** Extract keys from SSTORE operations
-2. **From events:** Parse relevant event logs for key values
-3. **From user input:** Allow manual key entry in UI
-4. **Popular keys:** Pre-populate common keys (e.g., known whale addresses)
+1. **From current traces:** Extract keys from SSTORE operations in the requested tx/block
+2. **From user input:** Allow manual key entry in UI
 
-Store discovered mapping keys: `(chainId, contract, slot, key) → firstSeenBlock`
+Optionally persist discovered keys in Postgres for reuse by future requests to the same contract.
 
 ---
 
@@ -526,31 +516,26 @@ Store discovered mapping keys: `(chainId, contract, slot, key) → firstSeenBloc
 
 ### 8.1 Slot Discovery
 
-Track slots via multiple sources:
-- SSTORE operations from transaction traces
-- Non-zero values from slot scans
-- User-added manual slots
+Keep it shallow and deterministic:
+- Scan a small fixed range (e.g., slots `0–256`) for non-zero values when no layout is available.
+- Add slots touched in the current request’s transaction trace (SSTOREs).
+- Allow user-added slots or mapping keys via the UI.
 
 ### 8.2 Display Mode
 
-For unverified contracts, show "raw slot view":
+For unverified contracts, show "raw slot view" only:
 
 | Column | Content |
 |--------|---------|
 | Slot | Hex slot index |
 | Raw Value | bytes32 hex |
-| Interpretations | Dropdown: address / uint256 / int256 / bytes32 / bool |
+| Guess (optional) | Dropdown: address / uint256 / int256 / bytes32 / bool |
 
-### 8.3 Heuristic Type Detection
-
-Apply simple heuristics (not guaranteed):
-
-| Heuristic | Suggested Type |
-|-----------|----------------|
-| Top 12 bytes zero, low 20 bytes non-zero | `address` |
-| Only byte 31 is 0x00 or 0x01 | `bool` |
-| Fits in uint64 range | `uint64` (show as decimal) |
-| Otherwise | `bytes32` |
+### 8.3 Optional Heuristic Detection
+- Address-like: top 12 bytes zero, low 20 bytes non-zero.
+- Bool-like: only last byte is 0x00/0x01.
+- Small uint: value fits in uint64 range.
+- Otherwise default to bytes32. Always label as "heuristic" and allow disabling.
 
 ---
 
@@ -560,13 +545,11 @@ Apply simple heuristics (not guaranteed):
 
 | Data | Cache Location | TTL |
 |------|----------------|-----|
-| Contract metadata | PostgreSQL | Permanent |
-| Storage layouts | PostgreSQL | Permanent |
-| Verification status | PostgreSQL | 24 hours |
-| Slot values (historical) | PostgreSQL | Permanent |
-| Slot values (recent) | Redis | 1 minute |
-| Transaction diffs | PostgreSQL | Permanent |
-| Popular contract data | Redis | 5 minutes |
+| Contract metadata | PostgreSQL | Persistent |
+| Storage layouts | PostgreSQL (JSONB) | Persistent until impl changes |
+| Verification status | PostgreSQL | Revalidate every 24 hours |
+| Storage snapshots (block) | PostgreSQL (JSONB) | Cached payload; optional TTL (e.g., 30 minutes) |
+| Transaction diffs | PostgreSQL (JSONB) | Cached payload; optional TTL (e.g., 30 minutes) |
 
 ### 9.2 Query Limits
 
@@ -582,7 +565,7 @@ Apply simple heuristics (not guaranteed):
 2. **Parallel requests:** Use `asyncio.gather` for independent calls
 3. **Connection pooling:** Reuse RPC connections
 4. **Incremental loading:** Stream large results to frontend
-5. **Background refresh:** Pre-warm cache for popular contracts
+5. **Simple retry:** Single backoff retry for failed RPC; otherwise return degraded response
 
 ---
 
@@ -811,59 +794,35 @@ CREATE TABLE contracts (
     UNIQUE(chain_id, address)
 );
 
--- Discovered slots (for unverified contracts)
-CREATE TABLE discovered_slots (
+-- Cached storage snapshots (decoded values for a block)
+CREATE TABLE storage_snapshots_cache (
     id SERIAL PRIMARY KEY,
     chain_id INTEGER NOT NULL,
     contract_address VARCHAR(100) NOT NULL,
-    slot VARCHAR(100) NOT NULL,
-    first_seen_block BIGINT,
-    first_seen_tx VARCHAR(100),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(chain_id, contract_address, slot)
-);
-
--- Mapping keys (for tracking known mapping keys)
-CREATE TABLE mapping_keys (
-    id SERIAL PRIMARY KEY,
-    chain_id INTEGER NOT NULL,
-    contract_address VARCHAR(100) NOT NULL,
-    base_slot VARCHAR(100) NOT NULL,
-    key_value VARCHAR(200) NOT NULL,
-    key_type VARCHAR(50),
-    first_seen_block BIGINT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(chain_id, contract_address, base_slot, key_value)
-);
-
--- Cached slot values
-CREATE TABLE slot_values (
-    id SERIAL PRIMARY KEY,
-    chain_id INTEGER NOT NULL,
-    contract_address VARCHAR(100) NOT NULL,
-    slot VARCHAR(100) NOT NULL,
     block_number BIGINT NOT NULL,
-    value VARCHAR(100) NOT NULL,
+    payload JSONB NOT NULL,  -- Includes decoded slots/values
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(chain_id, contract_address, slot, block_number)
+    expires_at TIMESTAMP,    -- Optional TTL cleanup
+    UNIQUE(chain_id, contract_address, block_number)
 );
 
--- Transaction diffs
-CREATE TABLE tx_diffs (
+-- Cached transaction diffs (decoded SSTORE changes)
+CREATE TABLE tx_diffs_cache (
     id SERIAL PRIMARY KEY,
     chain_id INTEGER NOT NULL,
     contract_address VARCHAR(100) NOT NULL,
     tx_hash VARCHAR(100) NOT NULL,
     block_number BIGINT NOT NULL,
-    changes JSONB NOT NULL,  -- Array of {slot, oldValue, newValue}
+    payload JSONB NOT NULL,  -- Array of {slot, oldValue, newValue, decoded}
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP,    -- Optional TTL cleanup
     UNIQUE(chain_id, contract_address, tx_hash)
 );
 
 -- Indexes
 CREATE INDEX idx_contracts_chain_address ON contracts(chain_id, address);
-CREATE INDEX idx_slot_values_lookup ON slot_values(chain_id, contract_address, slot, block_number);
-CREATE INDEX idx_tx_diffs_contract ON tx_diffs(chain_id, contract_address, block_number);
+CREATE INDEX idx_snapshots_lookup ON storage_snapshots_cache(chain_id, contract_address, block_number);
+CREATE INDEX idx_tx_diffs_contract ON tx_diffs_cache(chain_id, contract_address, block_number);
 ```
 
 ### 11.2 API Response Models
