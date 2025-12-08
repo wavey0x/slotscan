@@ -172,23 +172,40 @@ const StructDiffDisplay = ({
   initial,
   final,
   chainId,
+  structDefinition,
 }: {
   initial: Record<string, unknown> | null;
   final: Record<string, unknown> | null;
   chainId: string;
+  structDefinition?: StructDefinitionResponse | null;
 }) => {
   const [expanded, setExpanded] = useState(false);
-  const keys = Array.from(new Set([...(initial ? Object.keys(initial) : []), ...(final ? Object.keys(final) : [])]));
 
-  // Calculate max type label width and max field name width for alignment
-  const maxTypeWidth = Math.max(
-    ...keys.map((key) => {
-      const val = final?.[key] ?? initial?.[key];
-      return guessTypeLabel(val).length;
-    }),
-    0
+  // Use struct definition member order if available, otherwise use object keys
+  const keys = structDefinition
+    ? structDefinition.members.map((m) => m.name)
+    : Array.from(new Set([...(initial ? Object.keys(initial) : []), ...(final ? Object.keys(final) : [])]));
+
+  // Build a map from member name to type_label from struct definition
+  const memberTypeMap = new Map(
+    structDefinition?.members.map((m) => [m.name, m.type_label]) ?? []
   );
-  const maxNameWidth = Math.max(...keys.map((key) => key.length), 0);
+
+  // Pre-compute all display values
+  const fieldData = keys.map((key) => {
+    const beforeVal = initial ? initial[key] : undefined;
+    const afterVal = final ? final[key] : undefined;
+    // Use actual type from struct definition, fall back to guessing only if not available
+    const typeLabel = memberTypeMap.get(key) ?? guessTypeLabel(afterVal ?? beforeVal);
+    // Show "—" for missing values (value not fetched, could be anything)
+    const beforeDisplay = beforeVal !== undefined ? formatDecodedValue(beforeVal) : '—';
+    const afterDisplay = afterVal !== undefined ? formatDecodedValue(afterVal) : '—';
+    return { key, typeLabel, beforeVal, afterVal, beforeDisplay, afterDisplay };
+  });
+
+  // Calculate max widths for vertical alignment of values
+  const maxTypeWidth = Math.max(...fieldData.map((f) => f.typeLabel.length), 0);
+  const maxNameWidth = Math.max(...fieldData.map((f) => f.key.length), 0);
 
   return (
     <div className="space-y-0.5">
@@ -201,28 +218,23 @@ const StructDiffDisplay = ({
         <span>struct ({keys.length} {keys.length === 1 ? 'field' : 'fields'})</span>
       </button>
       {expanded && (
-        <div className="space-y-1">
-          {keys.map((key) => {
-            const beforeVal = initial ? initial[key] : undefined;
-            const afterVal = final ? final[key] : undefined;
-            const typeLabel = guessTypeLabel(afterVal ?? beforeVal);
-            const beforeDisplay = beforeVal !== undefined ? formatDecodedValue(beforeVal) : '—';
-            const afterDisplay = afterVal !== undefined ? formatDecodedValue(afterVal) : '—';
+        <div className="space-y-0.5">
+          {fieldData.map(({ key, typeLabel, beforeVal, afterVal, beforeDisplay, afterDisplay }) => {
             const isZeroBefore = beforeDisplay === '0' || beforeDisplay === 'false' || beforeDisplay === '0x0000000000000000000000000000000000000000';
             const isZeroAfter = afterDisplay === '0' || afterDisplay === 'false' || afterDisplay === '0x0000000000000000000000000000000000000000';
-            const paddedType = typeLabel.padEnd(maxTypeWidth);
-            const paddedName = key.padEnd(maxNameWidth);
-            // Create the label prefix that will be used for alignment
-            const labelPrefix = `${paddedType} ${paddedName} `;
+            const hasChanged = beforeDisplay !== afterDisplay;
+
             return (
               <div key={key} className="text-xs font-mono leading-tight">
-                {/* Line 1: type name before_value → */}
-                <div className="flex items-start">
-                  <span className="text-gray-400 whitespace-pre">{paddedType}</span>
-                  <span className="whitespace-pre"> </span>
-                  <span className="text-gray-600 whitespace-pre">{paddedName}</span>
-                  <span className="whitespace-pre"> </span>
-                  <span className={cn('whitespace-pre', isZeroBefore ? 'text-gray-300' : 'text-gray-500')}>
+                {/* Line 1: type + name (fixed width) + before value + arrow */}
+                <div className="flex items-baseline">
+                  <span className="text-gray-400" style={{ width: `${maxTypeWidth}ch`, marginRight: '0.5ch' }}>
+                    {typeLabel}
+                  </span>
+                  <span className="text-gray-600" style={{ width: `${maxNameWidth}ch`, marginRight: '0.5ch' }}>
+                    {key}
+                  </span>
+                  <span className={cn(isZeroBefore ? 'text-gray-300' : 'text-gray-500')}>
                     <HoverCell
                       display={beforeDisplay}
                       {...makeHoverProps(beforeVal, beforeDisplay, '')}
@@ -231,20 +243,20 @@ const StructDiffDisplay = ({
                       forceActions
                     />
                   </span>
-                  <span className="text-gray-400 whitespace-pre"> →</span>
+                  <span className="text-gray-400 mx-1">→</span>
                 </div>
-                {/* Line 2: aligned after_value - use same prefix width */}
-                <div className="flex items-start">
-                  <span className="whitespace-pre" style={{ visibility: 'hidden' }}>{labelPrefix}</span>
-                  <span className={cn('whitespace-pre', isZeroAfter ? 'text-gray-300' : 'text-gray-900')}>
-                    <HoverCell
-                      display={afterDisplay}
-                      {...makeHoverProps(afterVal, afterDisplay, '')}
-                      chainId={chainId}
-                      colorClass={cn('text-xs font-mono', isZeroAfter ? 'text-gray-300' : 'text-gray-900')}
-                      forceActions
-                    />
-                  </span>
+                {/* Line 2: after value (indented to align with before values) */}
+                <div
+                  className={cn(isZeroAfter ? 'text-gray-300' : hasChanged ? 'text-gray-900' : 'text-gray-500')}
+                  style={{ marginLeft: `${maxTypeWidth + maxNameWidth + 1}ch` }}
+                >
+                  <HoverCell
+                    display={afterDisplay}
+                    {...makeHoverProps(afterVal, afterDisplay, '')}
+                    chainId={chainId}
+                    colorClass={cn('text-xs font-mono', isZeroAfter ? 'text-gray-300' : hasChanged ? 'text-gray-900' : 'text-gray-500')}
+                    forceActions
+                  />
                 </div>
               </div>
             );
@@ -516,7 +528,7 @@ export function SlotRow({
 
   return (
     <>
-      <tr className={cn('hover:bg-gray-50 border-t border-gray-100', expanded && 'bg-gray-50')}>
+      <tr className={cn('hover:bg-gray-50/50', expanded && 'bg-gray-50/30')}>
         <td className="px-1 py-0.5 w-5">
           {canExpand ? (
             <button
@@ -585,7 +597,7 @@ export function SlotRow({
           {hasPacked && !showHex ? (
             <PackedFieldsValueDisplay fields={slot.packed_fields!} chainId={chainId} initialRaw={slot.initial_raw} finalRaw={slot.final_raw} />
           ) : (structInitial || structFinal) && !showHex ? (
-            <StructDiffDisplay initial={structInitial} final={structFinal} chainId={chainId} />
+            <StructDiffDisplay initial={structInitial} final={structFinal} chainId={chainId} structDefinition={slot.struct_definition} />
           ) : (
             <div className="space-y-0">
               <div className={cn('text-xs font-mono leading-tight flex items-center gap-1', isZeroValue(slot.initial_raw, slot.initial_decoded) ? 'text-gray-300' : 'text-gray-500')}>
@@ -624,7 +636,6 @@ export function SlotRow({
             <HoverCell
               display={slotNumber}
               value={slot.slot}
-              chainId={chainId}
               colorClass="text-xs text-gray-500 font-mono"
               forceActions
             />
@@ -646,65 +657,64 @@ export function SlotRow({
 
       {/* Expanded interim changes rows */}
       {expanded && hasInterimChanges && slot.changes.map((change, idx) => {
-        const oldVal = getDisplayValue(change.old_display, change.old_decoded, change.old_raw);
-        const newVal = getDisplayValue(change.new_display, change.new_decoded, change.new_raw);
-        const changeStructOld = isPlainObject(change.old_decoded) ? (change.old_decoded as Record<string, unknown>) : null;
-        const changeStructNew = isPlainObject(change.new_decoded) ? (change.new_decoded as Record<string, unknown>) : null;
+          const oldVal = getDisplayValue(change.old_display, change.old_decoded, change.old_raw);
+          const newVal = getDisplayValue(change.new_display, change.new_decoded, change.new_raw);
+          const changeStructOld = isPlainObject(change.old_decoded) ? (change.old_decoded as Record<string, unknown>) : null;
+          const changeStructNew = isPlainObject(change.new_decoded) ? (change.new_decoded as Record<string, unknown>) : null;
+          const isFirst = idx === 0;
 
-        return (
-          <tr key={idx} className="bg-blue-50/50">
-            <td className="px-1 py-0.5 text-right">
-              <span className="text-[10px] text-gray-400 font-mono">{change.step}</span>
-            </td>
-            <td className="px-1 py-0.5">
-              <span className="text-[10px] text-gray-400 pl-1">{idx + 1}/{slot.changes.length}</span>
-            </td>
-            <td className="px-1 py-0.5">
-              {(changeStructOld || changeStructNew) && !showHex ? (
-                <StructDiffDisplay initial={changeStructOld} final={changeStructNew} chainId={chainId} />
-              ) : (
-                <div className="space-y-0">
-                  <div className={cn('text-xs font-mono leading-tight flex items-center gap-1', isZeroValue(change.old_raw, change.old_decoded) ? 'text-gray-300' : 'text-gray-500')}>
-                    <HoverCell
-                      display={oldVal}
-                      {...makeHoverProps(
-                        change.old_decoded,
-                        change.old_display ?? change.old_raw,
-                        change.old_raw
-                      )}
-                      chainId={chainId}
-                      colorClass={cn('text-xs font-mono', isZeroValue(change.old_raw, change.old_decoded) ? 'text-gray-300' : 'text-gray-500')}
-                    />
-                    <span className="text-gray-400">→</span>
+          return (
+            <tr key={idx} className={cn('bg-gray-100/80', !isFirst && 'border-t border-gray-300')}>
+              <td className="px-1 py-0.5" />
+              <td className="px-1 py-0.5">
+                <span className="text-[10px] text-gray-400 pl-1">{idx + 1}/{slot.changes.length}</span>
+              </td>
+              <td className="px-1 py-0.5">
+                {(changeStructOld || changeStructNew) && !showHex ? (
+                  <StructDiffDisplay initial={changeStructOld} final={changeStructNew} chainId={chainId} structDefinition={slot.struct_definition} />
+                ) : (
+                  <div className="space-y-0">
+                    <div className={cn('text-xs font-mono leading-tight flex items-center gap-1', isZeroValue(change.old_raw, change.old_decoded) ? 'text-gray-300' : 'text-gray-500')}>
+                      <HoverCell
+                        display={oldVal}
+                        {...makeHoverProps(
+                          change.old_decoded,
+                          change.old_display ?? change.old_raw,
+                          change.old_raw
+                        )}
+                        chainId={chainId}
+                        colorClass={cn('text-xs font-mono', isZeroValue(change.old_raw, change.old_decoded) ? 'text-gray-300' : 'text-gray-500')}
+                      />
+                      <span className="text-gray-400">→</span>
+                    </div>
+                    <div className={cn('text-xs font-mono leading-tight', isZeroValue(change.new_raw, change.new_decoded) ? 'text-gray-300' : 'text-gray-900')}>
+                      <HoverCell
+                        display={newVal}
+                        {...makeHoverProps(
+                          change.new_decoded,
+                          change.new_display ?? change.new_raw,
+                          change.new_raw
+                        )}
+                        chainId={chainId}
+                        colorClass={cn('text-xs font-mono', isZeroValue(change.new_raw, change.new_decoded) ? 'text-gray-300' : 'text-gray-900')}
+                      />
+                    </div>
                   </div>
-                  <div className={cn('text-xs font-mono leading-tight', isZeroValue(change.new_raw, change.new_decoded) ? 'text-gray-300' : 'text-gray-900')}>
-                    <HoverCell
-                      display={newVal}
-                      {...makeHoverProps(
-                        change.new_decoded,
-                        change.new_display ?? change.new_raw,
-                        change.new_raw
-                      )}
-                      chainId={chainId}
-                      colorClass={cn('text-xs font-mono', isZeroValue(change.new_raw, change.new_decoded) ? 'text-gray-300' : 'text-gray-900')}
-                    />
-                  </div>
-                </div>
-              )}
-            </td>
-            <td className="px-1 py-0.5" />
-            {showStep && (
-              <td className="px-1 py-0.5 text-right">
-                {change.step !== null && change.step !== undefined && (
-                  <span className="text-[10px] text-gray-400 font-mono">
-                    {change.step}
-                  </span>
                 )}
               </td>
-            )}
-          </tr>
-        );
-      })}
+              <td className="px-1 py-0.5" />
+              {showStep && (
+                <td className="px-1 py-0.5 text-right">
+                  {change.step !== null && change.step !== undefined && (
+                    <span className="text-[10px] text-gray-400 font-mono">
+                      {change.step}
+                    </span>
+                  )}
+                </td>
+              )}
+            </tr>
+          );
+        })}
     </>
   );
 }

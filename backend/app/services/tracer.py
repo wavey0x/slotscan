@@ -18,7 +18,7 @@ from app.models.errors import RPCError, TraceNotAvailableError, TransactionNotFo
 from app.repositories.cache import CacheRepository
 from app.services.decoder import TypeDecoder
 from app.services.web3_provider import Web3Provider
-from app.utils.slots import compute_mapping_slot, compute_nested_mapping_slot, compute_dynamic_array_slot
+# Note: compute_mapping_slot etc. removed - using preimage lookup instead of brute-force
 
 logger = logging.getLogger(__name__)
 
@@ -75,24 +75,25 @@ class TransactionTracer:
             )
             return diff
 
-        # Get receipt (addresses/logs) for mapping key inference
+        # Get receipt for block number
         receipt = await self._get_receipt(chain_id, tx_hash)
-        candidate_addresses = self._collect_candidate_addresses(receipt, trace_result)
-        candidate_uint256s = self._collect_candidate_uint256_values(receipt, trace_result)
         block_number = receipt["blockNumber"]
         prestate_changes = self._extract_contract_changes(trace_result, contract_address)
 
         # Get combined storage trace - captures SSTORE and SHA3 operations
         # Need to pass the transaction's "to" address for proper address tracking in structLogs
-        tx_to_address = receipt.get("to")  # Can be None for contract creation
+        # For contract creation transactions, use the created contract address
+        tx_to_address = receipt.get("to")  # None for contract creation
+        if not tx_to_address:
+            # Contract creation - get the created contract address
+            tx_to_address = receipt.get("contractAddress")
+            if tx_to_address:
+                logger.info(f"Contract creation transaction - using created address: {tx_to_address}")
         sstore_trace, sha3_trace = await self._execute_storage_trace(chain_id, tx_hash, tx_to_address)
 
         # Build preimage lookup from SHA3 trace (for decoding mapping keys)
-        preimage_lookup = self._build_preimage_lookup(sha3_trace, contract_address)
-        logger.info(f"SHA3 trace: {len(sha3_trace)} total ops, preimage lookup: {len(preimage_lookup)} entries for contract")
-        if preimage_lookup:
-            for h, p in list(preimage_lookup.items())[:5]:
-                logger.info(f"  Preimage: {h[:18]}... -> {p[:66]}...")
+        # No address filtering - captures ALL SHA3 ops for O(1) mapping resolution
+        preimage_lookup = self._build_preimage_lookup(sha3_trace)
 
         # Build changes from SSTORE trace (preferred - captures all writes with real execution order)
         # or fall back to prestateTracer (only captures first→last per slot, no execution order)
@@ -115,10 +116,8 @@ class TransactionTracer:
         if not is_complete:
             raw_changes = raw_changes[: self.settings.max_sstore_ops]
 
-        # Decode changes (now with preimage lookup for better mapping key resolution)
-        decoded_changes = self._decode_changes(
-            raw_changes, layout, candidate_addresses, candidate_uint256s, preimage_lookup
-        )
+        # Decode changes using preimage lookup for O(1) mapping resolution
+        decoded_changes = self._decode_changes(raw_changes, layout, preimage_lookup)
 
         diff = TransactionDiff(
             chain_id=chain_id,
@@ -286,12 +285,17 @@ class TransactionTracer:
         # We need to know what contracts are created so we can attribute their constructor SSTOREs
         create_info: dict[int, dict] = {}  # step_index -> {start_step, end_step, created_address, depth}
 
+        # Limit search window for constructor end to prevent O(N²) worst case
+        # Most constructors are under 50k steps; search up to 100k as safety margin
+        MAX_CONSTRUCTOR_STEPS = 100_000
+
         for i, log in enumerate(struct_logs):
             op = log.get("op", "")
             if op in ("CREATE", "CREATE2"):
                 depth = log.get("depth", 1)
                 # Find when constructor ends (when we return to this depth)
-                for j in range(i + 1, len(struct_logs)):
+                search_end = min(i + 1 + MAX_CONSTRUCTOR_STEPS, len(struct_logs))
+                for j in range(i + 1, search_end):
                     if struct_logs[j].get("depth", 1) == depth:
                         # Constructor ended, created address is on stack
                         stack = struct_logs[j].get("stack", [])
@@ -404,7 +408,12 @@ class TransactionTracer:
                     except (ValueError, TypeError):
                         continue
 
-                    if 64 <= size <= 128:
+                    # Capture SHA3 preimages for:
+                    # - 32 bytes: dynamic array length slot (keccak256(slot))
+                    # - 64 bytes: standard mapping (keccak256(key, slot))
+                    # - 96+ bytes: nested mappings, complex keys
+                    # - Up to 256 bytes: deeply nested structures
+                    if 32 <= size <= 256:
                         preimage = self._extract_memory_slice(memory, offset, size)
                         if preimage:
                             pending_sha3 = {
@@ -454,9 +463,7 @@ class TransactionTracer:
             logger.debug(f"Failed to extract memory slice: {e}")
             return None
 
-    def _build_preimage_lookup(
-        self, sha3_trace: list[dict], contract_address: str
-    ) -> dict[str, str]:
+    def _build_preimage_lookup(self, sha3_trace: list[dict]) -> dict[str, str]:
         """
         Build a lookup from hash -> preimage for SHA3 operations.
 
@@ -466,24 +473,22 @@ class TransactionTracer:
 
         Returns: {normalized_hash: preimage_hex}
         """
-        contract_address_lower = contract_address.lower()
         preimage_lookup: dict[str, str] = {}
 
+        # Build lookup from ALL SHA3 ops regardless of address context.
+        # keccak256 is collision-resistant (2^-256 collision probability).
+        # If a SHA3 output matches our SSTORE slot, that's our preimage -
+        # no matter which contract context computed it (e.g., DELEGATECALL to library).
         for op in sha3_trace:
-            op_addr = op.get("address", "").lower()
-            # Include SHA3s from the target contract or from depth 1 (when address not tracked)
-            # structLogs parsing may not always have the address, so also check depth
-            depth = op.get("depth", 1)
-            address_matches = op_addr == contract_address_lower
-            is_depth_1 = depth == 1 and not op_addr  # No address tracked, assume top-level
+            hash_value = op.get("hash")
+            preimage = op.get("preimage")
+            if hash_value and preimage:
+                normalized_hash = self._normalize_slot(hash_value)
+                preimage_lookup[normalized_hash] = preimage
 
-            if address_matches or is_depth_1:
-                hash_value = op.get("hash")
-                preimage = op.get("preimage")
-                if hash_value and preimage:
-                    normalized_hash = self._normalize_slot(hash_value)
-                    preimage_lookup[normalized_hash] = preimage
-
+        logger.info(
+            f"Built preimage lookup: {len(preimage_lookup)} entries from {len(sha3_trace)} SHA3 ops"
+        )
         return preimage_lookup
 
     def _parse_mapping_preimage(
@@ -551,6 +556,37 @@ class TransactionTracer:
 
         return key_hex
 
+    def _get_final_mapping_value_type(
+        self,
+        var_type: StorageType,
+        layout: StorageLayout,
+    ) -> tuple[str | None, StorageType | None]:
+        """
+        Fully unwrap nested mappings to get the final value type.
+
+        For mapping(A => mapping(B => mapping(C => uint256))):
+        Returns ("t_uint256", StorageType for uint256)
+
+        Returns: (value_type_id, decode_type) or (None, None)
+        """
+        current_type = var_type
+        final_value_type_id = None
+
+        # Keep unwrapping while we have mappings
+        while current_type and current_type.encoding == "mapping":
+            if not current_type.value_type:
+                break
+            final_value_type_id = current_type.value_type
+            inner_type = layout.get_type(current_type.value_type)
+            if inner_type and inner_type.encoding == "mapping":
+                # Continue unwrapping
+                current_type = inner_type
+            else:
+                # Found the final non-mapping type
+                return final_value_type_id, inner_type
+
+        return final_value_type_id, layout.get_type(final_value_type_id) if final_value_type_id else None
+
     def _resolve_struct_field(
         self,
         base_variable: StorageVariable,
@@ -560,11 +596,16 @@ class TransactionTracer:
         """
         Resolve struct field name from offset.
 
-        When we have a mapping to a struct and access slot = base + N,
+        When we have a mapping/array to a struct and access slot = base + N,
         the N corresponds to a struct member's slot offset.
 
+        Handles:
+        - Mappings to structs: mapping(address => MyStruct)
+        - Dynamic arrays of structs: MyStruct[]
+        - Nested structs: struct with struct member
+
         Args:
-            base_variable: The mapping variable (e.g., rewardData)
+            base_variable: The mapping/array variable (e.g., rewardData)
             struct_offset: The offset from base (e.g., 4 for .lockStart)
             layout: Storage layout containing type definitions
 
@@ -574,15 +615,35 @@ class TransactionTracer:
         if not var_type:
             return None, None
 
+        # Get the struct type to search for members
+        struct_type = None
+
         # For mappings to structs, get the value type
         if var_type.encoding == "mapping" and var_type.value_type:
-            value_type = layout.get_type(var_type.value_type)
-            if value_type and value_type.members:
-                # Find member at this slot offset
-                for member in value_type.members:
-                    if member.slot == struct_offset:
-                        member_type = layout.get_type(member.type_id)
+            struct_type = layout.get_type(var_type.value_type)
+
+        # For dynamic arrays of structs, get the element type
+        elif var_type.encoding == "dynamic_array" and var_type.element_type:
+            struct_type = layout.get_type(var_type.element_type)
+
+        # For direct struct types
+        elif var_type.kind == "struct":
+            struct_type = var_type
+
+        if struct_type and struct_type.members:
+            # Find member at this slot offset
+            for member in struct_type.members:
+                if member.slot == struct_offset:
+                    member_type = layout.get_type(member.type_id)
+
+                    # Check if this member is itself a struct (nested struct)
+                    # If so and struct_offset extends beyond this member, recurse
+                    if member_type and member_type.kind == "struct" and member_type.members:
+                        # Member found at this offset - return it
                         return member.name, member_type
+
+                    return member.name, member_type
+
         return None, None
 
     def _try_match_slot_from_preimage(
@@ -591,6 +652,8 @@ class TransactionTracer:
         preimage: str,
         layout: Optional[StorageLayout],
         preimage_lookup: dict[str, str],
+        depth: int = 0,
+        visited: set[str] | None = None,
     ) -> Optional[dict]:
         """
         Try to match a slot to a variable using the SHA3 preimage.
@@ -604,15 +667,87 @@ class TransactionTracer:
             preimage: The data that was hashed (64 bytes = 128 hex chars without 0x)
             layout: Storage layout for finding variables
             preimage_lookup: Full preimage lookup for resolving nested mappings
+            depth: Current recursion depth (for limiting)
+            visited: Set of already-visited slots (for cycle detection)
 
         Returns:
             Dict with variable info if matched, None otherwise
         """
+        # Prevent infinite recursion - max 5 levels deep (handles triple-nested mappings)
+        if depth > 5:
+            logger.debug(f"Max recursion depth reached for slot {slot_hex[:18]}...")
+            return None
+
+        # Initialize visited set on first call
+        if visited is None:
+            visited = set()
+
+        # Cycle detection - don't re-process the same slot
+        if slot_hex in visited:
+            logger.debug(f"Cycle detected for slot {slot_hex[:18]}...")
+            return None
+        visited = visited | {slot_hex}  # Create new set to avoid mutation
+
         if not preimage or not layout:
             return None
 
         # Remove 0x prefix if present
         preimage_clean = preimage[2:] if preimage.startswith("0x") else preimage
+
+        # Handle 32-byte preimage: this is keccak256(single_slot), used for:
+        # - Dynamic array data start: keccak256(array_length_slot)
+        # - This happens with mapping(addr => Struct[]) where the mapping gives array_length_slot,
+        #   then keccak256(array_length_slot) gives data_start
+        if len(preimage_clean) == 64:
+            # The preimage is a single slot - check if it's an array length slot from a mapping
+            inner_slot_hex = "0x" + preimage_clean
+            inner_slot_normalized = self._normalize_slot(inner_slot_hex)
+            logger.debug(f"  32-byte preimage (array data start): inner_slot={inner_slot_normalized[:18]}...")
+
+            # Check if we have a preimage for this inner slot (the mapping lookup)
+            if inner_slot_normalized in preimage_lookup:
+                inner_preimage = preimage_lookup[inner_slot_normalized]
+                logger.debug(f"  Found inner preimage for array length slot: {inner_preimage[:40]}...")
+                # Recurse to resolve the mapping that produced the array length slot
+                mapping_match = self._try_match_slot_from_preimage(
+                    inner_slot_normalized, inner_preimage, layout, preimage_lookup,
+                    depth=depth + 1, visited=visited
+                )
+                if mapping_match:
+                    variable = mapping_match.get("variable")
+                    var_type = layout.get_type(variable.type_id) if variable else None
+
+                    # Check if this mapping points to a dynamic array
+                    if var_type and var_type.encoding == "mapping" and var_type.value_type:
+                        value_type = layout.get_type(var_type.value_type)
+                        is_value_array = (
+                            value_type and (
+                                value_type.encoding == "dynamic_array" or
+                                (value_type.element_type and "[]" in (value_type.label or ""))
+                            )
+                        )
+                        if is_value_array:
+                            # This slot is the data start of a mapping-to-array
+                            # Return info so we can match array elements relative to this
+                            element_type = layout.get_type(value_type.element_type) if value_type and value_type.element_type else None
+                            element_slots = 1
+                            if element_type:
+                                element_bytes = element_type.num_bytes or 32
+                                element_slots = (element_bytes + 31) // 32
+
+                            return {
+                                "variable": variable,
+                                "base_slot": mapping_match.get("base_slot"),
+                                "key": mapping_match.get("key", "?"),
+                                "path": mapping_match.get("path"),
+                                "encoding": "mapping_to_array",
+                                "key_type": var_type.key_type if var_type else None,
+                                "value_type": var_type.value_type if var_type else None,
+                                "element_type": element_type,
+                                "element_slots": element_slots,
+                                "data_start_slot": int(slot_hex, 16),  # The slot we're looking up
+                            }
+            return None
 
         # Must be at least 64 bytes (128 hex chars) for a mapping
         if len(preimage_clean) < 128:
@@ -622,7 +757,7 @@ class TransactionTracer:
         key_hex = "0x" + preimage_clean[:64]
         base_slot_hex = "0x" + preimage_clean[64:128]
         base_slot_int = int(base_slot_hex, 16)
-        logger.info(f"  Parsing preimage: key_hex={key_hex[:18]}..., base_slot_int={base_slot_int}")
+        logger.debug(f"  Parsing preimage: key_hex={key_hex[:18]}..., base_slot_int={base_slot_int}")
 
         # Format the key for display
         decoded_key = self._decode_mapping_key(key_hex)
@@ -630,14 +765,13 @@ class TransactionTracer:
         # Check if base_slot points directly to a mapping variable
         # Use get_mapping_by_base_slot instead of get_variable_for_slot because the latter skips mappings
         variable = layout.get_mapping_by_base_slot(base_slot_int)
-        logger.info(f"  get_mapping_by_base_slot({base_slot_int}) = {variable.name if variable else None}")
+        logger.debug(f"  get_mapping_by_base_slot({base_slot_int}) = {variable.name if variable else None}")
         if variable:
             var_type = layout.get_type(variable.type_id)
-            logger.info(f"  Preimage match: base_slot={base_slot_int}, var={variable.name}, var_type_encoding={var_type.encoding if var_type else None}")
+            logger.debug(f"  Preimage match: base_slot={base_slot_int}, var={variable.name}, var_type_encoding={var_type.encoding if var_type else None}")
             if var_type and var_type.encoding == "mapping":
-                # Found the mapping variable
-                value_type = var_type.value_type
-                decode_type = layout.get_type(value_type) if value_type else None
+                # Found the mapping variable - fully unwrap to get final value type
+                final_value_type_id, decode_type = self._get_final_mapping_value_type(var_type, layout)
 
                 return {
                     "variable": variable,
@@ -646,37 +780,34 @@ class TransactionTracer:
                     "path": f"{variable.name}[{decoded_key}]",
                     "encoding": var_type.encoding,
                     "key_type": var_type.key_type,
-                    "value_type": value_type,
+                    "value_type": final_value_type_id,
                     "decode_type": decode_type,
                 }
 
         # If base_slot is not a direct variable slot, it might be an intermediate hash
         # (nested mapping). Check if we have a preimage for it.
         base_slot_normalized = self._normalize_slot(base_slot_hex)
-        logger.info(f"  Checking if base_slot is intermediate hash: {base_slot_normalized[:18]}... in_lookup={base_slot_normalized in preimage_lookup}")
+        logger.debug(f"  Checking if base_slot is intermediate hash: {base_slot_normalized[:18]}... in_lookup={base_slot_normalized in preimage_lookup}")
         if base_slot_normalized in preimage_lookup:
             # This is a nested mapping - recurse to find the outer mapping
             outer_preimage = preimage_lookup[base_slot_normalized]
-            logger.info(f"  Recursing with outer preimage: {outer_preimage[:40]}...")
+            logger.debug(f"  Recursing with outer preimage: {outer_preimage[:40]}...")
             outer_match = self._try_match_slot_from_preimage(
-                base_slot_normalized, outer_preimage, layout, preimage_lookup
+                base_slot_normalized, outer_preimage, layout, preimage_lookup,
+                depth=depth + 1, visited=visited
             )
-            logger.info(f"  Recursion result: outer_match={outer_match is not None}, outer_var={outer_match.get('variable').name if outer_match and outer_match.get('variable') else None}")
+            logger.debug(f"  Recursion result: outer_match={outer_match is not None}, outer_var={outer_match.get('variable').name if outer_match and outer_match.get('variable') else None}")
             if outer_match:
                 # Found the outer mapping, combine the keys
                 outer_key = outer_match.get("key", "?")
                 outer_variable = outer_match.get("variable")
                 outer_var_type = layout.get_type(outer_variable.type_id) if outer_variable else None
 
-                # For nested mapping, value_type of outer is the inner mapping type
-                # We need to get the value_type of that inner mapping
-                inner_value_type = None
+                # Fully unwrap nested mappings to get the final value type
+                final_value_type_id = None
                 decode_type = None
-                if outer_var_type and outer_var_type.value_type:
-                    inner_type = layout.get_type(outer_var_type.value_type)
-                    if inner_type and inner_type.value_type:
-                        inner_value_type = inner_type.value_type
-                        decode_type = layout.get_type(inner_value_type)
+                if outer_var_type:
+                    final_value_type_id, decode_type = self._get_final_mapping_value_type(outer_var_type, layout)
 
                 return {
                     "variable": outer_variable,
@@ -685,7 +816,7 @@ class TransactionTracer:
                     "path": f"{outer_variable.name}[{outer_key}][{decoded_key}]" if outer_variable else None,
                     "encoding": "mapping",
                     "key_type": outer_var_type.key_type if outer_var_type else None,
-                    "value_type": inner_value_type,
+                    "value_type": final_value_type_id,
                     "decode_type": decode_type,
                 }
 
@@ -698,11 +829,12 @@ class TransactionTracer:
             if potential_base_hex in preimage_lookup:
                 # This slot is base + offset, indicating a struct member
                 base_preimage = preimage_lookup[potential_base_hex]
-                logger.info(f"  Struct offset check: slot_hex-{offset} = {potential_base_hex[:18]}... trying to match")
+                logger.debug(f"  Struct offset check: slot_hex-{offset} = {potential_base_hex[:18]}... trying to match")
                 base_match = self._try_match_slot_from_preimage(
-                    potential_base_hex, base_preimage, layout, preimage_lookup
+                    potential_base_hex, base_preimage, layout, preimage_lookup,
+                    depth=depth + 1, visited=visited
                 )
-                logger.info(f"  Struct offset match result: {base_match is not None}, var={base_match.get('variable').name if base_match and base_match.get('variable') else None}")
+                logger.debug(f"  Struct offset match result: {base_match is not None}, var={base_match.get('variable').name if base_match and base_match.get('variable') else None}")
                 if base_match:
                     base_variable = base_match.get("variable")
                     base_key = base_match.get("key", "?")
@@ -783,9 +915,6 @@ class TransactionTracer:
                     post_storage[normalized_slot] = self._normalize_value(value)
                 break
 
-        valid_slots = set(pre_storage.keys()) | set(post_storage.keys())
-        logger.debug(f"Valid slots from prestateTracer: {len(valid_slots)}")
-
         # Track current value for each slot (starts from pre-state)
         slot_current_value: dict[str, str] = dict(pre_storage)
 
@@ -799,7 +928,6 @@ class TransactionTracer:
             slot = self._normalize_slot(op.get("slot", "0x0"))
 
             address_matches = op_addr == contract_address_lower
-            slot_in_valid = slot in valid_slots
             addr_unknown = not op_addr
 
             if addr_unknown:
@@ -815,15 +943,14 @@ class TransactionTracer:
             #
             # We require BOTH conditions for the fallback (unknown address + valid slot)
             # to avoid false positives from other contracts with same static slots.
-            should_accept = address_matches or (addr_unknown and slot_in_valid)
+            should_accept = address_matches
 
             if not should_accept:
                 continue
 
-            # Additional safety: always verify slot belongs to our contract
-            # This catches any remaining edge cases in address tracking
-            if not slot_in_valid:
-                continue
+            # Note: We don't filter by prestateTracer slots here because we want to
+            # capture ALL SSTOREs to this address, including interim writes that may
+            # be overwritten before the transaction ends.
 
             new_value = self._normalize_value(op.get("value", zero_value))
             pc = op.get("pc")
@@ -899,238 +1026,6 @@ class TransactionTracer:
         hex_part = value[2:]
         padded = hex_part.zfill(64)
         return "0x" + padded
-
-    def _collect_candidate_uint256_values(
-        self, receipt: dict, trace_result: dict | None = None
-    ) -> list[int]:
-        """Collect likely uint256 values that could be mapping keys.
-
-        Sources:
-        - Block number from receipt
-        - Recent block numbers (±10 from current)
-        - Small integers 0-100 (epochs, rounds, indices)
-        - Values from storage that look like small integers
-        """
-        candidates = set()
-
-        # Block number from receipt
-        block_num = receipt.get("blockNumber")
-        if block_num:
-            # Add block number and nearby blocks (for time-based mappings)
-            for offset in range(-10, 11):
-                candidates.add(block_num + offset)
-
-        # Small integers (commonly used as epochs, rounds, indices)
-        for i in range(101):
-            candidates.add(i)
-
-        # Extract small integers from trace storage values
-        if trace_result:
-            for state_key in ("pre", "post"):
-                state = trace_result.get(state_key, {})
-                for addr, contract_state in state.items():
-                    storage = contract_state.get("storage", {})
-                    for slot, value in storage.items():
-                        if isinstance(value, str) and value.startswith("0x"):
-                            try:
-                                int_val = int(value, 16)
-                                # Only add reasonably small values (< 10M)
-                                if 0 <= int_val < 10_000_000:
-                                    candidates.add(int_val)
-                            except ValueError:
-                                pass
-
-        return list(candidates)
-
-    def _collect_candidate_addresses(self, receipt: dict, trace_result: dict | None = None) -> list[str]:
-        """Collect likely addresses from receipt and trace state.
-
-        Sources:
-        - Transaction from/to
-        - Log emitting contract addresses
-        - Log topics (address-padded 32-byte values)
-        - Log data (32-byte chunks that look like addresses)
-        - Trace state: contract addresses and storage values that look like addresses
-        """
-        candidates = set()
-        if receipt.get("from"):
-            candidates.add(Web3.to_checksum_address(receipt["from"]))
-        if receipt.get("to"):
-            try:
-                candidates.add(Web3.to_checksum_address(receipt["to"]))
-            except Exception:
-                pass
-
-        for log in receipt.get("logs", []):
-            # Add the contract that emitted the log
-            if log.get("address"):
-                try:
-                    candidates.add(Web3.to_checksum_address(log["address"]))
-                except Exception:
-                    pass
-
-            # Parse log topics for address-like 32-byte values (common for ERC20 Transfer/Approval)
-            for topic in log.get("topics", [])[1:]:
-                if isinstance(topic, (bytes, bytearray)):
-                    topic_hex = "0x" + topic.hex()
-                else:
-                    topic_hex = topic
-                if isinstance(topic_hex, str) and topic_hex.startswith("0x") and len(topic_hex) == 66:
-                    # Check if looks like address (12 leading zero bytes)
-                    if topic_hex[2:26] == "0" * 24:
-                        try:
-                            addr = "0x" + topic_hex[-40:]
-                            candidates.add(Web3.to_checksum_address(addr))
-                        except Exception:
-                            continue
-
-            # Also parse log data for address-like values (every 32-byte chunk)
-            data = log.get("data", "")
-            if isinstance(data, (bytes, bytearray)):
-                data = "0x" + data.hex()
-            if isinstance(data, str) and data.startswith("0x") and len(data) > 2:
-                data_hex = data[2:]
-                # Parse 32-byte chunks
-                for i in range(0, len(data_hex), 64):
-                    chunk = data_hex[i:i+64]
-                    if len(chunk) == 64 and chunk[:24] == "0" * 24:
-                        try:
-                            addr = "0x" + chunk[-40:]
-                            candidates.add(Web3.to_checksum_address(addr))
-                        except Exception:
-                            continue
-
-        # Extract addresses from trace state (pre and post)
-        if trace_result:
-            for state_key in ("pre", "post"):
-                state = trace_result.get(state_key, {})
-                for addr in state.keys():
-                    # Contract addresses in the trace
-                    try:
-                        candidates.add(Web3.to_checksum_address(addr))
-                    except Exception:
-                        pass
-
-                    # Storage values that look like addresses
-                    contract_state = state.get(addr, {})
-                    storage = contract_state.get("storage", {})
-                    for slot, value in storage.items():
-                        if isinstance(value, str) and value.startswith("0x") and len(value) == 66:
-                            # Check if looks like address (12 leading zero bytes)
-                            if value[2:26] == "0" * 24 and value[26:] != "0" * 40:
-                                try:
-                                    addr_from_storage = "0x" + value[-40:]
-                                    candidates.add(Web3.to_checksum_address(addr_from_storage))
-                                except Exception:
-                                    continue
-
-        return list(candidates)
-
-    def _try_match_mapping_slot(
-        self,
-        slot_int: int,
-        layout: StorageLayout,
-        base_slot_index: dict,
-        candidate_addresses: list[str],
-        candidate_uint256s: list[int],
-    ) -> Optional[dict]:
-        """Try to match a slot to a mapping entry.
-
-        Supports:
-        - Address-keyed mappings: mapping(address => T)
-        - Uint256-keyed mappings: mapping(uint256 => T)
-        - Nested mappings: mapping(address => mapping(uint256 => T))
-
-        Returns dict with match info or None if no match found.
-        """
-        for base_slot, var in base_slot_index.items():
-            var_type = layout.get_type(var.type_id)
-            if not var_type or var_type.encoding != "mapping":
-                continue
-
-            type_key_type = var_type.key_type or ""
-            type_key_lower = type_key_type.lower()
-
-            # Determine which candidates to try based on key type
-            if "address" in type_key_lower:
-                candidates = [(addr, addr) for addr in candidate_addresses]
-            elif "uint" in type_key_lower or "int" in type_key_lower:
-                candidates = [(str(val), val) for val in candidate_uint256s]
-            elif "bytes32" in type_key_lower:
-                # For bytes32, try both addresses (padded) and uint256s
-                candidates = [(addr, addr) for addr in candidate_addresses]
-                candidates.extend([(str(val), val) for val in candidate_uint256s])
-            else:
-                # Skip unsupported key types
-                continue
-
-            # Try single-level mapping match
-            for key_display, key_val in candidates:
-                try:
-                    candidate_slot = compute_mapping_slot(base_slot, key_val, type_key_type)
-                except Exception:
-                    continue
-
-                if candidate_slot == slot_int:
-                    decode_type = (
-                        layout.get_type(var_type.value_type)
-                        if var_type.value_type
-                        else None
-                    )
-                    return {
-                        "variable": var,
-                        "base_slot": base_slot,
-                        "key": key_display,
-                        "path": f"{var.name}[{key_display}]",
-                        "encoding": var_type.encoding,
-                        "key_type": var_type.key_type,
-                        "value_type": var_type.value_type,
-                        "decode_type": decode_type,
-                    }
-
-                # Try nested mapping match: mapping(K1 => mapping(K2 => V))
-                if var_type.value_type:
-                    inner_type = layout.get_type(var_type.value_type)
-                    if inner_type and inner_type.encoding == "mapping":
-                        inner_key_type = inner_type.key_type or ""
-                        inner_key_lower = inner_key_type.lower()
-
-                        # Determine inner candidates
-                        if "address" in inner_key_lower:
-                            inner_candidates = [(addr, addr) for addr in candidate_addresses]
-                        elif "uint" in inner_key_lower or "int" in inner_key_lower:
-                            inner_candidates = [(str(val), val) for val in candidate_uint256s]
-                        else:
-                            inner_candidates = []
-
-                        for inner_key_display, inner_key_val in inner_candidates:
-                            try:
-                                nested_slot = compute_nested_mapping_slot(
-                                    base_slot,
-                                    [(key_val, type_key_type), (inner_key_val, inner_key_type)]
-                                )
-                            except Exception:
-                                continue
-
-                            if nested_slot == slot_int:
-                                final_value_type = inner_type.value_type
-                                decode_type = (
-                                    layout.get_type(final_value_type)
-                                    if final_value_type
-                                    else None
-                                )
-                                return {
-                                    "variable": var,
-                                    "base_slot": base_slot,
-                                    "key": f"{key_display}, {inner_key_display}",
-                                    "path": f"{var.name}[{key_display}][{inner_key_display}]",
-                                    "encoding": var_type.encoding,
-                                    "key_type": var_type.key_type,
-                                    "value_type": final_value_type,
-                                    "decode_type": decode_type,
-                                }
-
-        return None
 
     def _build_dynamic_array_index(
         self,
@@ -1256,32 +1151,65 @@ class TransactionTracer:
                 array_index = offset_from_start // element_slots
                 struct_slot_offset = offset_from_start % element_slots
 
-                # Resolve struct field name if element is a struct
-                field_name = None
-                field_type = None
+                # Reasonable bound check (max 10M elements) - same as single-slot
+                if array_index > 10_000_000:
+                    continue
+
+                # Resolve struct field(s) at this slot offset
+                # Multiple fields may be packed into the same slot
+                slot_members = []
                 if element_type and element_type.members:
                     for member in element_type.members:
                         if member.slot == struct_slot_offset:
-                            field_name = member.name
-                            field_type = layout.get_type(member.type_id)
-                            break
+                            slot_members.append(member)
 
-                if field_name:
+                # If multiple members at this slot, it's a packed struct slot
+                if len(slot_members) > 1:
+                    # Return all members for packed decoding
+                    # For slot 0, just show array[index]; for other slots, show offset
+                    path = f"{var.name}[{array_index}]" if struct_slot_offset == 0 else f"{var.name}[{array_index}][+{struct_slot_offset}]"
+                    return {
+                        "variable": var,
+                        "base_slot": var.slot,
+                        "array_index": array_index,
+                        "struct_slot_offset": struct_slot_offset,
+                        "field_name": None,  # Multiple fields - use packed decoding
+                        "slot_members": slot_members,  # All packed members
+                        "path": path,
+                        "encoding": "dynamic_array",
+                        "element_type": element_type,
+                        "decode_type": element_type,  # Use full element type for packed decode
+                    }
+                elif len(slot_members) == 1:
+                    # Single field at this slot
+                    field_name = slot_members[0].name
+                    field_type = layout.get_type(slot_members[0].type_id)
                     path = f"{var.name}[{array_index}].{field_name}"
+                    return {
+                        "variable": var,
+                        "base_slot": var.slot,
+                        "array_index": array_index,
+                        "struct_slot_offset": struct_slot_offset,
+                        "field_name": field_name,
+                        "path": path,
+                        "encoding": "dynamic_array",
+                        "element_type": element_type,
+                        "decode_type": field_type or element_type,
+                    }
                 else:
+                    # No members found - use generic path
                     path = f"{var.name}[{array_index}][+{struct_slot_offset}]"
-
-                return {
-                    "variable": var,
-                    "base_slot": var.slot,
-                    "array_index": array_index,
-                    "struct_slot_offset": struct_slot_offset,
-                    "field_name": field_name,
-                    "path": path,
-                    "encoding": "dynamic_array",
-                    "element_type": element_type,
-                    "decode_type": field_type or element_type,
-                }
+                    return {
+                        "variable": var,
+                        "base_slot": var.slot,
+                        "array_index": array_index,
+                        "struct_slot_offset": struct_slot_offset,
+                        "field_name": None,
+                        "path": path,
+                        "encoding": "dynamic_array",
+                        "element_type": element_type,
+                        "decode_type": element_type,
+                    }
             else:
                 # Single-slot elements
                 array_index = offset_from_start
@@ -1303,12 +1231,122 @@ class TransactionTracer:
 
         return None
 
+    def _try_match_mapping_to_array_slot(
+        self,
+        slot_int: int,
+        layout: StorageLayout,
+        mapping_to_array_index: dict[int, dict],
+    ) -> Optional[dict]:
+        """Try to match a slot to an element of a mapping-to-array (mapping(addr => Struct[])).
+
+        For mapping(address => Struct[]):
+        - mapping lookup gives array_length_slot = keccak256(addr || base_slot)
+        - array data starts at data_start = keccak256(array_length_slot)
+        - element i is at data_start + i * element_slots
+
+        Returns dict with match info or None if no match found.
+        """
+        for data_start, match_info in mapping_to_array_index.items():
+            if slot_int < data_start:
+                continue
+
+            offset_from_start = slot_int - data_start
+            element_slots = match_info.get("element_slots", 1)
+            element_type = match_info.get("element_type")
+            variable = match_info.get("variable")
+            mapping_key = match_info.get("key", "?")
+
+            if element_slots > 1:
+                # Multi-slot struct elements
+                array_index = offset_from_start // element_slots
+                struct_slot_offset = offset_from_start % element_slots
+
+                # Reasonable bound check
+                if array_index > 10_000_000:
+                    continue
+
+                # Find struct member at this offset
+                slot_members = []
+                if element_type and element_type.members:
+                    for member in element_type.members:
+                        if member.slot == struct_slot_offset:
+                            slot_members.append(member)
+
+                var_name = variable.name if variable else "?"
+                if len(slot_members) > 1:
+                    # Multiple packed members
+                    path = f"{var_name}[{mapping_key}][{array_index}]" if struct_slot_offset == 0 else f"{var_name}[{mapping_key}][{array_index}][+{struct_slot_offset}]"
+                    return {
+                        "variable": variable,
+                        "base_slot": match_info.get("base_slot"),
+                        "array_index": array_index,
+                        "struct_slot_offset": struct_slot_offset,
+                        "mapping_key": mapping_key,
+                        "field_name": None,
+                        "slot_members": slot_members,
+                        "path": path,
+                        "encoding": "mapping_to_array",
+                        "element_type": element_type,
+                        "decode_type": element_type,
+                    }
+                elif len(slot_members) == 1:
+                    # Single field
+                    field_name = slot_members[0].name
+                    field_type = layout.get_type(slot_members[0].type_id)
+                    path = f"{var_name}[{mapping_key}][{array_index}].{field_name}"
+                    return {
+                        "variable": variable,
+                        "base_slot": match_info.get("base_slot"),
+                        "array_index": array_index,
+                        "struct_slot_offset": struct_slot_offset,
+                        "mapping_key": mapping_key,
+                        "field_name": field_name,
+                        "path": path,
+                        "encoding": "mapping_to_array",
+                        "element_type": element_type,
+                        "decode_type": field_type or element_type,
+                    }
+                else:
+                    # No members found
+                    path = f"{var_name}[{mapping_key}][{array_index}][+{struct_slot_offset}]"
+                    return {
+                        "variable": variable,
+                        "base_slot": match_info.get("base_slot"),
+                        "array_index": array_index,
+                        "struct_slot_offset": struct_slot_offset,
+                        "mapping_key": mapping_key,
+                        "field_name": None,
+                        "path": path,
+                        "encoding": "mapping_to_array",
+                        "element_type": element_type,
+                        "decode_type": element_type,
+                    }
+            else:
+                # Single-slot elements
+                array_index = offset_from_start
+                if array_index > 10_000_000:
+                    continue
+
+                var_name = variable.name if variable else "?"
+                return {
+                    "variable": variable,
+                    "base_slot": match_info.get("base_slot"),
+                    "array_index": array_index,
+                    "struct_slot_offset": 0,
+                    "mapping_key": mapping_key,
+                    "field_name": None,
+                    "path": f"{var_name}[{mapping_key}][{array_index}]",
+                    "encoding": "mapping_to_array",
+                    "element_type": element_type,
+                    "decode_type": element_type,
+                }
+
+        return None
+
     def _decode_changes(
         self,
         raw_changes: list[tuple[str, str, str, int | None, int]],
         layout: Optional[StorageLayout],
-        candidate_addresses: Optional[list[str]] = None,
-        candidate_uint256s: Optional[list[int]] = None,
         preimage_lookup: Optional[dict[str, str]] = None,
     ) -> list[StorageChange]:
         """Convert raw slot changes to decoded StorageChange objects.
@@ -1317,23 +1355,67 @@ class TransactionTracer:
             raw_changes: List of (slot, old_value, new_value, pc, index) tuples.
                         pc and index come directly from the SSTORE trace.
             layout: Optional storage layout for decoding.
-            candidate_addresses: Optional list of addresses for mapping key inference.
-            candidate_uint256s: Optional list of uint256 values for mapping key inference.
-            preimage_lookup: Optional dict mapping slot hashes to their SHA3 preimages.
+            preimage_lookup: Dict mapping slot hashes to SHA3 preimages for O(1) mapping resolution.
         """
         decoded_changes = []
         base_slot_index = layout.get_base_slot_index() if layout else {}
         dynamic_array_index = self._build_dynamic_array_index(layout) if layout else {}
         dynamic_bytes_index = self._build_dynamic_bytes_index(layout) if layout else {}
-        candidate_addresses = candidate_addresses or []
-        candidate_uint256s = candidate_uint256s or []
         preimage_lookup = preimage_lookup or {}
+
+        # Build mapping-to-array index: find all 32-byte preimages that resolve to mapping->array
+        # This enables matching array element slots (data_start + offset)
+        mapping_to_array_index: dict[int, dict] = {}  # data_start_slot -> match info
+        if layout and preimage_lookup:
+            for slot_hash, preimage in preimage_lookup.items():
+                preimage_clean = preimage[2:] if preimage.startswith("0x") else preimage
+                if len(preimage_clean) == 64:
+                    # This is a 32-byte preimage - could be array data start
+                    match = self._try_match_slot_from_preimage(
+                        slot_hash, preimage, layout, preimage_lookup, depth=0
+                    )
+                    if match and match.get("encoding") == "mapping_to_array":
+                        data_start = match.get("data_start_slot")
+                        if data_start is not None:
+                            mapping_to_array_index[data_start] = match
+                            logger.debug(
+                                f"Mapping-to-array index: data_start={hex(data_start)[:18]}..., "
+                                f"var={match.get('variable').name if match.get('variable') else '?'}"
+                            )
+            if mapping_to_array_index:
+                logger.info(f"Built mapping-to-array index with {len(mapping_to_array_index)} entries")
+
+        # Set type registry on decoder for generic struct decoding
+        if layout and layout.types:
+            self.decoder.set_type_registry(layout.types)
 
         # First pass: collect all matched slots and their info for struct offset detection
         # We'll process changes twice - first to find matches, then to apply struct offsets
         matched_slots: dict[int, dict] = {}  # slot_int -> match info
 
-        for slot_hex, old_value, new_value, pc, exec_index in raw_changes:
+        # Diagnostic counters for resolution path tracking
+        stats = {
+            "total": 0,
+            "layout_direct": 0,
+            "preimage_lookup": 0,
+            "struct_offset": 0,
+            "dynamic_array": 0,
+            "mapping_to_array": 0,
+            "dynamic_bytes": 0,
+            "heuristic": 0,
+        }
+
+        # Log decode progress for performance debugging
+        total_changes = len(raw_changes)
+        logger.info(f"Decoding {total_changes} storage changes (preimage_lookup has {len(preimage_lookup)} entries)...")
+
+        for change_idx, (slot_hex, old_value, new_value, pc, exec_index) in enumerate(raw_changes):
+            stats["total"] += 1
+            resolution_path = "unknown"  # Track which path resolved this slot
+
+            # Progress logging every 50 changes
+            if change_idx > 0 and change_idx % 50 == 0:
+                logger.info(f"  Decoded {change_idx}/{total_changes} changes...")
             try:
                 try:
                     slot_int = int(slot_hex, 16)
@@ -1360,6 +1442,8 @@ class TransactionTracer:
                         variable = layout.get_variable_for_slot(slot_int)
 
                         if variable:
+                            stats["layout_direct"] += 1
+                            resolution_path = "layout_direct"
                             var_type = layout.get_type(variable.type_id)
                             if var_type:
                                 encoding = var_type.encoding
@@ -1371,8 +1455,13 @@ class TransactionTracer:
 
                             # For mappings, decode using value type
                             decode_type = var_type
-                            if var_type and var_type.encoding == "mapping" and var_type.value_type:
-                                decode_type = layout.get_type(var_type.value_type)
+                            if var_type and var_type.encoding == "mapping":
+                                if var_type.value_type:
+                                    decode_type = layout.get_type(var_type.value_type)
+                                else:
+                                    # Mapping without value_type - can't decode meaningfully
+                                    logger.debug(f"Mapping {variable.name} has no value_type, using heuristic")
+                                    decode_type = None
 
                             if var_type:
                                 try:
@@ -1388,9 +1477,17 @@ class TransactionTracer:
                                             new_bytes, type_label
                                         )
                                         # For long strings (lowest bit = 1), mark as length slot
-                                        # Check either old or new value to detect long string mode
-                                        is_long = (new_bytes[-1] & 1) == 1 if new_bytes else (old_bytes[-1] & 1) == 1 if old_bytes else False
-                                        if is_long:
+                                        # Detect encoding transitions between short and long strings
+                                        old_is_long = (old_bytes[-1] & 1) == 1 if old_bytes else False
+                                        new_is_long = (new_bytes[-1] & 1) == 1 if new_bytes else False
+
+                                        if old_is_long != new_is_long:
+                                            # Encoding transition
+                                            if new_is_long:
+                                                variable_path = f"{variable.name} (short→long string)"
+                                            else:
+                                                variable_path = f"{variable.name} (long→short string)"
+                                        elif new_is_long or old_is_long:
                                             variable_path = f"{variable.name} (string length)"
                                     elif var_type.encoding == "dynamic_array" or (
                                         var_type.element_type and "[]" in (var_type.label or "")
@@ -1427,50 +1524,58 @@ class TransactionTracer:
                                 except Exception as e:
                                     logger.warning(f"Failed to decode change at slot {slot_hex}: {e}")
                         else:
-                            # Try to match mapping slots using candidate keys
-                            match_result = self._try_match_mapping_slot(
-                                slot_int, layout, base_slot_index,
-                                candidate_addresses, candidate_uint256s
-                            )
-                            if match_result:
-                                variable = match_result["variable"]
-                                mapping_base_slot = match_result["base_slot"]
-                                mapping_key = match_result["key"]
-                                variable_path = match_result["path"]
-                                is_mapping = True
-                                encoding = match_result.get("encoding")
-                                key_type = match_result.get("key_type")
-                                value_type = match_result.get("value_type")
-                                # Decode using value type if available
-                                decode_type = match_result.get("decode_type")
-                                struct_offset = match_result.get("struct_offset", 0) or 0
-                                slot_offset = struct_offset
-                                if struct_offset and layout and variable:
-                                    # Try to resolve the struct member for clearer paths and decoding
-                                    field_name, field_type = self._resolve_struct_field(variable, struct_offset, layout)
-                                    if field_name:
-                                        variable_path = f"{variable.name}[{mapping_key}].{field_name}" if mapping_key else f"{variable.name}[?].{field_name}"
-                                        decode_type = field_type or decode_type
-                                        value_type = decode_type.label if decode_type and hasattr(decode_type, "label") else value_type
-                                if decode_type:
-                                    try:
-                                        old_bytes = bytes.fromhex(old_value[2:])
-                                        new_bytes = bytes.fromhex(new_value[2:])
-                                        old_decoded = self.decoder.decode(
-                                            old_bytes, decode_type, variable.offset, slot_offset
-                                        )
-                                        new_decoded = self.decoder.decode(
-                                            new_bytes, decode_type, variable.offset, slot_offset
-                                        )
-                                    except Exception:
-                                        pass
+                            # OPTIMIZATION: Try preimage_lookup FIRST (O(1)) before brute-force
+                            # candidate matching. Preimage lookup has the actual keys used.
+                            if slot_hex in preimage_lookup:
+                                preimage = preimage_lookup[slot_hex]
+                                preimage_match = self._try_match_slot_from_preimage(
+                                    slot_hex, preimage, layout, preimage_lookup
+                                )
+                                if preimage_match:
+                                    variable = preimage_match.get("variable")
+                                    mapping_base_slot = preimage_match.get("base_slot")
+                                    mapping_key = preimage_match.get("key")
+                                    variable_path = preimage_match.get("path")
+                                    is_mapping = True
+                                    encoding = preimage_match.get("encoding")
+                                    key_type = preimage_match.get("key_type")
+                                    value_type = preimage_match.get("value_type")
+                                    decode_type = preimage_match.get("decode_type")
 
-                            # Try dynamic array slot matching if mapping matching failed
+                                    # Handle mapping_to_array: this slot IS the data_start, so array_index=0
+                                    if encoding == "mapping_to_array":
+                                        stats["mapping_to_array"] += 1
+                                        resolution_path = "mapping_to_array"
+                                        array_index = 0  # This is the data_start slot, so index 0
+                                        # Update path to include array index
+                                        if variable:
+                                            variable_path = f"{variable.name}[{mapping_key}][0]"
+                                        # Get element_type for decoding
+                                        element_type = preimage_match.get("element_type")
+                                        if element_type:
+                                            decode_type = element_type
+
+                                    if decode_type:
+                                        try:
+                                            old_bytes = bytes.fromhex(old_value[2:])
+                                            new_bytes = bytes.fromhex(new_value[2:])
+                                            old_decoded = self.decoder.decode(
+                                                old_bytes, decode_type, variable.offset if variable else 0
+                                            )
+                                            new_decoded = self.decoder.decode(
+                                                new_bytes, decode_type, variable.offset if variable else 0
+                                            )
+                                        except Exception:
+                                            pass
+
+                            # Try dynamic array slot matching if preimage lookup didn't match
                             if not variable and dynamic_array_index:
                                 array_match = self._try_match_dynamic_array_slot(
                                     slot_int, layout, dynamic_array_index
                                 )
                                 if array_match:
+                                    stats["dynamic_array"] += 1
+                                    resolution_path = "dynamic_array"
                                     variable = array_match["variable"]
                                     variable_path = array_match["path"]
                                     encoding = array_match.get("encoding")
@@ -1482,7 +1587,83 @@ class TransactionTracer:
                                     # Get field type for value_type display
                                     decode_type = array_match.get("decode_type")
                                     struct_slot_offset = array_match.get("struct_slot_offset", 0) or 0
-                                    if decode_type:
+                                    # Check for packed struct slot (multiple members at same offset)
+                                    slot_members = array_match.get("slot_members")
+                                    if slot_members and len(slot_members) > 1:
+                                        # Packed struct slot - decode all packed fields
+                                        value_type = "packed"
+                                        try:
+                                            old_bytes = bytes.fromhex(old_value[2:])
+                                            new_bytes = bytes.fromhex(new_value[2:])
+                                            old_packed = self.decoder.decode_packed_slot(old_bytes, slot_members, layout.types if layout else {})
+                                            new_packed = self.decoder.decode_packed_slot(new_bytes, slot_members, layout.types if layout else {})
+                                            # Combine into single decoded dict
+                                            old_decoded = DecodedValue(
+                                                raw=old_value,
+                                                decoded={k: v.decoded for k, v in old_packed.items()},
+                                                type_label="packed",
+                                                display=None,
+                                            )
+                                            new_decoded = DecodedValue(
+                                                raw=new_value,
+                                                decoded={k: v.decoded for k, v in new_packed.items()},
+                                                type_label="packed",
+                                                display=None,
+                                            )
+                                        except Exception:
+                                            pass
+                                    elif decode_type:
+                                        value_type = decode_type.label
+                                        try:
+                                            old_bytes = bytes.fromhex(old_value[2:])
+                                            new_bytes = bytes.fromhex(new_value[2:])
+                                            old_decoded = self.decoder.decode(old_bytes, decode_type, 0, struct_slot_offset)
+                                            new_decoded = self.decoder.decode(new_bytes, decode_type, 0, struct_slot_offset)
+                                        except Exception:
+                                            pass
+
+                            # Try mapping-to-array slot matching (mapping(addr => Struct[]))
+                            if not variable and mapping_to_array_index:
+                                m2a_match = self._try_match_mapping_to_array_slot(
+                                    slot_int, layout, mapping_to_array_index
+                                )
+                                if m2a_match:
+                                    stats["mapping_to_array"] += 1
+                                    resolution_path = "mapping_to_array"
+                                    variable = m2a_match["variable"]
+                                    variable_path = m2a_match["path"]
+                                    encoding = m2a_match.get("encoding")
+                                    is_mapping = True  # It's a mapping at the root
+                                    mapping_key = m2a_match.get("mapping_key")
+                                    array_index = m2a_match.get("array_index")
+                                    element_type = m2a_match.get("element_type")
+                                    element_type_id = element_type.id if element_type else None
+                                    decode_type = m2a_match.get("decode_type")
+                                    struct_slot_offset = m2a_match.get("struct_slot_offset", 0) or 0
+                                    # Check for packed struct slot
+                                    slot_members = m2a_match.get("slot_members")
+                                    if slot_members and len(slot_members) > 1:
+                                        value_type = "packed"
+                                        try:
+                                            old_bytes = bytes.fromhex(old_value[2:])
+                                            new_bytes = bytes.fromhex(new_value[2:])
+                                            old_packed = self.decoder.decode_packed_slot(old_bytes, slot_members, layout.types if layout else {})
+                                            new_packed = self.decoder.decode_packed_slot(new_bytes, slot_members, layout.types if layout else {})
+                                            old_decoded = DecodedValue(
+                                                raw=old_value,
+                                                decoded={k: v.decoded for k, v in old_packed.items()},
+                                                type_label="packed",
+                                                display=None,
+                                            )
+                                            new_decoded = DecodedValue(
+                                                raw=new_value,
+                                                decoded={k: v.decoded for k, v in new_packed.items()},
+                                                type_label="packed",
+                                                display=None,
+                                            )
+                                        except Exception:
+                                            pass
+                                    elif decode_type:
                                         value_type = decode_type.label
                                         try:
                                             old_bytes = bytes.fromhex(old_value[2:])
@@ -1498,6 +1679,8 @@ class TransactionTracer:
                                     slot_int, layout, dynamic_bytes_index
                                 )
                                 if bytes_match:
+                                    stats["dynamic_bytes"] += 1
+                                    resolution_path = "dynamic_bytes"
                                     variable = bytes_match["variable"]
                                     variable_path = bytes_match["path"]
                                     encoding = bytes_match.get("encoding")
@@ -1524,25 +1707,27 @@ class TransactionTracer:
                 # data that was hashed to produce this slot
                 if not variable:
                     # Log unmatched slots for debugging
-                    logger.info(f"Unmatched slot: {slot_hex[:18]}... checking preimage lookup")
+                    logger.debug(f"Unmatched slot: {slot_hex[:18]}... checking preimage lookup")
                     if slot_hex in preimage_lookup:
-                        logger.info(f"  Found in preimage lookup!")
+                        logger.debug(f"  Found in preimage lookup!")
                     else:
                         # Check if slot minus offset is in lookup (struct member)
                         for offset in range(1, 5):
                             base_int = slot_int - offset
                             base_hex = self._normalize_slot(hex(base_int))
                             if base_hex in preimage_lookup:
-                                logger.info(f"  Slot-{offset} ({base_hex[:18]}...) IS in lookup")
+                                logger.debug(f"  Slot-{offset} ({base_hex[:18]}...) IS in lookup")
                                 break
                         else:
-                            logger.info(f"  NOT in preimage lookup (and no offset matches)")
+                            logger.debug(f"  NOT in preimage lookup (and no offset matches)")
                 if not variable and slot_hex in preimage_lookup:
                     preimage = preimage_lookup[slot_hex]
                     preimage_match = self._try_match_slot_from_preimage(
                         slot_hex, preimage, layout, preimage_lookup
                     )
                     if preimage_match:
+                        stats["preimage_lookup"] += 1
+                        resolution_path = "preimage_lookup"
                         variable = preimage_match.get("variable")
                         mapping_base_slot = preimage_match.get("base_slot")
                         mapping_key = preimage_match.get("key")
@@ -1553,6 +1738,24 @@ class TransactionTracer:
                         value_type = preimage_match.get("value_type")
                         # Decode using value type if available
                         decode_type = preimage_match.get("decode_type")
+
+                        # Handle mapping_to_array: this slot IS the data_start, so array_index=0
+                        if encoding == "mapping_to_array":
+                            stats["mapping_to_array"] += 1
+                            resolution_path = "mapping_to_array"
+                            array_index = 0  # This is the data_start slot, so index 0
+                            # Update path to include array index
+                            if variable:
+                                variable_path = f"{variable.name}[{mapping_key}][0]"
+                            # Get element_type for decoding
+                            element_type = preimage_match.get("element_type")
+                            if element_type:
+                                decode_type = element_type
+
+                        # If decode_type is None but we have value_type, try to synthesize it
+                        if not decode_type and value_type and layout:
+                            decode_type = layout.get_type(value_type)
+
                         if decode_type:
                             try:
                                 old_bytes = bytes.fromhex(old_value[2:])
@@ -1563,6 +1766,15 @@ class TransactionTracer:
                                 new_decoded = self.decoder.decode(
                                     new_bytes, decode_type, variable.offset if variable else 0
                                 )
+                            except Exception as e:
+                                logger.debug(f"Failed to decode mapping value: {e}")
+                        else:
+                            # Final fallback: use heuristic decoding
+                            try:
+                                old_bytes = bytes.fromhex(old_value[2:])
+                                new_bytes = bytes.fromhex(new_value[2:])
+                                old_decoded = self.decoder.decode_heuristic(old_bytes)
+                                new_decoded = self.decoder.decode_heuristic(new_bytes)
                             except Exception:
                                 pass
 
@@ -1574,13 +1786,15 @@ class TransactionTracer:
                         base_slot_hex = self._normalize_slot(hex(base_slot_int))
                         if base_slot_hex in preimage_lookup:
                             base_preimage = preimage_lookup[base_slot_hex]
-                            logger.info(f"  Struct offset {struct_offset}: trying to match base {base_slot_hex[:18]}...")
+                            logger.debug(f"  Struct offset {struct_offset}: trying to match base {base_slot_hex[:18]}...")
                             base_match = self._try_match_slot_from_preimage(
                                 base_slot_hex, base_preimage, layout, preimage_lookup
                             )
                             if base_match:
                                 base_var = base_match.get("variable")
                                 if base_var:
+                                    stats["struct_offset"] += 1
+                                    resolution_path = "struct_offset"
                                     # Found the base mapping variable, now add struct offset info
                                     variable = base_var
                                     mapping_base_slot = base_match.get("base_slot")
@@ -1611,7 +1825,7 @@ class TransactionTracer:
                                         # Fall back to offset notation
                                         variable_path = f"{base_path}[+{struct_offset}]" if base_path else f"[+{struct_offset}]"
 
-                                    logger.info(f"  Matched as struct offset: {variable.name}{variable_path}")
+                                    logger.debug(f"  Matched as struct offset: {variable.name}{variable_path}")
                                     break
 
                 # Heuristic decode if no layout or no decoded values yet
@@ -1623,6 +1837,10 @@ class TransactionTracer:
                         new_decoded = self.decoder.decode_heuristic(new_bytes)
                     except Exception:
                         pass
+
+                # Count unresolved slots that fell through to heuristic
+                if resolution_path == "unknown":
+                    stats["heuristic"] += 1
 
                 # Track matched slots for struct offset detection in second pass
                 if variable and is_mapping:
@@ -1695,41 +1913,50 @@ class TransactionTracer:
         # Second pass: Try to resolve unmatched slots using struct offset detection
         # If slot X is unmatched but slot X-N (for small N) is matched, X is a struct member
         all_slot_ints = set(int(c.slot, 16) for c in decoded_changes)
+
+        # Helper function to find base match by following chains
+        def find_base_match(slot_int: int, max_depth: int = 10) -> tuple[dict | None, int]:
+            """Find the matched base slot by following chains. Returns (match, offset)."""
+            for offset in range(1, max_depth + 1):
+                base_slot_int = slot_int - offset
+                if base_slot_int in matched_slots:
+                    return matched_slots[base_slot_int], offset
+            return None, 0
+
         for i, change in enumerate(decoded_changes):
             if change.variable is None:
                 slot_int = int(change.slot, 16)
-                # Check if slot - offset is in our matched slots
-                for offset in range(1, 10):  # Check offsets 1-9
-                    base_slot_int = slot_int - offset
-                    if base_slot_int in matched_slots:
-                        base_match = matched_slots[base_slot_int]
-                        base_var = base_match["variable"]
-                        base_key = base_match["mapping_key"]
-                        # This slot is base + offset, a struct member
-                        logger.info(f"Struct offset match: {change.slot[:18]}... = {base_var.name}[{base_key}]+{offset}")
-                        decoded_changes[i] = StorageChange(
-                            slot=change.slot,
-                            mapping_base_slot=base_match["mapping_base_slot"],
-                            old_value=change.old_value,
-                            new_value=change.new_value,
-                            variable=base_var,
-                            variable_path=f"{base_var.name}[{base_key}]+{offset}",
-                            old_decoded=change.old_decoded,
-                            new_decoded=change.new_decoded,
-                            mapping_key=base_key,
-                            is_mapping=True,
-                            encoding=base_match.get("encoding"),
-                            key_type=base_match.get("key_type"),
-                            value_type=base_match.get("value_type"),
-                            change_index=change.change_index,
-                            pc=change.pc,
-                        )
-                        break
-                    # Also check if base slot is in the change set (even if not matched)
-                    # This catches consecutive unmatched slots that form a struct
-                    elif base_slot_int in all_slot_ints:
-                        # Found a chain - slot and slot-offset both exist
-                        # The lower slot might be matched in a later iteration
-                        pass
+                base_match, offset = find_base_match(slot_int)
 
+                if base_match:
+                    base_var = base_match["variable"]
+                    base_key = base_match["mapping_key"]
+                    # This slot is base + offset, a struct member
+                    logger.debug(f"Struct offset match: {change.slot[:18]}... = {base_var.name}[{base_key}]+{offset}")
+                    decoded_changes[i] = StorageChange(
+                        slot=change.slot,
+                        mapping_base_slot=base_match["mapping_base_slot"],
+                        old_value=change.old_value,
+                        new_value=change.new_value,
+                        variable=base_var,
+                        variable_path=f"{base_var.name}[{base_key}]+{offset}",
+                        old_decoded=change.old_decoded,
+                        new_decoded=change.new_decoded,
+                        mapping_key=base_key,
+                        is_mapping=True,
+                        encoding=base_match.get("encoding"),
+                        key_type=base_match.get("key_type"),
+                        value_type=base_match.get("value_type"),
+                        change_index=change.change_index,
+                        pc=change.pc,
+                    )
+
+        # Log resolution path statistics
+        resolved = stats["layout_direct"] + stats["preimage_lookup"] + stats["struct_offset"] + stats["dynamic_array"] + stats["mapping_to_array"] + stats["dynamic_bytes"]
+        logger.info(
+            f"Slot resolution: {stats['total']} total, {resolved} resolved "
+            f"(layout={stats['layout_direct']}, preimage={stats['preimage_lookup']}, "
+            f"struct_offset={stats['struct_offset']}, array={stats['dynamic_array']}, "
+            f"map_to_array={stats['mapping_to_array']}, bytes={stats['dynamic_bytes']}), {stats['heuristic']} heuristic"
+        )
         return decoded_changes

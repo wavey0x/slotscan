@@ -10,7 +10,7 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'StorageScan',
+  title: 'SlotScan',
   description: 'Ethereum smart contract storage analyzer',
 };
 

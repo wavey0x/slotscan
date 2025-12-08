@@ -67,7 +67,7 @@ function abbreviateBigInt(value: bigint): string {
   return `${isNegative ? '-' : ''}${mantissa}e${exponent}`;
 }
 
-const RECENT_SEARCHES_KEY = 'storagescan_recent_searches';
+const RECENT_SEARCHES_KEY = 'slotscan_recent_searches';
 const MAX_RECENT = 5;
 
 export interface RecentSearch {

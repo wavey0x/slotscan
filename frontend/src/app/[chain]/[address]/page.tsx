@@ -1,12 +1,9 @@
 'use client';
 
 import { useSearchParams, useRouter } from 'next/navigation';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Container } from '@/components/layout/Container';
 import { BackLink } from '@/components/layout/BackLink';
-import { ContractHeader } from '@/components/contract/ContractHeader';
-import { StorageTree } from '@/components/storage/StorageTree';
-import { BlockSelector } from '@/components/storage/BlockSelector';
 import { DiffTable } from '@/components/diff/DiffTable';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { EtherscanLink } from '@/components/ui/EtherscanLink';
@@ -16,35 +13,6 @@ import { truncateHash, truncateAddress } from '@/lib/utils';
 import { getAddressExplorerUrl, getTxExplorerUrl, getBlockExplorerUrl } from '@/lib/constants';
 import { useContract } from '@/lib/hooks/useContract';
 import { useTxDiff } from '@/lib/hooks/useTxDiff';
-
-// Component for transaction hash input
-function TxHashInput({ chainId, address }: { chainId: string; address: string }) {
-  const router = useRouter();
-  const [txInput, setTxInput] = useState('');
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const txHash = txInput.trim();
-    if (txHash && /^0x[a-fA-F0-9]{64}$/.test(txHash)) {
-      router.push(`/${chainId}/${address}?tx=${txHash}`);
-    }
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="flex gap-1">
-      <Input
-        type="text"
-        value={txInput}
-        onChange={(e) => setTxInput(e.target.value)}
-        placeholder="Transaction hash (0x...)"
-        className="w-80 font-mono text-xs"
-      />
-      <Button type="submit" variant="secondary" size="sm">
-        View
-      </Button>
-    </form>
-  );
-}
 
 interface ContractPageProps {
   params: { chain: string; address: string };
@@ -122,70 +90,87 @@ function TxDiffView({ chain, address, txHash }: { chain: string; address: string
   );
 }
 
-export default function ContractPage({ params }: ContractPageProps) {
-  const { chain, address } = params;
-  const searchParams = useSearchParams();
-  const txHash = searchParams.get('tx');
-  const blockParam = searchParams.get('block');
+// Prompt view when no tx hash provided
+function PromptView({ chain, address }: { chain: string; address: string }) {
+  const router = useRouter();
+  const { data: contract } = useContract(chain, address);
+  const contractName = contract?.name;
+  const abbreviatedAddress = truncateAddress(address);
 
-  const [blockNumber, setBlockNumber] = useState<number | undefined>(
-    blockParam ? parseInt(blockParam) : undefined
-  );
-  const [latestBlock, setLatestBlock] = useState<number | undefined>();
+  const [input, setInput] = useState('');
+  const [error, setError] = useState<string | null>(null);
 
-  // Fetch latest block if no block specified
-  useEffect(() => {
-    if (!blockNumber && !txHash) {
-      fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api'}/contracts/${chain}/${address}`)
-        .then((res) => res.json())
-        .then(() => {
-          // Use a recent block (we'd need to fetch this from the API)
-          // For now, set a placeholder that will be updated by storage fetch
-          setLatestBlock(undefined);
-        })
-        .catch(() => {});
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const value = input.trim();
+
+    if (!value) {
+      setError('Please enter a transaction hash');
+      return;
     }
-  }, [chain, address, blockNumber, txHash]);
 
-  // If tx hash provided, show transaction diff view
-  if (txHash) {
-    return (
-      <TxDiffView chain={chain} address={address} txHash={txHash} />
-    );
-  }
-
-  // Show storage at block
-  const displayBlock = blockNumber || latestBlock;
+    if (!/^0x[a-fA-F0-9]{64}$/.test(value)) {
+      setError('Invalid transaction hash format');
+      return;
+    }
+    router.push(`/${chain}/${address}?tx=${value}`);
+  };
 
   return (
     <Container>
       <BackLink href="/" />
-      <ContractHeader chainId={chain} address={address} />
 
-      <div className="mt-8">
-        <div className="flex items-center justify-between mb-4">
-          <span className="text-xs text-gray-500 uppercase tracking-wide">Storage</span>
-          <div className="flex gap-4 items-center">
-            <TxHashInput chainId={chain} address={address} />
-            <BlockSelector
-              currentBlock={displayBlock}
-              onBlockChange={setBlockNumber}
-            />
-          </div>
-        </div>
+      <div className="mt-6 mb-8">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+          <dt className="text-gray-500">Contract:</dt>
+          <dd>
+            <span className="group inline-flex items-center gap-2 -ml-2 px-2 py-0.5 rounded-md transition border border-transparent hover:border-dashed hover:border-gray-400">
+              <span className="font-mono text-gray-900">
+                {contractName ? `${contractName} (${abbreviatedAddress})` : abbreviatedAddress}
+              </span>
+              <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                <CopyButton value={address} />
+                <EtherscanLink href={getAddressExplorerUrl(chain, address)} />
+              </span>
+            </span>
+          </dd>
+        </dl>
+      </div>
 
-        {displayBlock ? (
-          <StorageTree
-            chainId={chain}
-            address={address}
-            blockNumber={displayBlock}
+      <div className="max-w-md">
+        <h2 className="text-lg font-medium text-gray-400 mb-4">View Storage Changes</h2>
+
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <Input
+            type="text"
+            value={input}
+            onChange={(e) => {
+              setInput(e.target.value);
+              setError(null);
+            }}
+            placeholder="Transaction hash (0x...)"
+            className="w-full font-mono text-sm"
           />
-        ) : (
-          <div className="text-gray-500 p-8 text-center border border-gray-300">
-            Enter a block number to view storage
-          </div>
-        )}
+          {error && <p className="text-red text-xs">{error}</p>}
+          <Button type="submit" variant="primary" className="w-full">
+            View Storage Changes
+          </Button>
+        </form>
       </div>
     </Container>
   );
+}
+
+export default function ContractPage({ params }: ContractPageProps) {
+  const { chain, address } = params;
+  const searchParams = useSearchParams();
+  const txHash = searchParams.get('tx');
+
+  // If tx hash provided, show transaction diff view
+  if (txHash) {
+    return <TxDiffView chain={chain} address={address} txHash={txHash} />;
+  }
+
+  // Otherwise prompt for tx hash
+  return <PromptView chain={chain} address={address} />;
 }

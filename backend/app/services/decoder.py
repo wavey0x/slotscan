@@ -1,6 +1,7 @@
 """Type decoder for converting raw storage values to Solidity types."""
 
 import json
+import logging
 import re
 from typing import Any, Optional
 
@@ -8,9 +9,18 @@ from web3 import Web3
 
 from app.models.domain import DecodedValue, StorageType, StorageVariable
 
+logger = logging.getLogger(__name__)
+
 
 class TypeDecoder:
     """Decodes raw storage slot values to typed Python values."""
+
+    # Type registry for looking up types by ID (set by caller when available)
+    _type_registry: dict[str, StorageType] = {}
+
+    def set_type_registry(self, types: dict[str, StorageType]) -> None:
+        """Set the type registry for looking up nested types during decoding."""
+        self._type_registry = types
 
     def decode(
         self,
@@ -34,13 +44,22 @@ class TypeDecoder:
         end = 32 - offset
         relevant_bytes = raw_value[start:end]
 
-        # Decode based on type
-        # For multi-slot structs, attempt slot-aware decoding first
-        slot_struct = self._decode_struct_slot(relevant_bytes, type_info, slot_offset)
-        if isinstance(slot_struct, DecodedValue):
-            return slot_struct
+        # For structs with members, use generic struct decoding
+        # Skip array types - their base slots store length, not struct data
+        is_array_type = "[]" in (type_info.label or "").lower() or type_info.encoding == "dynamic_array"
+        if not is_array_type and type_info.members:
+            struct_result = self._decode_generic_struct(raw_value, type_info, slot_offset)
+            if struct_result is not None:
+                display = self._format_dict(struct_result) if isinstance(struct_result, dict) else str(struct_result)
+                return DecodedValue(
+                    raw="0x" + raw_value.hex(),
+                    decoded=struct_result,
+                    type_label=type_info.label,
+                    display=display,
+                )
 
-        decoded = slot_struct if slot_struct is not None else self._decode_by_type(relevant_bytes, type_info)
+        # Decode based on type
+        decoded = self._decode_by_type(relevant_bytes, type_info)
 
         # Format for display, with nicer rendering for structs/collections
         if isinstance(decoded, dict):
@@ -57,9 +76,139 @@ class TypeDecoder:
             display=display,
         )
 
+    def _decode_generic_struct(
+        self, raw_value: bytes, type_info: StorageType, slot_offset: int = 0
+    ) -> Optional[dict]:
+        """
+        Decode a struct using its member definitions from the layout.
+
+        For multi-slot structs, only decodes members at the given slot_offset.
+        For single-slot (packed) structs, decodes all members.
+
+        Args:
+            raw_value: The 32-byte slot value
+            type_info: Type info with members list
+            slot_offset: Which slot within the struct (0 for first slot)
+
+        Returns:
+            Dict of {field_name: decoded_value} or None if decoding fails
+        """
+        if not type_info.members:
+            return None
+
+        result = {}
+
+        # Find members at this slot offset
+        members_at_slot = [m for m in type_info.members if m.slot == slot_offset]
+
+        if not members_at_slot:
+            # No members at this slot offset - might be a different slot of a multi-slot struct
+            logger.debug(f"No members at slot_offset {slot_offset} for struct {type_info.label}")
+            return None
+
+        for member in members_at_slot:
+            try:
+                # Get member's type
+                member_type = self._type_registry.get(member.type_id)
+                if not member_type:
+                    # Synthesize primitive types
+                    member_type = self._synthesize_type(member.type_id)
+
+                if member_type:
+                    # Extract bytes for this member based on its offset and size
+                    size = member.size or member_type.num_bytes or 32
+                    byte_offset = member.offset
+
+                    # Storage is right-aligned, so calculate extraction range
+                    start = 32 - byte_offset - size
+                    end = 32 - byte_offset
+
+                    # Ensure valid range
+                    start = max(0, start)
+                    end = min(32, end)
+
+                    member_bytes = raw_value[start:end]
+
+                    # Decode the member (recursively handles nested structs)
+                    decoded_value = self._decode_by_type(member_bytes, member_type)
+                    result[member.name] = decoded_value
+                else:
+                    # Unknown type - use heuristic decoding
+                    logger.debug(f"Unknown type {member.type_id} for member {member.name}, using heuristic")
+                    size = member.size or 32
+                    byte_offset = member.offset
+                    start = max(0, 32 - byte_offset - size)
+                    end = min(32, 32 - byte_offset)
+                    member_bytes = raw_value[start:end].rjust(32, b"\x00")
+                    heuristic_result = self.decode_heuristic(member_bytes)
+                    result[member.name] = heuristic_result.decoded
+
+            except Exception as e:
+                logger.warning(f"Failed to decode struct member {member.name}: {e}")
+                result[member.name] = None
+
+        return result if result else None
+
+    def _synthesize_type(self, type_id: str) -> Optional[StorageType]:
+        """Synthesize a StorageType for common primitive types."""
+        import re
+
+        # uint types
+        uint_match = re.match(r'^t_uint(\d+)$', type_id)
+        if uint_match:
+            bits = int(uint_match.group(1))
+            return StorageType(
+                id=type_id, label=f"uint{bits}", kind="value",
+                encoding="inplace", num_bytes=bits // 8
+            )
+
+        # int types
+        int_match = re.match(r'^t_int(\d+)$', type_id)
+        if int_match:
+            bits = int(int_match.group(1))
+            return StorageType(
+                id=type_id, label=f"int{bits}", kind="value",
+                encoding="inplace", num_bytes=bits // 8
+            )
+
+        # address
+        if type_id in ('t_address', 't_address_payable'):
+            return StorageType(
+                id=type_id, label="address", kind="value",
+                encoding="inplace", num_bytes=20
+            )
+
+        # bool
+        if type_id == 't_bool':
+            return StorageType(
+                id=type_id, label="bool", kind="value",
+                encoding="inplace", num_bytes=1
+            )
+
+        # bytesN
+        bytes_match = re.match(r'^t_bytes(\d+)$', type_id)
+        if bytes_match:
+            n = int(bytes_match.group(1))
+            return StorageType(
+                id=type_id, label=f"bytes{n}", kind="value",
+                encoding="inplace", num_bytes=n
+            )
+
+        # Contract types (e.g., t_contract$_IERC20_$123) - stored as address
+        if type_id.startswith('t_contract'):
+            # Extract contract name from type_id like "t_contract$_IERC20_$123"
+            contract_match = re.match(r'^t_contract\$_(\w+)_\$\d+$', type_id)
+            contract_name = contract_match.group(1) if contract_match else "contract"
+            return StorageType(
+                id=type_id, label=contract_name, kind="contract",
+                encoding="inplace", num_bytes=20
+            )
+
+        return None
+
     def _decode_by_type(self, data: bytes, type_info: StorageType) -> Any:
         """Decode bytes based on type."""
-        label = type_info.label.lower()
+        label = (type_info.label or "").lower()
         base = type_info.base_type or label
 
         # Boolean
@@ -85,38 +234,35 @@ class TypeDecoder:
             return self._decode_bytesN(data, n)
 
         # Enum (stored as uint)
-        if "enum" in label.lower():
+        if "enum" in label:
             return self._decode_uint(data)
 
         # Contract type (stored as address)
         if type_info.kind == "contract":
             return self._decode_address(data)
 
-        # Known custom structs (manually decoded)
-        # Skip if this is an array type - array base slots store length, not struct data
-        lower_label = label.lower()
-        is_array_type = "[]" in lower_label or type_info.encoding == "dynamic_array"
-
-        if not is_array_type:
-            if "currentrateinfo" in lower_label:
-                return self._decode_current_rate_info(data)
-            if "exchangerateinfo" in lower_label:
-                return self._decode_exchange_rate_info(data)
-            if "rewardtype" in lower_label:
-                return self._decode_reward_type(data)
-
-        # Struct type (without known members) - use heuristic decoding
-        # This handles nested structs where members aren't available in the layout
-        # Skip array types - their base slot stores length (uint256), not struct data
-        if not is_array_type and (type_info.kind == "struct" or "struct" in label):
-            # Pad back to 32 bytes and apply heuristic decoding
-            padded = data.rjust(32, b"\x00")
-            heuristic_result = self.decode_heuristic(padded)
-            return heuristic_result.decoded
+        # Check if this is an array type - array base slots store length, not struct data
+        is_array_type = "[]" in label or type_info.encoding == "dynamic_array"
 
         # Dynamic array base slot stores length - decode as uint256
         if is_array_type:
             return self._decode_uint(data)
+
+        # Struct type with members - use generic struct decoding
+        # Note: This is handled in decode() for the full slot, but we might reach here
+        # for nested types or when called directly
+        if type_info.kind == "struct" and type_info.members:
+            # Pad data back to 32 bytes for struct decoding
+            padded = data.rjust(32, b"\x00")
+            struct_result = self._decode_generic_struct(padded, type_info, slot_offset=0)
+            if struct_result is not None:
+                return struct_result
+
+        # Struct type without members - use heuristic decoding
+        if type_info.kind == "struct" or "struct" in label:
+            padded = data.rjust(32, b"\x00")
+            heuristic_result = self.decode_heuristic(padded)
+            return heuristic_result.decoded
 
         # Default to hex
         return "0x" + data.hex()
@@ -126,7 +272,8 @@ class TypeDecoder:
         addr_bytes = data[-20:] if len(data) >= 20 else data.rjust(20, b"\x00")
         try:
             return Web3.to_checksum_address(addr_bytes)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Address checksum failed, using hex: {e}")
             return "0x" + addr_bytes.hex()
 
     def _decode_uint(self, data: bytes) -> int:
@@ -151,131 +298,6 @@ class TypeDecoder:
         match = re.search(r"(\d+)", type_name)
         if match:
             return int(match.group(1))
-        return None
-
-    def _decode_current_rate_info(self, raw_value: bytes) -> dict:
-        """Decode ResupplyPairCore.CurrentRateInfo {uint64 lastTimestamp, uint64 ratePerSec, uint128 lastShares}."""
-        if len(raw_value) < 32:
-            raw_value = raw_value.rjust(32, b"\x00")
-        last_timestamp = int.from_bytes(raw_value[-8:], "big")
-        rate_per_sec = int.from_bytes(raw_value[-16:-8], "big")
-        last_shares = int.from_bytes(raw_value[:-16], "big")
-        return {
-            "lastTimestamp": last_timestamp,
-            "ratePerSec": rate_per_sec,
-            "lastShares": last_shares,
-        }
-
-    def _decode_exchange_rate_info(self, raw_value: bytes) -> dict:
-        """
-        Decode ResupplyPairCore.ExchangeRateInfo:
-        slot0 packs {address oracle, uint96 lastTimestamp}, slot1 is uint256 exchangeRate.
-        We heuristically decide which layout we are seeing based on the high 12 bytes (timestamp size).
-        """
-        if len(raw_value) < 32:
-            raw_value = raw_value.rjust(32, b"\x00")
-
-        high_12 = raw_value[:12]      # timestamp bytes (uint96)
-        low_20 = raw_value[-20:]      # address bytes
-
-        last_timestamp = int.from_bytes(high_12, "big")
-        exchange_rate = int.from_bytes(raw_value, "big")
-
-        is_timestamp_reasonable = last_timestamp < 2**48
-        low_20_nonzero = any(low_20)
-
-        oracle_addr = self._decode_address(low_20) if low_20_nonzero else None
-
-        # Always return consistent keys to avoid shape-mismatch across before/after
-        if is_timestamp_reasonable or low_20_nonzero:
-            return {
-                "oracle": oracle_addr if oracle_addr else "0x" + "0" * 40,
-                "lastTimestamp": last_timestamp,
-                "exchangeRate": 0,
-            }
-
-        return {
-            "oracle": "0x" + "0" * 40,
-            "lastTimestamp": 0,
-            "exchangeRate": exchange_rate,
-        }
-
-    def _decode_exchange_rate_info_slot(self, raw_value: bytes, slot_offset: int) -> DecodedValue:
-        """Slot-aware decoder for ExchangeRateInfo."""
-        raw_hex = "0x" + raw_value.hex()
-        if slot_offset == 0:
-            decoded = self._decode_exchange_rate_info(raw_value)
-        else:
-            # Exchange rate slot
-            exchange_rate = int.from_bytes(raw_value, "big")
-            decoded = {
-                "oracle": "0x" + "0" * 40,
-                "lastTimestamp": 0,
-                "exchangeRate": exchange_rate,
-            }
-        display = self._format_dict(decoded) if isinstance(decoded, dict) else self.format_value(decoded, "struct")
-        return DecodedValue(raw=raw_hex, decoded=decoded, type_label="struct ResupplyPairCore.ExchangeRateInfo", display=display)
-
-    def _decode_reward_type(self, raw_value: bytes) -> dict:
-        """
-        Decode RewardDistributorMultiEpoch.RewardType:
-        slot0 packs {address reward_token, bool is_non_claimable}, slot1 is uint256 reward_remaining.
-        """
-        if len(raw_value) < 32:
-            raw_value = raw_value.rjust(32, b"\x00")
-
-        # Attempt to parse as packed header: [padding][bool][address]
-        # Layout: lowest 20 bytes = reward_token, byte before that = bool
-        reward_token_bytes = raw_value[-20:]
-        bool_byte = raw_value[-21] if len(raw_value) >= 21 else 0
-        head = raw_value[:-21]
-
-        reward_remaining = int.from_bytes(raw_value, "big")
-
-        looks_packed = (reward_token_bytes != b"\x00" * 20) or (bool_byte in (0, 1))
-        head_is_zero = all(b == 0 for b in head)
-
-        if looks_packed and head_is_zero:
-            return {
-                "reward_token": self._decode_address(reward_token_bytes),
-                "is_non_claimable": bool_byte != 0,
-            }
-
-        # Otherwise treat as reward_remaining slot
-        return {"reward_remaining": reward_remaining}
-
-    def _decode_reward_type_slot(self, raw_value: bytes, slot_offset: int) -> DecodedValue:
-        """Slot-aware decoder for RewardType."""
-        raw_hex = "0x" + raw_value.hex()
-        if slot_offset == 0:
-            decoded = self._decode_reward_type(raw_value)
-        else:
-            reward_remaining = int.from_bytes(raw_value, "big")
-            decoded = {
-                "reward_token": "0x" + "0" * 40,
-                "is_non_claimable": False,
-                "reward_remaining": reward_remaining,
-            }
-        display = self._format_dict(decoded) if isinstance(decoded, dict) else self.format_value(decoded, "struct")
-        return DecodedValue(raw=raw_hex, decoded=decoded, type_label="struct RewardDistributorMultiEpoch.RewardType", display=display)
-
-    def _decode_struct_slot(self, raw_value: bytes, type_info: StorageType, slot_offset: int) -> DecodedValue | None:
-        """Attempt slot-aware struct decoding for known structs.
-
-        Only applies to actual struct types, not arrays of structs.
-        Array base slots store length (uint256), not struct data.
-        """
-        label = (type_info.label or "").lower()
-
-        # Skip array types - their base slots store length, not struct data
-        # Array types have labels like "struct RewardType[]" or encoding="dynamic_array"
-        if "[]" in label or type_info.encoding == "dynamic_array":
-            return None
-
-        if "exchangerateinfo" in label:
-            return self._decode_exchange_rate_info_slot(raw_value, slot_offset)
-        if "rewardtype" in label:
-            return self._decode_reward_type_slot(raw_value, slot_offset)
         return None
 
     def decode_heuristic(self, raw_value: bytes) -> DecodedValue:
@@ -416,7 +438,8 @@ class TypeDecoder:
 
             formatted = fmt(value)
             return json.dumps(formatted, separators=(",", ":"), ensure_ascii=False)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Dict formatting failed, using str(): {e}")
             return str(value)
 
     def _format_list(self, value: list) -> str:
@@ -431,7 +454,8 @@ class TypeDecoder:
                 else:
                     formatted.append(v)
             return json.dumps(formatted, separators=(",", ":"), ensure_ascii=False)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"List formatting failed, using str(): {e}")
             return str(value)
 
     def decode_dynamic_bytes(
@@ -598,8 +622,25 @@ class TypeDecoder:
         result = {}
         for var in variables:
             type_info = types.get(var.type_id)
+
+            # Synthesize primitive types if not in types dict
+            if not type_info:
+                type_info = self._synthesize_type(var.type_id)
+
             if type_info:
                 # Use the variable's size and offset for extraction
                 decoded = self.decode(raw_value, type_info, offset=var.offset)
                 result[var.name] = decoded
+            else:
+                # Fallback: extract bytes based on var.size and var.offset, decode heuristically
+                logger.debug(f"Unknown type {var.type_id} for packed var {var.name}, using heuristic")
+                size = var.size or 32
+                start = 32 - var.offset - size
+                end = 32 - var.offset
+                start = max(0, start)
+                end = min(32, end)
+                member_bytes = raw_value[start:end].rjust(32, b"\x00")
+                decoded = self.decode_heuristic(member_bytes)
+                result[var.name] = decoded
+
         return result

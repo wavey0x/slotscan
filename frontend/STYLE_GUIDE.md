@@ -1,4 +1,4 @@
-# StorageScan Style Guide
+# SlotScan Style Guide
 
 Minimalist, professional aesthetic. Black and white. Sharp edges. Monospace throughout.
 
@@ -192,16 +192,39 @@ datatype field_name    BEFORE_VALUE →
 - Type label in gray, field name in default color
 - Before value on first line with arrow
 - After value on second line, vertically aligned with before value
-- Use consistent left padding for alignment
+- **CRITICAL: All BEFORE values must start at the same horizontal position**
+- **CRITICAL: All AFTER values must start at the same horizontal position (aligned under BEFORE)**
+- Calculate max width of type column and max width of name column
+- Use fixed-width columns (in `ch` units) for type and name to ensure alignment
 - Never display as JSON - always use the line-per-field format
 
-**Example:**
+**Alignment Implementation:**
+```tsx
+// Calculate max widths across ALL fields
+const maxTypeWidth = Math.max(...fields.map(f => f.typeLabel.length));
+const maxNameWidth = Math.max(...fields.map(f => f.name.length));
+
+// Use fixed-width columns
+<span style={{ width: `${maxTypeWidth}ch` }}>{typeLabel}</span>
+<span style={{ width: `${maxNameWidth}ch` }}>{name}</span>
+
+// Indent AFTER value to align with BEFORE
+<div style={{ marginLeft: `${maxTypeWidth + maxNameWidth + 1}ch` }}>
+  {afterValue}
+</div>
 ```
-address reward_token      0x0000...0000 →
-                          0x7932...e278
-bool    is_non_claimable  false →
-                          false
+
+**Example (correct):**
 ```
+uint64  lastTimestamp  0 →
+                       1,750,897,127
+uint64  ratePerSec     0 →
+                       713,047,479
+uint128 lastShares     1,000,000,000,000,000,000,000 →
+                       1,000,000,000,000,000,000,000
+```
+
+All "0" values vertically aligned. All after values vertically aligned beneath them.
 
 ---
 

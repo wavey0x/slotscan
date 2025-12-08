@@ -1,43 +1,41 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { Input } from '@/components/ui/Input';
-import { Select } from '@/components/ui/Select';
-import { Button } from '@/components/ui/Button';
-import { CHAINS } from '@/lib/constants';
-import { isAddress, isTxHash, saveRecentSearch } from '@/lib/utils';
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { Input } from "@/components/ui/Input";
+import { Select } from "@/components/ui/Select";
+import { Button } from "@/components/ui/Button";
+import { CHAINS } from "@/lib/constants";
+import { isAddress, isTxHash, saveRecentSearch } from "@/lib/utils";
 
 export function SearchForm() {
   const router = useRouter();
-  const [chain, setChain] = useState('1');
-  const [address, setAddress] = useState('');
-  const [blockOrTx, setBlockOrTx] = useState('');
-  const [error, setError] = useState('');
+  const [chain, setChain] = useState("1");
+  const [address, setAddress] = useState("");
+  const [txHash, setTxHash] = useState("");
+  const [error, setError] = useState("");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
+    setError("");
 
     if (!isAddress(address)) {
-      setError('Invalid contract address');
+      setError("Invalid contract address");
       return;
     }
 
     let url = `/${chain}/${address}`;
 
-    if (blockOrTx) {
-      if (isTxHash(blockOrTx)) {
-        url += `?tx=${blockOrTx}`;
-      } else if (/^\d+$/.test(blockOrTx)) {
-        url += `?block=${blockOrTx}`;
+    if (txHash) {
+      if (isTxHash(txHash)) {
+        url += `?tx=${txHash}`;
       } else {
-        setError('Enter a valid block number or transaction hash');
+        setError("Invalid transaction hash format");
         return;
       }
     }
 
-    saveRecentSearch({ chain, address, blockOrTx });
+    saveRecentSearch({ chain, address, blockOrTx: txHash });
     router.push(url);
   };
 
@@ -59,9 +57,9 @@ export function SearchForm() {
       </div>
 
       <Input
-        value={blockOrTx}
-        onChange={(e) => setBlockOrTx(e.target.value)}
-        placeholder="Block number or Transaction hash (optional)"
+        value={txHash}
+        onChange={(e) => setTxHash(e.target.value)}
+        placeholder="Transaction hash"
         className="font-mono"
       />
 

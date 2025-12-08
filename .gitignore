@@ -48,3 +48,4 @@ htmlcov/
 # Logs
 *.log
 logs/
+.claude

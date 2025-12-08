@@ -6,7 +6,6 @@ import { useTxDiff } from '@/lib/hooks/useTxDiff';
 import { Loading } from '@/components/ui/Loading';
 import { Toggle } from '@/components/ui/Toggle';
 import { SlotRow } from './SlotRow';
-import Link from 'next/link';
 
 interface DiffTableProps {
   chainId: string;
@@ -70,49 +69,38 @@ export function DiffTable({ chainId, address, txHash }: DiffTableProps) {
         />
       </div>
 
-      <div className="border border-gray-200 overflow-x-auto">
-        <table className="w-full min-w-[500px]">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="w-5 px-1 py-1"></th>
-              <th className="text-left px-1 py-1 text-[10px] font-medium text-gray-500 uppercase w-48">Variable</th>
-              <th className="text-left px-1 py-1 text-[10px] font-medium text-gray-500 uppercase">Value</th>
-              <th className="text-left px-1 py-1 text-[10px] font-medium text-gray-500 uppercase w-8">Slot</th>
-              {data?.execution_order_available && (
-                <th className="text-right px-1 py-1 text-[10px] font-medium text-gray-500 uppercase w-10">
-                  Step
-                </th>
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            {sortedSlots.map((slot, index) => (
-              <SlotRow
-                key={index}
-                slot={slot}
-                showHex={showHex}
-                chainId={chainId}
-                showStep={data?.execution_order_available ?? false}
-              />
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <table className="w-full">
+        <thead>
+          <tr className="border-b border-gray-200">
+            <th className="w-5 px-1 py-2"></th>
+            <th className="text-left px-1 py-2 text-[10px] font-medium text-gray-500 uppercase w-48">Variable</th>
+            <th className="text-left px-1 py-2 text-[10px] font-medium text-gray-500 uppercase">Value</th>
+            <th className="text-left px-1 py-2 text-[10px] font-medium text-gray-500 uppercase w-8">Slot</th>
+            {data?.execution_order_available && (
+              <th className="text-right px-1 py-2 text-[10px] font-medium text-gray-500 uppercase w-10">
+                Step
+              </th>
+            )}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-100">
+          {sortedSlots.map((slot, index) => (
+            <SlotRow
+              key={index}
+              slot={slot}
+              showHex={showHex}
+              chainId={chainId}
+              showStep={data?.execution_order_available ?? false}
+            />
+          ))}
+        </tbody>
+      </table>
 
       {!data.is_complete && (
         <div className="mt-2 text-xs text-gray-500">
           Truncated: showing first {data.slots.length} slots
         </div>
       )}
-
-      <div className="mt-6 text-center">
-        <Link
-          href={`/${chainId}/${address}?block=${data.block_number}`}
-          className="text-sm text-gray-500 hover:text-gray-900"
-        >
-          View full storage at block {data.block_number.toLocaleString()} &rarr;
-        </Link>
-      </div>
     </div>
   );
 }

@@ -36,10 +36,38 @@ import re
 
 
 def _strip_type_prefix(label: str) -> str:
-    """Strip 't_' prefix from Solidity type identifiers for display."""
-    if label and label.startswith("t_"):
-        return label[2:]
-    return label
+    """Strip 't_' prefix from Solidity type identifiers for display.
+
+    Also handles t_ prefixes inside complex types like mapping(t_address,t_uint256).
+    """
+    if not label:
+        return label
+
+    # First strip leading t_
+    result = label
+    if result.startswith("t_"):
+        result = result[2:]
+
+    # Strip t_ inside parentheses (for complex types)
+    # e.g., "mapping(t_address,t_uint256)" -> "mapping(address,uint256)"
+    import re
+    result = re.sub(r'\bt_([a-zA-Z])', r'\1', result)
+
+    # Clean up mapping syntax: "mapping(address,uint256)" -> "mapping(address => uint256)"
+    # Handle nested mappings too
+    def format_mapping(m):
+        inner = m.group(1)
+        # Split on comma, but be careful with nested mappings
+        # Simple case: just key,value
+        if '(' not in inner:
+            parts = inner.split(',')
+            if len(parts) == 2:
+                return f"mapping({parts[0].strip()} => {parts[1].strip()})"
+        return m.group(0)
+
+    result = re.sub(r'mapping\(([^)]+)\)', format_mapping, result)
+
+    return result
 
 
 def _strip_struct_parent(label: str) -> str:
@@ -136,6 +164,91 @@ def _get_mapping_key_types(
     return key_types
 
 
+def _get_final_value_type(
+    variable: "StorageVariable",
+    layout: Optional[StorageLayout],
+) -> Optional[str]:
+    """Get the final (innermost) value type for a mapping.
+
+    For mapping(address => uint256), returns "uint256".
+    For mapping(address => mapping(uint => uint256)), returns "uint256".
+    For mapping(address => SomeStruct), returns "SomeStruct" (cleaned).
+    """
+    from app.models.domain import StorageVariable
+
+    if not layout or not variable:
+        return None
+
+    var_type = layout.get_type(variable.type_id)
+    if not var_type:
+        return None
+
+    # If not a mapping, return the type's label directly
+    if var_type.encoding != "mapping":
+        return _strip_type_prefix(var_type.label) if var_type.label else None
+
+    # Traverse nested mappings to find the final value type
+    while var_type and var_type.encoding == "mapping":
+        if var_type.value_type:
+            inner_type = layout.get_type(var_type.value_type)
+            if inner_type:
+                if inner_type.encoding == "mapping":
+                    # Continue unwrapping
+                    var_type = inner_type
+                else:
+                    # Found the final value type
+                    label = inner_type.label or var_type.value_type
+                    # Clean up the label
+                    cleaned = _strip_type_prefix(label)
+                    # Strip struct parent if present
+                    if cleaned.startswith("struct ") and "." in cleaned:
+                        parts = cleaned.rsplit(".", 1)
+                        cleaned = f"struct {parts[1]}"
+                    return cleaned
+            else:
+                # Can't resolve, return the type ID cleaned up
+                return _strip_type_prefix(var_type.value_type)
+        else:
+            break
+
+    return None
+
+
+def _format_mapping_key_value(key: str, key_type: str) -> str:
+    """Format a mapping key value based on its type.
+
+    - uint/int types: Convert hex to decimal string
+    - address: Keep as checksummed hex
+    - bytes: Keep as hex
+    """
+    key_type_lower = key_type.lower()
+
+    # For uint/int types, convert hex to decimal
+    if 'uint' in key_type_lower or 'int' in key_type_lower:
+        if key.startswith('0x'):
+            try:
+                # Convert hex to decimal
+                int_val = int(key, 16)
+                return str(int_val)
+            except ValueError:
+                pass
+        # Already decimal or couldn't parse
+        return key
+
+    # For addresses, ensure proper checksum format
+    if 'address' in key_type_lower:
+        if key.startswith('0x') and len(key) == 42:
+            try:
+                from web3 import Web3
+                return Web3.to_checksum_address(key)
+            except Exception:
+                pass
+        return key
+
+    # Default: return as-is
+    return key
+
+
 def _build_mapping_params(
     mapping_key: Optional[str],
     variable: "StorageVariable",
@@ -153,7 +266,9 @@ def _build_mapping_params(
     params = []
     for i, key in enumerate(keys):
         param_type = key_types[i] if i < len(key_types) else "unknown"
-        params.append(MappingParamResponse(type=param_type, value=key))
+        # Format the value based on type (e.g., uint256 hex -> decimal)
+        formatted_value = _format_mapping_key_value(key, param_type)
+        params.append(MappingParamResponse(type=param_type, value=formatted_value))
 
     return params if params else None
 
@@ -394,6 +509,32 @@ def _group_changes_by_slot(
             except (ValueError, AttributeError):
                 pass
 
+            # Check if this variable IS a struct (not a mapping to a struct)
+            # This handles cases like `CurrentRateInfo currentRateInfo` where the variable itself is a struct
+            if struct_definition is None:
+                var_type = layout.get_type(first.variable.type_id)
+                if var_type and var_type.members:
+                    # This is a struct type - build struct_definition from its members
+                    struct_name = var_type.label
+                    if "." in struct_name:
+                        struct_name = struct_name.rsplit(".", 1)[1]
+                    if struct_name.startswith("struct "):
+                        struct_name = struct_name[7:]
+
+                    members = []
+                    for member in var_type.members:
+                        member_type = layout.get_type(member.type_id)
+                        members.append(
+                            StructMemberResponse(
+                                name=member.name,
+                                type_label=_clean_type_label(member_type.label if member_type else member.type_id),
+                                slot_offset=member.slot,
+                                byte_offset=member.offset,
+                                size=member.size,
+                            )
+                        )
+                    struct_definition = StructDefinitionResponse(name=struct_name, members=members)
+
             # Extract struct field name from variable_path if present (e.g., "rewardData[0x...].lockStart")
             if first.variable_path and "." in first.variable_path:
                 parts = first.variable_path.rsplit(".", 1)
@@ -483,7 +624,12 @@ def _group_changes_by_slot(
                 is_dynamic_array=first.encoding == "dynamic_array",
                 array_index=first.array_index,
                 encoding=first.encoding,
-                value_type=_clean_value_type(first.value_type) if first.value_type else None,
+                # Use the fully-unwrapped final value type for mappings
+                value_type=(
+                    _get_final_value_type(first.variable, layout)
+                    if (first.is_mapping and first.variable and layout)
+                    else _clean_value_type(first.value_type) if first.value_type else None
+                ),
                 # Summary values: initial (before first change) and final (after last change)
                 initial_raw=first.old_value,
                 final_raw=last.new_value,

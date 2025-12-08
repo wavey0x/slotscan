@@ -94,7 +94,7 @@ class StorageChangeResponse(BaseModel):
     old_display: Optional[str] = None
     new_display: Optional[str] = None
     pc: Optional[int] = None  # Program counter of the SSTORE operation
-    step: int = 0  # Sequence number in overall transaction execution
+    step: Optional[int] = None  # Sequence number in overall transaction execution
 
 
 class PackedFieldResponse(BaseModel):
