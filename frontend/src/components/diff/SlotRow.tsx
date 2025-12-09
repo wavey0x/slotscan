@@ -84,14 +84,27 @@ const getChangedPackedFields = (fields: PackedFieldResponse[]): PackedFieldRespo
 // Uses continuous vertical line (│) connecting all fields
 const PackedFieldsVariableDisplay = ({
   fields,
+  structHeader,
 }: {
   fields: PackedFieldResponse[];
+  structHeader?: { typeName: string; varName: string };
 }) => {
   const changedFields = getChangedPackedFields(fields);
   const lastIdx = changedFields.length - 1;
 
   return (
     <div>
+      {/* Struct header - 2 fixed-height lines for predictable alignment */}
+      {structHeader && (
+        <div className="text-xs font-mono leading-tight">
+          <div className="h-4 text-gray-400 whitespace-nowrap overflow-hidden text-ellipsis">
+            {structHeader.typeName}
+          </div>
+          <div className="h-4 text-gray-900 font-medium whitespace-nowrap overflow-hidden text-ellipsis">
+            {structHeader.varName}
+          </div>
+        </div>
+      )}
       {changedFields.map((f, idx) => {
         const isLast = idx === lastIdx;
         // Use ├ for middle items, └ for last item
@@ -120,30 +133,28 @@ const PackedFieldsVariableDisplay = ({
 };
 
 // Render packed field VALUES in VALUE column (before on line 1, after on line 2)
-// headerText is used to create an invisible spacer that matches the variable column header
+// hasHeader adds a fixed-height spacer to align with the 2-line struct header
 const PackedFieldsValueDisplay = ({
   fields,
   chainId,
   initialEncoded,
   finalEncoded,
-  headerText,
+  hasHeader,
 }: {
   fields: PackedFieldResponse[];
   chainId: string;
   initialEncoded: string;
   finalEncoded: string;
-  headerText?: string;
+  hasHeader?: boolean;
 }) => {
   const changedFields = getChangedPackedFields(fields);
   const lastIdx = changedFields.length - 1;
 
   return (
     <div>
-      {/* Invisible spacer matching the variable column header (same text = same wrapping) */}
-      {headerText && (
-        <div className="text-xs font-mono leading-tight pb-0.5 border-b border-transparent break-words invisible">
-          {headerText}
-        </div>
+      {/* Fixed-height spacer matching the 2-line header (h-8 = 32px = 2 × h-4) */}
+      {hasHeader && (
+        <div className="h-8" aria-hidden="true" />
       )}
       {changedFields.map((f, idx) => {
         const initialDisplay = formatDecodedValue(f.before.value_decoded);
@@ -449,8 +460,8 @@ export function SlotRow({
         <td className={cn('px-1 py-0.5 align-top w-48 whitespace-normal', isFirst && 'pt-2')}>
           <HoverCard content={variableHoverContent} delay={200} maxWidth="max-w-sm">
             <div className="space-y-0 break-words">
-              {/* Top line: struct type + variable name (for struct mappings) */}
-              {slot.struct_definition?.name && (
+              {/* Top line: struct type + variable name (for struct mappings) - skip if hasPacked */}
+              {slot.struct_definition?.name && !hasPacked && (
                 <div className="text-xs font-mono leading-tight">
                   <span className="text-gray-400">{slot.struct_definition.name}</span>{' '}
                   <span className="text-gray-900 font-medium">{slot.variable_name}</span>
@@ -493,7 +504,12 @@ export function SlotRow({
               ) : null}
               {/* Packed field names - shown INSTEAD of variable name for packed slots */}
               {hasPacked && (
-                <PackedFieldsVariableDisplay fields={slot.packed_fields!} />
+                <PackedFieldsVariableDisplay
+                  fields={slot.packed_fields!}
+                  structHeader={slot.struct_definition?.name
+                    ? { typeName: slot.struct_definition.name, varName: slot.variable_name || '' }
+                    : undefined}
+                />
               )}
             </div>
           </HoverCard>
@@ -506,7 +522,7 @@ export function SlotRow({
               chainId={chainId}
               initialEncoded={slot.before.value_encoded}
               finalEncoded={slot.after.value_encoded}
-              headerText={slot.struct_definition?.name ? `${slot.struct_definition.name} ${slot.variable_name || ''}` : undefined}
+              hasHeader={!!slot.struct_definition?.name}
             />
           ) : (
             <div className="space-y-0">
