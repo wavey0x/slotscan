@@ -5,7 +5,7 @@ import type {
   TransactionDiffResponse,
 } from './types';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/storagescan';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/slotscan';
 
 const API_TIMEOUT_MS = 60000; // 60s hard timeout to fail gracefully in UI
 

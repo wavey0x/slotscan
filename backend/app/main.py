@@ -46,8 +46,8 @@ def create_app() -> FastAPI:
         title="StorageScan API",
         description="Ethereum storage analyzer API",
         version="1.0.0",
-        docs_url="/api/storagescan/docs",
-        redoc_url="/api/storagescan/redoc",
+        docs_url="/api/slotscan/docs",
+        redoc_url="/api/slotscan/redoc",
         lifespan=lifespan,
     )
 
@@ -79,7 +79,7 @@ def create_app() -> FastAPI:
         return {
             "name": "StorageScan API",
             "version": "1.0.0",
-            "docs": "/api/storagescan/docs",
+            "docs": "/api/slotscan/docs",
         }
 
     return app
