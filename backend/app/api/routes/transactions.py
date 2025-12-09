@@ -600,6 +600,48 @@ def _group_changes_by_slot(
                         # Also set the struct definition for display
                         struct_definition = _get_struct_definition(first.variable, layout)
 
+            # Handle dynamic array struct base slots (e.g., rewards[0] where RewardType is a struct)
+            if (
+                first.encoding == "dynamic_array"
+                and first.element_type_id
+                and first.variable_path
+                and "." not in first.variable_path
+                and packed_fields is None
+            ):
+                # Get struct type from element_type_id
+                struct_type = layout.get_type(first.element_type_id) if layout else None
+                if struct_type and struct_type.members:
+                    # Find members in slot 0 of the struct (base slot)
+                    slot_0_members = _get_struct_members_in_slot(struct_type, 0)
+                    if len(slot_0_members) > 0:
+                        # Decode packed struct members
+                        packed_fields = []
+                        initial_bytes = bytes.fromhex(first.old_value[2:]) if first.old_value.startswith("0x") else bytes.fromhex(first.old_value)
+                        final_bytes = bytes.fromhex(last.new_value[2:]) if last.new_value.startswith("0x") else bytes.fromhex(last.new_value)
+
+                        initial_decoded = decoder.decode_packed_slot(initial_bytes, slot_0_members, layout.types)
+                        final_decoded = decoder.decode_packed_slot(final_bytes, slot_0_members, layout.types)
+
+                        for member in slot_0_members:
+                            member_type = layout.get_type(member.type_id)
+                            packed_fields.append(
+                                PackedFieldResponse(
+                                    name=member.name,
+                                    type_label=_clean_type_label(member_type.label if member_type else member.type_id),
+                                    offset=member.offset,
+                                    size=member.size,
+                                    before=ValuePairDecoded(
+                                        value_decoded=_preserve_large_ints(initial_decoded[member.name].decoded if member.name in initial_decoded else None),
+                                    ),
+                                    after=ValuePairDecoded(
+                                        value_decoded=_preserve_large_ints(final_decoded[member.name].decoded if member.name in final_decoded else None),
+                                    ),
+                                )
+                            )
+
+                        # Also set the struct definition
+                        struct_definition = _get_struct_definition_from_type_id(first.element_type_id, layout)
+
         # Get mapping key - prefer explicit mapping_key, fallback to extraction from path
         mapping_key = first.mapping_key
         if not mapping_key and first.is_mapping and first.variable_path:

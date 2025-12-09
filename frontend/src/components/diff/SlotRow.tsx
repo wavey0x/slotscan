@@ -70,29 +70,42 @@ const getChangedPackedFields = (fields: PackedFieldResponse[]): PackedFieldRespo
   return fields.filter(hasFieldChanged);
 };
 
-// Render packed field NAMES in VARIABLE column (just type + name, no values)
+// Render packed field NAMES in VARIABLE column with tree-style hierarchy
 // Each field takes 2 lines of height to align with the 2-line value display
+// Uses continuous vertical line (│) connecting all fields
 const PackedFieldsVariableDisplay = ({
   fields,
 }: {
   fields: PackedFieldResponse[];
 }) => {
   const changedFields = getChangedPackedFields(fields);
+  const lastIdx = changedFields.length - 1;
 
   return (
-    <div className="space-y-0.5">
-      {changedFields.map((f, idx) => (
-        <div key={idx} className="space-y-0">
-          {/* Line 1: field name */}
-          <div className="text-xs font-mono leading-tight">
-            <span className="text-gray-400 mr-0.5">·</span>
-            <span className="text-gray-400">{f.type_label}</span>{' '}
-            <span className="text-gray-900 font-medium">{f.name}</span>
+    <div>
+      {changedFields.map((f, idx) => {
+        const isLast = idx === lastIdx;
+        // Use ├ for middle items, └ for last item
+        const branchGlyph = isLast ? '└' : '├';
+        // Use │ for continuation line, empty space for last item
+        const continuationGlyph = isLast ? ' ' : '│';
+        return (
+          <div key={idx} className={cn(!isLast && "border-b border-gray-100")}>
+            {/* Line 1: branch glyph + field name */}
+            <div className="text-xs font-mono leading-tight flex items-start">
+              <span className="text-gray-300 select-none w-3">{branchGlyph}</span>
+              <span>
+                <span className="text-gray-400">{f.type_label}</span>{' '}
+                <span className="text-gray-900 font-medium">{f.name}</span>
+              </span>
+            </div>
+            {/* Line 2: continuation line or spacer */}
+            <div className="text-xs font-mono leading-tight">
+              <span className="text-gray-300 select-none w-3 inline-block">{continuationGlyph}</span>
+            </div>
           </div>
-          {/* Line 2: empty spacer to match value column's 2-line layout */}
-          <div className="text-xs leading-tight">&nbsp;</div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 };
@@ -113,9 +126,10 @@ const PackedFieldsValueDisplay = ({
   headerText?: string;
 }) => {
   const changedFields = getChangedPackedFields(fields);
+  const lastIdx = changedFields.length - 1;
 
   return (
-    <div className="space-y-0.5">
+    <div>
       {/* Invisible spacer matching the variable column header (same text = same wrapping) */}
       {headerText && (
         <div className="text-xs font-mono leading-tight pb-0.5 border-b border-transparent break-words invisible">
@@ -127,8 +141,10 @@ const PackedFieldsValueDisplay = ({
         const finalDisplay = formatDecodedValue(f.after.value_decoded);
         const isInitialZero = initialDisplay === '0' || initialDisplay === 'false';
         const isFinalZero = finalDisplay === '0' || finalDisplay === 'false';
+        const isLast = idx === lastIdx;
         return (
-          <div key={idx} className="space-y-0">
+          <div key={idx} className={cn(!isLast && "border-b border-gray-100")}>
+            {/* Line 1: before value with arrow */}
             <div className={cn('text-xs font-mono leading-tight flex items-center gap-1', isInitialZero ? 'text-gray-300' : 'text-gray-500')}>
               <HoverCell
                 display={initialDisplay}
@@ -139,6 +155,7 @@ const PackedFieldsValueDisplay = ({
               />
               <span className="text-gray-400">→</span>
             </div>
+            {/* Line 2: after value */}
             <div className={cn('text-xs font-mono leading-tight', isFinalZero ? 'text-gray-300' : 'text-gray-900')}>
               <HoverCell
                 display={finalDisplay}
@@ -540,36 +557,32 @@ export function SlotRow({
             <div className="space-y-0 break-words">
               {/* Top line: struct type + variable name (for struct mappings) */}
               {slot.struct_definition?.name && (
-                <div className={cn(
-                  "text-xs font-mono leading-tight",
-                  (slot.struct_field || hasPacked) && "pb-0.5 border-b border-dashed border-gray-300"
-                )}>
+                <div className="text-xs font-mono leading-tight">
                   <span className="text-gray-400">{slot.struct_definition.name}</span>{' '}
                   <span className="text-gray-900 font-medium">{slot.variable_name}</span>
                 </div>
               )}
               {/* Top line for simple mappings (no struct): show variable name */}
               {slot.is_mapping && !slot.struct_definition?.name && slot.variable_name && (
-                <div className={cn(
-                  "text-xs font-mono leading-tight",
-                  slot.value_type && "pb-0.5 border-b border-dashed border-gray-300"
-                )}>
+                <div className="text-xs font-mono leading-tight">
                   <span className="text-gray-900 font-medium">{slot.variable_name}</span>
                 </div>
               )}
               {/* Bottom line: member type + member name (for struct fields) */}
               {slot.struct_field && slot.struct_definition ? (
-                <div className="text-xs font-mono leading-tight">
-                  <span className="text-gray-400 mr-0.5">·</span>
-                  <span className="text-gray-400">
-                    {slot.struct_definition.members.find(m => m.name === slot.struct_field)?.type_label}
-                  </span>{' '}
-                  <span className="text-gray-900 font-medium">{slot.struct_field}</span>
+                <div className="text-xs font-mono leading-tight flex items-start">
+                  <span className="text-gray-300 mr-1 select-none">└</span>
+                  <span>
+                    <span className="text-gray-400">
+                      {slot.struct_definition.members.find(m => m.name === slot.struct_field)?.type_label}
+                    </span>{' '}
+                    <span className="text-gray-900 font-medium">{slot.struct_field}</span>
+                  </span>
                 </div>
               ) : slot.is_mapping && !slot.struct_definition?.name && slot.value_type ? (
                 /* Mapping value type line (for simple mappings) */
-                <div className="text-xs font-mono leading-tight">
-                  <span className="text-gray-400 mr-0.5">↳</span>
+                <div className="text-xs font-mono leading-tight flex items-start">
+                  <span className="text-gray-300 mr-1 select-none">└</span>
                   <span className="text-gray-400">{slot.value_type}</span>
                 </div>
               ) : !slot.struct_definition?.name && !slot.is_mapping && !hasPacked ? (
