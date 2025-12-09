@@ -44,6 +44,7 @@ class TransactionTracer:
         contract_address: str,
         tx_hash: str,
         layout: Optional[StorageLayout] = None,
+        sources: Optional[dict[str, str]] = None,
     ) -> TransactionDiff:
         """
         Trace a transaction and extract storage changes for a contract.
@@ -94,6 +95,17 @@ class TransactionTracer:
         # Build preimage lookup from SHA3 trace (for decoding mapping keys)
         # No address filtering - captures ALL SHA3 ops for O(1) mapping resolution
         preimage_lookup = self._build_preimage_lookup(sha3_trace)
+
+        # Supplement with compile-time constant addresses from source code
+        # This handles the CODECOPY pattern where keccak256(constant || slot) is
+        # pre-computed at compile time and embedded in bytecode
+        if sources and layout:
+            constant_lookup = self._build_constant_preimage_lookup(sources, layout)
+            if constant_lookup:
+                # Merge constant lookup (lower priority - runtime preimages take precedence)
+                for slot_hash, preimage in constant_lookup.items():
+                    if slot_hash not in preimage_lookup:
+                        preimage_lookup[slot_hash] = preimage
 
         # Build changes from SSTORE trace (preferred - captures all writes with real execution order)
         # or fall back to prestateTracer (only captures first→last per slot, no execution order)
@@ -563,6 +575,118 @@ class TransactionTracer:
 
         logger.info(f"Built preimage lookup: {len(preimage_lookup)} entries from {len(sha3_trace)} SHA3 ops")
         return preimage_lookup
+
+    def _extract_constant_addresses(self, sources: dict[str, str]) -> list[str]:
+        """
+        Extract constant/immutable address declarations from Solidity sources.
+
+        Looks for patterns like:
+        - address constant CRV = 0xD533a949740bb3306d119CC777fa900bA034cd52;
+        - address public constant CVX = 0x4e3FBD56CD56c3e72c1403e103b45Db9da5B9D2B;
+        - address immutable TOKEN = 0x...;
+        - IERC20 constant CRV = IERC20(0x...);
+
+        Returns list of lowercase checksummed addresses.
+        """
+        import re
+
+        addresses: set[str] = set()
+
+        # Pattern for constant/immutable address declarations
+        # Matches: (type) (constant|immutable) (name) = (0x... or Interface(0x...))
+        patterns = [
+            # Direct address assignment: address constant FOO = 0x...
+            r'(?:address|IERC20|ERC20|IERC20Metadata)\s+(?:public\s+)?(?:constant|immutable)\s+\w+\s*=\s*(0x[a-fA-F0-9]{40})',
+            # Interface cast: IERC20 constant FOO = IERC20(0x...)
+            r'(?:IERC20|ERC20|IERC20Metadata)\s+(?:public\s+)?(?:constant|immutable)\s+\w+\s*=\s*\w+\((0x[a-fA-F0-9]{40})\)',
+            # Immutable set in constructor: token = IERC20(0x...)
+            r'(?:constant|immutable)\s+\w+\s*=\s*(?:\w+\()?(0x[a-fA-F0-9]{40})',
+        ]
+
+        for source_content in sources.values():
+            for pattern in patterns:
+                matches = re.findall(pattern, source_content, re.IGNORECASE)
+                for match in matches:
+                    try:
+                        # Normalize to checksummed address
+                        addr = Web3.to_checksum_address(match.lower())
+                        addresses.add(addr.lower())
+                    except Exception:
+                        pass
+
+        if addresses:
+            logger.info(f"Extracted {len(addresses)} constant addresses from sources")
+
+        return list(addresses)
+
+    def _build_constant_preimage_lookup(
+        self,
+        sources: dict[str, str],
+        layout: StorageLayout,
+    ) -> dict[str, str]:
+        """
+        Build preimage lookup for compile-time constant mapping keys.
+
+        When a Solidity contract uses constant addresses as mapping keys:
+            address constant CRV = 0x...;
+            mapping(address => uint256) rewardMap;
+            rewardMap[CRV] = 3;
+
+        The compiler pre-computes keccak256(CRV || slot) at compile time and embeds
+        the hash in bytecode as a constant (loaded via CODECOPY, not runtime SHA3).
+
+        This method extracts constant addresses from source and computes their
+        mapping slot hashes to supplement the runtime SHA3 preimage lookup.
+        """
+        constant_lookup: dict[str, str] = {}
+
+        # Extract constant addresses from sources
+        constant_addresses = self._extract_constant_addresses(sources)
+        if not constant_addresses:
+            return constant_lookup
+
+        # Find all mapping variables with address keys
+        mapping_slots: list[tuple[str, int]] = []  # (variable_name, base_slot)
+        for var in layout.variables:
+            var_type = layout.get_type(var.type_id)
+            if var_type and var_type.encoding == "mapping":
+                # Check if key type is address
+                key_type = layout.get_type(var_type.key_type) if var_type.key_type else None
+                if key_type and "address" in (key_type.label or "").lower():
+                    mapping_slots.append((var.name, var.slot))
+
+        if not mapping_slots:
+            return constant_lookup
+
+        # Compute slot hashes for each constant address x mapping variable
+        from eth_abi import encode as abi_encode
+
+        for addr in constant_addresses:
+            addr_checksummed = Web3.to_checksum_address(addr)
+            for var_name, base_slot in mapping_slots:
+                try:
+                    # Solidity mapping slot: keccak256(abi.encode(key, slot))
+                    preimage = abi_encode(["address", "uint256"], [addr_checksummed, base_slot])
+                    slot_hash = Web3.keccak(preimage).hex()
+                    normalized_hash = self._normalize_slot(slot_hash)
+
+                    # Store preimage as hex string (same format as runtime preimage_lookup)
+                    preimage_hex = "0x" + preimage.hex()
+                    constant_lookup[normalized_hash] = preimage_hex
+
+                    logger.debug(
+                        f"Constant preimage: {var_name}[{addr[:10]}...] -> {normalized_hash[:20]}..."
+                    )
+                except Exception as e:
+                    logger.debug(f"Failed to compute slot for {var_name}[{addr}]: {e}")
+
+        if constant_lookup:
+            logger.info(
+                f"Built constant preimage lookup: {len(constant_lookup)} entries "
+                f"from {len(constant_addresses)} addresses x {len(mapping_slots)} mappings"
+            )
+
+        return constant_lookup
 
     def _parse_mapping_preimage(
         self, preimage: str, layout: Optional[StorageLayout]
@@ -1575,13 +1699,11 @@ class TransactionTracer:
                                             raw=old_value,
                                             decoded=old_length,
                                             type_label="uint256",
-                                            display=str(old_length),
                                         )
                                         new_decoded = DecodedValue(
                                             raw=new_value,
                                             decoded=new_length,
                                             type_label="uint256",
-                                            display=str(new_length),
                                         )
                                         variable_path = f"{variable.name} (array length)"
                                     elif decode_type:
@@ -1675,13 +1797,11 @@ class TransactionTracer:
                                                 raw=old_value,
                                                 decoded={k: v.decoded for k, v in old_packed.items()},
                                                 type_label="packed",
-                                                display=None,
                                             )
                                             new_decoded = DecodedValue(
                                                 raw=new_value,
                                                 decoded={k: v.decoded for k, v in new_packed.items()},
                                                 type_label="packed",
-                                                display=None,
                                             )
                                         except Exception:
                                             pass
@@ -1726,13 +1846,11 @@ class TransactionTracer:
                                                 raw=old_value,
                                                 decoded={k: v.decoded for k, v in old_packed.items()},
                                                 type_label="packed",
-                                                display=None,
                                             )
                                             new_decoded = DecodedValue(
                                                 raw=new_value,
                                                 decoded={k: v.decoded for k, v in new_packed.items()},
                                                 type_label="packed",
-                                                display=None,
                                             )
                                         except Exception:
                                             pass

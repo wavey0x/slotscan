@@ -642,6 +642,53 @@ def _group_changes_by_slot(
                         # Also set the struct definition
                         struct_definition = _get_struct_definition_from_type_id(first.element_type_id, layout)
 
+            # Handle static struct variables (e.g., ExchangeRateInfo exchangeRateInfo)
+            # This covers inline structs that are not mappings or dynamic arrays
+            if (
+                layout
+                and first.variable
+                and packed_fields is None
+                and struct_definition is not None  # We detected this is a struct earlier
+                and not first.is_mapping
+                and first.encoding != "dynamic_array"
+            ):
+                var_type = layout.get_type(first.variable.type_id)
+                if var_type and var_type.members:
+                    # Calculate which slot offset within the struct this change represents
+                    try:
+                        current_slot = int(slot, 16) if slot.startswith("0x") else int(slot)
+                        struct_slot_offset = current_slot - first.variable.slot
+
+                        # Find members in this slot offset
+                        slot_members = [m for m in var_type.members if m.slot == struct_slot_offset]
+
+                        if len(slot_members) > 0:
+                            packed_fields = []
+                            initial_bytes = bytes.fromhex(first.old_value[2:]) if first.old_value.startswith("0x") else bytes.fromhex(first.old_value)
+                            final_bytes = bytes.fromhex(last.new_value[2:]) if last.new_value.startswith("0x") else bytes.fromhex(last.new_value)
+
+                            initial_decoded = decoder.decode_packed_slot(initial_bytes, slot_members, layout.types)
+                            final_decoded = decoder.decode_packed_slot(final_bytes, slot_members, layout.types)
+
+                            for member in slot_members:
+                                member_type = layout.get_type(member.type_id)
+                                packed_fields.append(
+                                    PackedFieldResponse(
+                                        name=member.name,
+                                        type_label=_clean_type_label(member_type.label if member_type else member.type_id),
+                                        offset=member.offset,
+                                        size=member.size,
+                                        before=ValuePairDecoded(
+                                            value_decoded=_preserve_large_ints(initial_decoded[member.name].decoded if member.name in initial_decoded else None),
+                                        ),
+                                        after=ValuePairDecoded(
+                                            value_decoded=_preserve_large_ints(final_decoded[member.name].decoded if member.name in final_decoded else None),
+                                        ),
+                                    )
+                                )
+                    except (ValueError, AttributeError):
+                        pass
+
         # Get mapping key - prefer explicit mapping_key, fallback to extraction from path
         mapping_key = first.mapping_key
         if not mapping_key and first.is_mapping and first.variable_path:
@@ -780,6 +827,7 @@ async def get_tx_diff(
             contract_address=address,
             tx_hash=tx_hash,
             layout=layout,
+            sources=metadata.sources,  # Pass sources for compile-time constant resolution
         )
     except TransactionNotFoundError:
         raise HTTPException(
