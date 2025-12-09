@@ -3,7 +3,7 @@
 from typing import Optional
 
 from web3 import AsyncWeb3, AsyncHTTPProvider
-from web3.middleware import async_geth_poa_middleware
+from web3.middleware import ExtraDataToPOAMiddleware
 
 from app.config import Settings
 
@@ -25,8 +25,8 @@ class Web3Provider:
 
             provider = AsyncHTTPProvider(rpc_url, request_kwargs={"timeout": 90})
             w3 = AsyncWeb3(provider)
-            # Add POA middleware for chains that need it
-            w3.middleware_onion.inject(async_geth_poa_middleware, layer=0)
+            # Add POA middleware for chains that need it (web3.py v7+)
+            w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
             self._instances[chain_id] = w3
 
         return self._instances[chain_id]
@@ -40,7 +40,7 @@ class Web3Provider:
         if chain_id not in self._backup_instances:
             provider = AsyncHTTPProvider(backup_url, request_kwargs={"timeout": 90})
             w3 = AsyncWeb3(provider)
-            w3.middleware_onion.inject(async_geth_poa_middleware, layer=0)
+            w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
             self._backup_instances[chain_id] = w3
 
         return self._backup_instances[chain_id]

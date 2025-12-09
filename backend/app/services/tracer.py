@@ -1685,6 +1685,31 @@ class TransactionTracer:
                                         # (regardless of short/long encoding transition)
                                         if old_is_long or new_is_long or old_is_long != new_is_long:
                                             variable_path = f"{variable.name} (length)"
+                                            value_type = "uint256"  # Length is stored as uint256
+                                            # Extract actual length values for proper display
+                                            # Short encoding: length = last_byte // 2
+                                            # Long encoding: length = (full_value - 1) // 2
+                                            def extract_string_length(raw_bytes: bytes, is_long: bool) -> int:
+                                                if not raw_bytes or raw_bytes == bytes(32):
+                                                    return 0
+                                                if is_long:
+                                                    full_value = int.from_bytes(raw_bytes, "big")
+                                                    return (full_value - 1) // 2
+                                                else:
+                                                    return raw_bytes[-1] // 2
+
+                                            old_length = extract_string_length(old_bytes, old_is_long)
+                                            new_length = extract_string_length(new_bytes, new_is_long)
+                                            old_decoded = DecodedValue(
+                                                raw=old_value,
+                                                decoded=old_length,
+                                                type_label="uint256",
+                                            )
+                                            new_decoded = DecodedValue(
+                                                raw=new_value,
+                                                decoded=new_length,
+                                                type_label="uint256",
+                                            )
                                     elif var_type.encoding == "dynamic_array" or (
                                         var_type.element_type and "[]" in (var_type.label or "")
                                     ):

@@ -16,7 +16,7 @@ from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
 from app.services.storage import StorageReader
 
-router = APIRouter(prefix="/api/storage", tags=["storage"])
+router = APIRouter(prefix="/api/storagescan/storage", tags=["storage"])
 
 
 @router.get("/{chain_id}/{address}", response_model=StorageSnapshotResponse)

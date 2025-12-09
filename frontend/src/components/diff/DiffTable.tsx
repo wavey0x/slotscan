@@ -83,7 +83,7 @@ export function DiffTable({ chainId, address, txHash }: DiffTableProps) {
             )}
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-200">
+        <tbody>
           {sortedSlots.map((slot, index) => (
             <SlotRow
               key={index}
@@ -92,6 +92,7 @@ export function DiffTable({ chainId, address, txHash }: DiffTableProps) {
               chainId={chainId}
               showStep={data?.execution_order_available ?? false}
               isFirst={index === 0}
+              isLast={index === sortedSlots.length - 1}
             />
           ))}
         </tbody>

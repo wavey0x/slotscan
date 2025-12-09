@@ -758,7 +758,7 @@ def _group_changes_by_slot(
 
     return result
 
-router = APIRouter(prefix="/api/tx", tags=["transactions"])
+router = APIRouter(prefix="/api/storagescan/tx", tags=["transactions"])
 
 
 @router.get("/{chain_id}/{address}/{tx_hash}", response_model=TransactionDiffResponse)

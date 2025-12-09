@@ -251,6 +251,9 @@ export function formatBigNumber(value: string | number | bigint): string {
 export function formatDecodedValue(value: unknown): string {
   if (value === null || value === undefined) return '';
 
+  // Empty string should display as "" (with quotes) to indicate string type
+  if (value === '') return '""';
+
   const str = String(value);
 
   // Render objects more usefully than "[object Object]"
