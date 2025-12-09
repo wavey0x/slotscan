@@ -18,6 +18,8 @@ from app.models.api import (
     StructDefinitionResponse,
     StructMemberResponse,
     TransactionDiffResponse,
+    ValuePair,
+    ValuePairDecoded,
 )
 from app.models.domain import StorageChange, StorageLayout
 from app.models.errors import (
@@ -458,12 +460,14 @@ def _group_changes_by_slot(
         # Build interim changes list
         interim_changes = [
             StorageChangeResponse(
-                old_raw=c.old_value,
-                new_raw=c.new_value,
-                old_decoded=_preserve_large_ints(c.old_decoded.decoded if c.old_decoded else None),
-                new_decoded=_preserve_large_ints(c.new_decoded.decoded if c.new_decoded else None),
-                old_display=c.old_decoded.display if c.old_decoded else None,
-                new_display=c.new_decoded.display if c.new_decoded else None,
+                before=ValuePair(
+                    value_encoded=c.old_value,
+                    value_decoded=_preserve_large_ints(c.old_decoded.decoded if c.old_decoded else None),
+                ),
+                after=ValuePair(
+                    value_encoded=c.new_value,
+                    value_decoded=_preserve_large_ints(c.new_decoded.decoded if c.new_decoded else None),
+                ),
                 pc=c.pc,
                 step=c.change_index,
             )
@@ -500,10 +504,12 @@ def _group_changes_by_slot(
                                 type_label=_clean_type_label(var_type.label if var_type else var.type_id),
                                 offset=var.offset,
                                 size=var.size,
-                                initial_decoded=_preserve_large_ints(initial_decoded[var.name].decoded if var.name in initial_decoded else None),
-                                initial_display=initial_decoded[var.name].display if var.name in initial_decoded else None,
-                                final_decoded=_preserve_large_ints(final_decoded[var.name].decoded if var.name in final_decoded else None),
-                                final_display=final_decoded[var.name].display if var.name in final_decoded else None,
+                                before=ValuePairDecoded(
+                                    value_decoded=_preserve_large_ints(initial_decoded[var.name].decoded if var.name in initial_decoded else None),
+                                ),
+                                after=ValuePairDecoded(
+                                    value_decoded=_preserve_large_ints(final_decoded[var.name].decoded if var.name in final_decoded else None),
+                                ),
                             )
                         )
             except (ValueError, AttributeError):
@@ -582,10 +588,12 @@ def _group_changes_by_slot(
                                     type_label=_clean_type_label(member_type.label if member_type else member.type_id),
                                     offset=member.offset,
                                     size=member.size,
-                                    initial_decoded=_preserve_large_ints(initial_decoded[member.name].decoded if member.name in initial_decoded else None),
-                                    initial_display=initial_decoded[member.name].display if member.name in initial_decoded else None,
-                                    final_decoded=_preserve_large_ints(final_decoded[member.name].decoded if member.name in final_decoded else None),
-                                    final_display=final_decoded[member.name].display if member.name in final_decoded else None,
+                                    before=ValuePairDecoded(
+                                        value_decoded=_preserve_large_ints(initial_decoded[member.name].decoded if member.name in initial_decoded else None),
+                                    ),
+                                    after=ValuePairDecoded(
+                                        value_decoded=_preserve_large_ints(final_decoded[member.name].decoded if member.name in final_decoded else None),
+                                    ),
                                 )
                             )
 
@@ -630,13 +638,15 @@ def _group_changes_by_slot(
                     if (first.is_mapping and first.variable and layout)
                     else _clean_value_type(first.value_type) if first.value_type else None
                 ),
-                # Summary values: initial (before first change) and final (after last change)
-                initial_raw=first.old_value,
-                final_raw=last.new_value,
-                initial_decoded=_preserve_large_ints(first.old_decoded.decoded if first.old_decoded else None),
-                final_decoded=_preserve_large_ints(last.new_decoded.decoded if last.new_decoded else None),
-                initial_display=first.old_decoded.display if first.old_decoded else None,
-                final_display=last.new_decoded.display if last.new_decoded else None,
+                # Summary values: before (initial) and after (final)
+                before=ValuePair(
+                    value_encoded=first.old_value,
+                    value_decoded=_preserve_large_ints(first.old_decoded.decoded if first.old_decoded else None),
+                ),
+                after=ValuePair(
+                    value_encoded=last.new_value,
+                    value_decoded=_preserve_large_ints(last.new_decoded.decoded if last.new_decoded else None),
+                ),
                 # Packed storage fields
                 packed_fields=packed_fields,
                 struct_field=struct_field,

@@ -49,7 +49,11 @@ export function RecentSearches({ className }: RecentSearchesProps) {
               className="block px-3 py-2 hover:bg-gray-100 no-underline hover:no-underline"
             >
               <div className="text-sm text-gray-900">
-                {truncateAddress(search.address)}
+                {search.name ? (
+                  <>{search.name} <span className="text-gray-400 font-mono text-xs">({truncateAddress(search.address)})</span></>
+                ) : (
+                  <span className="font-mono">{truncateAddress(search.address)}</span>
+                )}
               </div>
               <div className="text-xs text-gray-500">
                 {getChainName(search.chain)}

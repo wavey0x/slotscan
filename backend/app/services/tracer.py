@@ -231,6 +231,7 @@ class TransactionTracer:
         """
         web3 = self.web3_provider.get_web3(chain_id)
         include_memory = True  # Start with memory enabled for SHA3 preimages
+        sha3_from_tracer = []  # Will be populated if we use custom tracer fallback
 
         try:
             # Request full trace with memory, stack, and storage
@@ -252,8 +253,13 @@ class TransactionTracer:
 
             # Check if error is due to response size limit
             if "too big" in error_msg.lower() or "exceeded" in error_msg.lower():
-                logger.info(f"structLogs trace too large for {tx_hash}, retrying without memory")
-                # Retry without memory - we lose SHA3 preimages but keep PC values
+                logger.info(f"structLogs trace too large for {tx_hash}, using custom SHA3 tracer + no-memory structLogs")
+
+                # Use custom JS tracer to get SHA3 preimages efficiently
+                # This returns only SHA3 ops (~100KB) instead of full trace (~2GB+)
+                sha3_from_tracer = await self._get_sha3_via_custom_tracer(web3, tx_hash)
+
+                # Retry structLogs without memory for SSTORE ops
                 try:
                     result = await web3.provider.make_request(
                         "debug_traceTransaction",
@@ -422,7 +428,12 @@ class TransactionTracer:
                             "depth": depth,
                         }
 
-        logger.info(f"structLogs parsed: sstores={len(sstores)}, sha3s={len(sha3s)}")
+        # If we used custom tracer for SHA3 (large tx fallback), merge that data
+        if sha3_from_tracer:
+            sha3s = sha3_from_tracer
+            logger.info(f"structLogs parsed: sstores={len(sstores)}, sha3s={len(sha3s)} (from custom tracer)")
+        else:
+            logger.info(f"structLogs parsed: sstores={len(sstores)}, sha3s={len(sha3s)}")
         return sstores, sha3s
 
     def _extract_memory_slice(self, memory: list[str], offset: int, size: int) -> str | None:
@@ -461,6 +472,70 @@ class TransactionTracer:
         except Exception as e:
             logger.debug(f"Failed to extract memory slice: {e}")
             return None
+
+    async def _get_sha3_via_custom_tracer(self, web3, tx_hash: str) -> list[dict]:
+        """
+        Get SHA3 preimages using a custom JS tracer.
+
+        This is MUCH more efficient than full structLogs with memory for large transactions.
+        A 330k step transaction might have a 2GB+ full trace, but the SHA3 tracer returns ~100KB.
+
+        Returns list of {preimage: hex, hash: hex} dicts.
+        """
+        # Custom JS tracer that captures only SHA3 ops and their memory input
+        tracer = """
+        {
+            data: [],
+            step: function(log, db) {
+                var op = log.op.toString();
+                if (op === 'SHA3' || op === 'KECCAK256') {
+                    var offset = log.stack.peek(0).valueOf();
+                    var size = log.stack.peek(1).valueOf();
+                    if (size >= 32 && size <= 256) {
+                        this.data.push({
+                            preimage: toHex(log.memory.slice(offset, offset + size)),
+                            size: size
+                        });
+                    }
+                }
+            },
+            fault: function(log, db) {},
+            result: function(ctx, db) { return this.data; }
+        }
+        """
+
+        try:
+            result = await web3.provider.make_request(
+                "debug_traceTransaction",
+                [tx_hash, {"tracer": tracer}]
+            )
+
+            if "error" in result:
+                logger.warning(f"Custom SHA3 tracer failed: {result['error']}")
+                return []
+
+            sha3_ops = result.get("result", [])
+            logger.info(f"Custom SHA3 tracer: got {len(sha3_ops)} preimages")
+
+            # Convert to our format and compute hashes
+            sha3_list = []
+            for op in sha3_ops:
+                preimage = op.get("preimage", "")
+                if preimage:
+                    # Compute keccak256 hash from preimage
+                    preimage_bytes = bytes.fromhex(preimage[2:] if preimage.startswith("0x") else preimage)
+                    hash_value = web3.keccak(preimage_bytes).hex()
+                    sha3_list.append({
+                        "preimage": preimage,
+                        "hash": hash_value,
+                        "size": int(op.get("size", 64)),
+                    })
+
+            return sha3_list
+
+        except Exception as e:
+            logger.warning(f"Custom SHA3 tracer error: {e}")
+            return []
 
     def _build_preimage_lookup(self, sha3_trace: list[dict]) -> dict[str, str]:
         """
@@ -849,6 +924,9 @@ class TransactionTracer:
                         "struct_offset": offset,
                     }
 
+        # Chain break: couldn't resolve this preimage
+        logger.debug(f"  Preimage chain break at depth {depth}: slot={slot_hex[:20]}... "
+                    f"base_slot={base_slot_normalized[:20]}... not in layout or preimage_lookup")
         return None
 
     def _build_pc_lookup(
@@ -1518,14 +1596,15 @@ class TransactionTracer:
                                 except Exception as e:
                                     logger.warning(f"Failed to decode change at slot {slot_hex}: {e}")
                         else:
-                            # OPTIMIZATION: Try preimage_lookup FIRST (O(1)) before brute-force
-                            # candidate matching. Preimage lookup has the actual keys used.
+                            # Try preimage_lookup for mapping slot resolution
                             if slot_hex in preimage_lookup:
                                 preimage = preimage_lookup[slot_hex]
                                 preimage_match = self._try_match_slot_from_preimage(
                                     slot_hex, preimage, layout, preimage_lookup
                                 )
                                 if preimage_match:
+                                    stats["preimage_lookup"] += 1
+                                    resolution_path = "preimage_lookup"
                                     variable = preimage_match.get("variable")
                                     mapping_base_slot = preimage_match.get("base_slot")
                                     mapping_key = preimage_match.get("key")
@@ -1696,82 +1775,6 @@ class TransactionTracer:
                     except Exception as e:
                         logger.error(f"Slot matching/decoding failed for slot {slot_hex}: {e}", exc_info=True)
 
-                # Try to resolve the slot using preimage lookup (from SHA3 trace)
-                # This is more reliable than guessing keys because we captured the actual
-                # data that was hashed to produce this slot
-                if not variable:
-                    # Log unmatched slots for debugging
-                    logger.debug(f"Unmatched slot: {slot_hex[:18]}... checking preimage lookup")
-                    if slot_hex in preimage_lookup:
-                        logger.debug(f"  Found in preimage lookup!")
-                    else:
-                        # Check if slot minus offset is in lookup (struct member)
-                        for offset in range(1, 5):
-                            base_int = slot_int - offset
-                            base_hex = self._normalize_slot(hex(base_int))
-                            if base_hex in preimage_lookup:
-                                logger.debug(f"  Slot-{offset} ({base_hex[:18]}...) IS in lookup")
-                                break
-                        else:
-                            logger.debug(f"  NOT in preimage lookup (and no offset matches)")
-                if not variable and slot_hex in preimage_lookup:
-                    preimage = preimage_lookup[slot_hex]
-                    preimage_match = self._try_match_slot_from_preimage(
-                        slot_hex, preimage, layout, preimage_lookup
-                    )
-                    if preimage_match:
-                        stats["preimage_lookup"] += 1
-                        resolution_path = "preimage_lookup"
-                        variable = preimage_match.get("variable")
-                        mapping_base_slot = preimage_match.get("base_slot")
-                        mapping_key = preimage_match.get("key")
-                        variable_path = preimage_match.get("path")
-                        is_mapping = True
-                        encoding = preimage_match.get("encoding")
-                        key_type = preimage_match.get("key_type")
-                        value_type = preimage_match.get("value_type")
-                        # Decode using value type if available
-                        decode_type = preimage_match.get("decode_type")
-
-                        # Handle mapping_to_array: this slot IS the data_start, so array_index=0
-                        if encoding == "mapping_to_array":
-                            stats["mapping_to_array"] += 1
-                            resolution_path = "mapping_to_array"
-                            array_index = 0  # This is the data_start slot, so index 0
-                            # Update path to include array index
-                            if variable:
-                                variable_path = f"{variable.name}[{mapping_key}][0]"
-                            # Get element_type for decoding
-                            element_type = preimage_match.get("element_type")
-                            if element_type:
-                                decode_type = element_type
-
-                        # If decode_type is None but we have value_type, try to synthesize it
-                        if not decode_type and value_type and layout:
-                            decode_type = layout.get_type(value_type)
-
-                        if decode_type:
-                            try:
-                                old_bytes = bytes.fromhex(old_value[2:])
-                                new_bytes = bytes.fromhex(new_value[2:])
-                                old_decoded = self.decoder.decode(
-                                    old_bytes, decode_type, variable.offset if variable else 0
-                                )
-                                new_decoded = self.decoder.decode(
-                                    new_bytes, decode_type, variable.offset if variable else 0
-                                )
-                            except Exception as e:
-                                logger.debug(f"Failed to decode mapping value: {e}")
-                        else:
-                            # Final fallback: use heuristic decoding
-                            try:
-                                old_bytes = bytes.fromhex(old_value[2:])
-                                new_bytes = bytes.fromhex(new_value[2:])
-                                old_decoded = self.decoder.decode_heuristic(old_bytes)
-                                new_decoded = self.decoder.decode_heuristic(new_bytes)
-                            except Exception:
-                                pass
-
                 # Handle struct offsets: if slot is not in preimage_lookup but slot-N is,
                 # this is a struct member access (e.g., accountData[addr].field where field offset = N)
                 if not variable and slot_hex not in preimage_lookup:
@@ -1835,6 +1838,7 @@ class TransactionTracer:
                 # Count unresolved slots that fell through to heuristic
                 if resolution_path == "unknown":
                     stats["heuristic"] += 1
+                    logger.debug(f"Unresolved slot {slot_hex[:20]}... (not in preimage_lookup or layout)")
 
                 # Track matched slots for struct offset detection in second pass
                 if variable and is_mapping:
@@ -1951,6 +1955,7 @@ class TransactionTracer:
             f"Slot resolution: {stats['total']} total, {resolved} resolved "
             f"(layout={stats['layout_direct']}, preimage={stats['preimage_lookup']}, "
             f"struct_offset={stats['struct_offset']}, array={stats['dynamic_array']}, "
-            f"map_to_array={stats['mapping_to_array']}, bytes={stats['dynamic_bytes']}), {stats['heuristic']} heuristic"
+            f"map_to_array={stats['mapping_to_array']}, bytes={stats['dynamic_bytes']}), "
+            f"{stats['heuristic']} heuristic"
         )
         return decoded_changes

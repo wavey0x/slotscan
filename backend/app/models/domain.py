@@ -279,7 +279,6 @@ class DecodedValue:
     raw: str
     decoded: Any
     type_label: str
-    display: str
 
 
 @dataclass

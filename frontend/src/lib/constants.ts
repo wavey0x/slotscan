@@ -1,9 +1,9 @@
 export const CHAINS = [
-  { value: '1', label: 'Ethereum Mainnet' },
+  { value: '1', label: 'Ethereum' },
 ];
 
 export const CHAIN_NAMES: Record<string, string> = {
-  '1': 'Ethereum Mainnet',
+  '1': 'Ethereum',
 };
 
 export const CHAIN_EXPLORERS: Record<string, string> = {

@@ -1,6 +1,5 @@
 """Type decoder for converting raw storage values to Solidity types."""
 
-import json
 import logging
 import re
 from typing import Any, Optional
@@ -50,30 +49,19 @@ class TypeDecoder:
         if not is_array_type and type_info.members:
             struct_result = self._decode_generic_struct(raw_value, type_info, slot_offset)
             if struct_result is not None:
-                display = self._format_dict(struct_result) if isinstance(struct_result, dict) else str(struct_result)
                 return DecodedValue(
                     raw="0x" + raw_value.hex(),
                     decoded=struct_result,
                     type_label=type_info.label,
-                    display=display,
                 )
 
         # Decode based on type
         decoded = self._decode_by_type(relevant_bytes, type_info)
 
-        # Format for display, with nicer rendering for structs/collections
-        if isinstance(decoded, dict):
-            display = self._format_dict(decoded)
-        elif isinstance(decoded, list):
-            display = self._format_list(decoded)
-        else:
-            display = self.format_value(decoded, type_info.label)
-
         return DecodedValue(
             raw="0x" + raw_value.hex(),
             decoded=decoded,
             type_label=type_info.label,
-            display=display,
         )
 
     def _decode_generic_struct(
@@ -310,11 +298,6 @@ class TypeDecoder:
         3. Address pattern (12 leading zeros, 20 bytes of non-zero data)
         4. Large integer (>= 10^18, likely a wei amount or timestamp)
         5. Default to bytes32 hex
-
-        NOTE: We intentionally don't heuristically guess booleans because:
-        - 0x...01 could be true OR the integer 1
-        - 0x...00 is already caught by zero check
-        - Without type info, integers are safer to display
         """
         if len(raw_value) < 32:
             raw_value = raw_value.rjust(32, b"\x00")
@@ -327,7 +310,6 @@ class TypeDecoder:
                 raw=raw_hex,
                 decoded=0,
                 type_label="uint256",
-                display="0",
             )
 
         uint_value = int.from_bytes(raw_value, "big")
@@ -338,7 +320,6 @@ class TypeDecoder:
                 raw=raw_hex,
                 decoded=uint_value,
                 type_label="uint256",
-                display=self._abbreviate_int(uint_value),
             )
 
         # Address pattern (12 leading zeros = fits in 20 bytes)
@@ -348,16 +329,14 @@ class TypeDecoder:
                 raw=raw_hex,
                 decoded=addr,
                 type_label="address",
-                display=self._format_address(addr),
             )
 
-        # Large integer - just show the number, don't guess units
+        # Large integer - just show the number
         if uint_value < 2**256:
             return DecodedValue(
                 raw=raw_hex,
                 decoded=uint_value,
                 type_label="uint256",
-                display=self._abbreviate_int(uint_value),
             )
 
         # Default to bytes32
@@ -365,7 +344,6 @@ class TypeDecoder:
             raw=raw_hex,
             decoded=raw_hex,
             type_label="bytes32",
-            display=raw_hex[:10] + "..." + raw_hex[-8:] if len(raw_hex) > 20 else raw_hex,
         )
 
     def _looks_like_address(self, data: bytes) -> bool:
@@ -375,88 +353,6 @@ class TypeDecoder:
         if data[12:] == b"\x00" * 20:
             return False
         return True
-
-    def format_value(self, value: Any, type_label: str) -> str:
-        """Format a decoded value for human-readable display."""
-        # Boolean
-        if isinstance(value, bool):
-            return str(value).lower()
-
-        # Address
-        if isinstance(value, str) and value.startswith("0x") and len(value) == 42:
-            return self._format_address(value)
-
-        # Integer
-        if isinstance(value, int):
-            return self._format_integer(value, type_label)
-
-        # Bytes/hex strings
-        if isinstance(value, str) and value.startswith("0x"):
-            if len(value) > 20:
-                return value[:10] + "..." + value[-8:]
-            return value
-
-        # String
-        if isinstance(value, str):
-            if len(value) > 100:
-                return f'"{value[:100]}..."'
-            return f'"{value}"'
-
-        return str(value)
-
-    def _format_address(self, address: str) -> str:
-        """Return full checksum address without truncation."""
-        return address
-
-    def _format_integer(self, value: int, type_label: str) -> str:
-        """Format integer with comma separators, abbreviating very large values (>=1e30)."""
-        return self._abbreviate_int(value)
-
-    def _abbreviate_int(self, value: int) -> str:
-        """Abbreviate extremely large integers for display (>=1e30)."""
-        threshold = 10**30
-        is_neg = value < 0
-        abs_val = -value if is_neg else value
-        if abs_val < threshold:
-            return f"{value:,}"
-        s = str(abs_val)
-        mantissa = s[0] + ("." + s[1:5] if len(s) > 1 else "")
-        exp = len(s) - 1
-        return f"{'-' if is_neg else ''}{mantissa}e{exp}"
-
-    def _format_dict(self, value: dict) -> str:
-        """Format dict values in a compact JSON style."""
-        try:
-            def fmt(v):
-                if isinstance(v, int):
-                    return self._abbreviate_int(v)
-                if isinstance(v, list):
-                    return [fmt(x) for x in v]
-                if isinstance(v, dict):
-                    return {k: fmt(x) for k, x in v.items()}
-                return v
-
-            formatted = fmt(value)
-            return json.dumps(formatted, separators=(",", ":"), ensure_ascii=False)
-        except Exception as e:
-            logger.debug(f"Dict formatting failed, using str(): {e}")
-            return str(value)
-
-    def _format_list(self, value: list) -> str:
-        """Format list values in a compact JSON style."""
-        try:
-            formatted = []
-            for v in value:
-                if isinstance(v, int):
-                    formatted.append(self._abbreviate_int(v))
-                elif isinstance(v, dict):
-                    formatted.append({k: v2 if not isinstance(v2, int) else self._abbreviate_int(v2) for k, v2 in v.items()})
-                else:
-                    formatted.append(v)
-            return json.dumps(formatted, separators=(",", ":"), ensure_ascii=False)
-        except Exception as e:
-            logger.debug(f"List formatting failed, using str(): {e}")
-            return str(value)
 
     def decode_dynamic_bytes(
         self, length_slot_value: bytes, data_slot_values: list[bytes]
@@ -502,12 +398,6 @@ class TypeDecoder:
         Solidity dynamic bytes storage:
         - Short (< 32 bytes): data stored inline, length*2 in last byte (even)
         - Long (>= 32 bytes): length*2+1 in slot (odd), data at keccak256(slot)
-
-        Args:
-            raw_value: The 32-byte slot value
-            type_label: The type label (e.g., "string", "bytes")
-
-        Returns: DecodedValue with appropriate decoded content
         """
         if len(raw_value) < 32:
             raw_value = raw_value.rjust(32, b"\x00")
@@ -524,7 +414,6 @@ class TypeDecoder:
                     raw=raw_hex,
                     decoded="",
                     type_label=type_label,
-                    display='""',
                 )
             data = raw_value[:length]
             if type_label == "string":
@@ -534,21 +423,18 @@ class TypeDecoder:
                         raw=raw_hex,
                         decoded=decoded_str,
                         type_label=type_label,
-                        display=f'"{decoded_str}"' if len(decoded_str) <= 50 else f'"{decoded_str[:50]}..."',
                     )
                 except UnicodeDecodeError:
                     return DecodedValue(
                         raw=raw_hex,
                         decoded="0x" + data.hex(),
                         type_label=type_label,
-                        display=f"0x{data.hex()[:20]}..." if len(data) > 10 else f"0x{data.hex()}",
                     )
             else:
                 return DecodedValue(
                     raw=raw_hex,
                     decoded="0x" + data.hex(),
                     type_label=type_label,
-                    display=f"0x{data.hex()[:20]}..." if len(data) > 10 else f"0x{data.hex()}",
                 )
         else:
             # Long encoding: length*2+1 in slot, data at keccak256(slot)
@@ -558,7 +444,6 @@ class TypeDecoder:
                 raw=raw_hex,
                 decoded=length,
                 type_label=f"{type_label} length",
-                display=str(length),
             )
 
     def decode_dynamic_bytes_data_slot(
@@ -568,13 +453,6 @@ class TypeDecoder:
         Decode a data slot for a long dynamic bytes/string.
 
         These slots contain raw string/bytes data (32 bytes per slot).
-
-        Args:
-            raw_value: The 32-byte slot value
-            type_label: The type label
-            data_offset: Which data slot this is (0 for first, 1 for second, etc.)
-
-        Returns: DecodedValue with the raw data content
         """
         if len(raw_value) < 32:
             raw_value = raw_value.rjust(32, b"\x00")
@@ -591,7 +469,6 @@ class TypeDecoder:
                     raw=raw_hex,
                     decoded=decoded_str,
                     type_label=f"{type_label}[data:{data_offset}]" if data_offset > 0 else f"{type_label}[data]",
-                    display=f'"{decoded_str}"' if len(decoded_str) <= 50 else f'"{decoded_str[:50]}..."',
                 )
             except UnicodeDecodeError:
                 pass
@@ -600,7 +477,6 @@ class TypeDecoder:
             raw=raw_hex,
             decoded="0x" + raw_value.hex(),
             type_label=f"{type_label}[data:{data_offset}]" if data_offset > 0 else f"{type_label}[data]",
-            display=f"0x{raw_value.hex()[:20]}...",
         )
 
     def decode_packed_slot(

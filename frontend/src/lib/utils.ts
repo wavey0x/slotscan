@@ -45,7 +45,7 @@ export function formatNumber(value: number | string): string {
 }
 
 // Abbreviate extremely large integers (>= 1e30) for display while preserving readability
-const BIG_ABBREV_THRESHOLD = 10n ** 30n;
+const BIG_ABBREV_THRESHOLD = BigInt('1000000000000000000000000000000'); // 10^30
 
 function tryParseBigInt(value: string): bigint | null {
   const cleaned = value.replace(/,/g, '');
@@ -74,6 +74,7 @@ export interface RecentSearch {
   chain: string;
   address: string;
   blockOrTx?: string;
+  name?: string;
   timestamp: number;
 }
 
@@ -105,6 +106,20 @@ export function getRecentSearches(): RecentSearch[] {
 export function clearRecentSearches() {
   try {
     localStorage.removeItem(RECENT_SEARCHES_KEY);
+  } catch {
+    // localStorage not available
+  }
+}
+
+export function updateRecentSearchName(chain: string, address: string, name: string) {
+  try {
+    const existing = getRecentSearches();
+    const updated = existing.map((s) =>
+      s.chain === chain && s.address.toLowerCase() === address.toLowerCase()
+        ? { ...s, name }
+        : s
+    );
+    localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated));
   } catch {
     // localStorage not available
   }
@@ -280,30 +295,26 @@ export function formatObjectMultiline(value: Record<string, unknown>): string {
     .join('\n');
 }
 
-export function getCopyValue(
-  decoded: unknown,
-  display: string | null,
-  raw: string
-): string {
+export function getCopyValue(decoded: unknown, encoded: string): string {
   const isSci = (s: string) => /^-?\d+(?:\.\d+)?e[+-]?\d+$/i.test(s);
-  // Prefer decoded when it is trustworthy; otherwise fall back to raw.
+  // Prefer decoded when it is trustworthy; otherwise fall back to encoded.
   try {
-    if (decoded === null || decoded === undefined) return raw;
+    if (decoded === null || decoded === undefined) return encoded;
     if (typeof decoded === 'bigint') return decoded.toString();
     if (typeof decoded === 'number') {
-      if (!Number.isFinite(decoded)) return raw;
-      // For potentially large ints, derive from raw if it looks like a full 32-byte hex
-      if (Math.abs(decoded) >= 1e15 && /^0x[0-9a-fA-F]{64}$/.test(raw)) {
-        return BigInt(raw).toString();
+      if (!Number.isFinite(decoded)) return encoded;
+      // For potentially large ints, derive from encoded if it looks like a full 32-byte hex
+      if (Math.abs(decoded) >= 1e15 && /^0x[0-9a-fA-F]{64}$/.test(encoded)) {
+        return BigInt(encoded).toString();
       }
       return decoded.toString();
     }
     if (typeof decoded === 'string') {
       const cleaned = decoded.replace(/,/g, '');
       if (/^-?\d+$/.test(cleaned)) return cleaned;
-      if (isSci(cleaned) && /^0x[0-9a-fA-F]+$/.test(raw)) {
+      if (isSci(cleaned) && /^0x[0-9a-fA-F]+$/.test(encoded)) {
         try {
-          return BigInt(raw).toString();
+          return BigInt(encoded).toString();
         } catch {
           return cleaned;
         }
@@ -316,7 +327,7 @@ export function getCopyValue(
   } catch {
     // ignore and fall through
   }
-  return display ?? raw;
+  return encoded;
 }
 
 export function formatScientific(value: string | number | bigint): string | null {
@@ -340,13 +351,8 @@ export function formatScientific(value: string | number | bigint): string | null
   }
 }
 
-export function getTooltipValue(
-  decoded: unknown,
-  display: string | null,
-  raw: string
-): string {
-  const fallback = display ?? raw;
-  if (decoded === null || decoded === undefined) return fallback;
+export function getTooltipValue(decoded: unknown, encoded: string): string {
+  if (decoded === null || decoded === undefined) return encoded;
 
   // Only show scientific notation for large numbers (>= 1e9)
   // For smaller numbers, just show the value as-is
@@ -361,25 +367,25 @@ export function getTooltipValue(
       if (/^-?\d+$/.test(cleaned)) {
         numValue = BigInt(cleaned);
       } else {
-        return fallback;
+        return encoded;
       }
     } else {
-      return fallback;
+      return encoded;
     }
 
     // Check if magnitude is >= 1e9 (1 billion)
     const magnitude = typeof numValue === 'bigint'
-      ? (numValue < 0n ? -numValue : numValue)
+      ? (numValue < BigInt(0) ? -numValue : numValue)
       : Math.abs(numValue);
 
     const threshold = typeof numValue === 'bigint' ? BigInt(1e9) : 1e9;
     if (magnitude >= threshold) {
       const sci = formatScientific(numValue);
-      return sci ?? fallback;
+      return sci ?? encoded;
     }
 
-    return fallback;
+    return encoded;
   } catch {
-    return fallback;
+    return encoded;
   }
 }

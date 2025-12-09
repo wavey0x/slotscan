@@ -4,6 +4,7 @@ import { useStorage } from '@/lib/hooks/useStorage';
 import { Loading } from '@/components/ui/Loading';
 import { SlotValueResponse } from '@/lib/types';
 import { ValueDisplay } from './ValueDisplay';
+import { formatDecodedValue } from '@/lib/utils';
 
 interface StorageTreeProps {
   chainId: string;
@@ -79,8 +80,8 @@ function SlotRow({ slot }: { slot: SlotValueResponse }) {
         </div>
         <div className="text-right">
           <ValueDisplay
-            value={slot.display_value || String(slot.decoded_value) || slot.raw_value}
-            rawValue={slot.raw_value}
+            value={slot.value_decoded !== null && slot.value_decoded !== undefined ? formatDecodedValue(slot.value_decoded) : slot.value_encoded}
+            rawValue={slot.value_encoded}
             typeLabel={slot.type_label}
           />
         </div>

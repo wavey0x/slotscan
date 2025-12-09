@@ -91,6 +91,7 @@ class ContractResolver:
                 parsed_layout = None
         # If no layout from verification but sources available, compile
         if not parsed_layout and verification and verification.sources and verification.compiler_version:
+            logger.info(f"Compiling layout for {verification.name} with {len(verification.sources)} source files")
             try:
                 parsed_layout = await self.layout_parser.parse(
                     contract_name=verification.name or "",
@@ -100,8 +101,9 @@ class ContractResolver:
                     metadata_settings=verification.compiler_settings,
                     contract_fqname=self._get_compilation_target(verification),
                 )
+                logger.info(f"Layout compiled: {len(parsed_layout.variables) if parsed_layout else 0} variables")
             except Exception as e:
-                logger.warning(f"Failed to compile layout: {e}")
+                logger.warning(f"Failed to compile layout: {e}", exc_info=True)
                 parsed_layout = None
 
         # Build result
@@ -123,8 +125,9 @@ class ContractResolver:
             storage_layout=parsed_layout,
         )
 
-        # Cache result
-        if self.contract_repo:
+        # Cache result only if verified AND has storage layout
+        # (compilation may fail temporarily, we'll retry next request)
+        if self.contract_repo and result.is_verified and result.storage_layout:
             await self.contract_repo.save(result)
 
         return result

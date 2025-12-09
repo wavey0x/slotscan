@@ -71,19 +71,19 @@ export function DiffTable({ chainId, address, txHash }: DiffTableProps) {
 
       <table className="w-full">
         <thead>
-          <tr className="border-b border-gray-200">
-            <th className="w-5 px-1 py-2"></th>
-            <th className="text-left px-1 py-2 text-[10px] font-medium text-gray-500 uppercase w-48">Variable</th>
-            <th className="text-left px-1 py-2 text-[10px] font-medium text-gray-500 uppercase">Value</th>
-            <th className="text-left px-1 py-2 text-[10px] font-medium text-gray-500 uppercase w-8">Slot</th>
+          <tr className="border-b border-gray-300">
+            <th className="w-5 px-1 pt-2 pb-1"></th>
+            <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase w-48">Variable</th>
+            <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase">Value</th>
+            <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase w-8">Slot</th>
             {data?.execution_order_available && (
-              <th className="text-right px-1 py-2 text-[10px] font-medium text-gray-500 uppercase w-10">
+              <th className="text-right px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase w-10">
                 Step
               </th>
             )}
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-100">
+        <tbody className="divide-y divide-gray-200">
           {sortedSlots.map((slot, index) => (
             <SlotRow
               key={index}
@@ -91,6 +91,7 @@ export function DiffTable({ chainId, address, txHash }: DiffTableProps) {
               showHex={showHex}
               chainId={chainId}
               showStep={data?.execution_order_available ?? false}
+              isFirst={index === 0}
             />
           ))}
         </tbody>

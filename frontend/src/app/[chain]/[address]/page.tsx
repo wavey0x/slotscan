@@ -1,7 +1,7 @@
 'use client';
 
 import { useSearchParams, useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Container } from '@/components/layout/Container';
 import { BackLink } from '@/components/layout/BackLink';
 import { DiffTable } from '@/components/diff/DiffTable';
@@ -9,7 +9,7 @@ import { CopyButton } from '@/components/ui/CopyButton';
 import { EtherscanLink } from '@/components/ui/EtherscanLink';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { truncateHash, truncateAddress } from '@/lib/utils';
+import { truncateHash, truncateAddress, updateRecentSearchName } from '@/lib/utils';
 import { getAddressExplorerUrl, getTxExplorerUrl, getBlockExplorerUrl } from '@/lib/constants';
 import { useContract } from '@/lib/hooks/useContract';
 import { useTxDiff } from '@/lib/hooks/useTxDiff';
@@ -25,10 +25,15 @@ function TxDiffView({ chain, address, txHash }: { chain: string; address: string
   const contractName = contract?.name;
   const abbreviatedAddress = truncateAddress(address);
 
+  // Update recent search with contract name when loaded
+  useEffect(() => {
+    if (contractName) {
+      updateRecentSearchName(chain, address, contractName);
+    }
+  }, [chain, address, contractName]);
+
   return (
     <Container>
-      <BackLink href={`/${chain}/${address}`} label="Back to contract" />
-
       <div className="mt-6">
         <h1 className="text-xl font-medium text-gray-900 mb-4">State Changes</h1>
 

@@ -1,3 +1,16 @@
+// === Value Types ===
+
+export interface ValuePair {
+  value_encoded: string;
+  value_decoded: unknown;
+}
+
+export interface ValuePairDecoded {
+  value_decoded: unknown;
+}
+
+// === Response Types ===
+
 export interface ContractResponse {
   chain_id: number;
   address: string;
@@ -41,12 +54,11 @@ export interface StorageLayoutResponse {
 
 export interface SlotValueResponse {
   slot: string;
-  raw_value: string;
+  value_encoded: string;
+  value_decoded: unknown;
   variable_name: string | null;
   variable_path: string | null;
   type_label: string | null;
-  decoded_value: unknown;
-  display_value: string | null;
 }
 
 export interface StorageSnapshotResponse {
@@ -60,12 +72,8 @@ export interface StorageSnapshotResponse {
 
 export interface StorageChangeResponse {
   // A single interim change (one SSTORE)
-  old_raw: string;
-  new_raw: string;
-  old_decoded: unknown;
-  new_decoded: unknown;
-  old_display: string | null;
-  new_display: string | null;
+  before: ValuePair;
+  after: ValuePair;
   pc: number | null;
   step: number; // Sequence number in overall transaction execution
 }
@@ -76,10 +84,8 @@ export interface PackedFieldResponse {
   type_label: string;
   offset: number;
   size: number;
-  initial_decoded: unknown;
-  initial_display: string | null;
-  final_decoded: unknown;
-  final_display: string | null;
+  before: ValuePairDecoded;
+  after: ValuePairDecoded;
 }
 
 export interface StructMemberResponse {
@@ -120,13 +126,9 @@ export interface SlotChangeResponse {
   array_index: number | null;
   encoding: string | null;
   value_type: string | null;
-  // Summary: initial and final values
-  initial_raw: string;
-  final_raw: string;
-  initial_decoded: unknown;
-  final_decoded: unknown;
-  initial_display: string | null;
-  final_display: string | null;
+  // Summary: before (initial) and after (final) values
+  before: ValuePair;
+  after: ValuePair;
   // Packed storage fields (multiple values in one slot)
   packed_fields: PackedFieldResponse[] | null;
   struct_field: string | null; // Resolved struct field name (e.g., "lockStart")

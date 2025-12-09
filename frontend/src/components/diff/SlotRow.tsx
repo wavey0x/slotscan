@@ -21,12 +21,13 @@ interface SlotRowProps {
   showHex: boolean;
   chainId: string;
   showStep?: boolean;
+  isFirst?: boolean;
 }
 
 // Helper to check if a packed field has changed
 const hasFieldChanged = (f: PackedFieldResponse): boolean => {
-  const initialDisplay = f.initial_display ?? formatDecodedValue(f.initial_decoded);
-  const finalDisplay = f.final_display ?? formatDecodedValue(f.final_decoded);
+  const initialDisplay = formatDecodedValue(f.before.value_decoded);
+  const finalDisplay = formatDecodedValue(f.after.value_decoded);
   return initialDisplay !== finalDisplay;
 };
 
@@ -52,10 +53,10 @@ const stringifyValueForCopy = (val: unknown, fallback: string): string => {
 };
 
 // Helper to check if a value represents zero (handles various formats)
-const isZeroValue = (raw: string, decoded: unknown): boolean => {
+const isZeroValue = (encoded: string, decoded: unknown): boolean => {
   // Check raw hex
-  if (raw === '0x' + '0'.repeat(64)) return true;
-  if (raw === '0x0' || raw === '0x00') return true;
+  if (encoded === '0x' + '0'.repeat(64)) return true;
+  if (encoded === '0x0' || encoded === '0x00') return true;
   // Check decoded value
   if (decoded === 0 || decoded === '0' || decoded === BigInt(0)) return true;
   if (decoded === null || decoded === undefined) return false;
@@ -70,6 +71,7 @@ const getChangedPackedFields = (fields: PackedFieldResponse[]): PackedFieldRespo
 };
 
 // Render packed field NAMES in VARIABLE column (just type + name, no values)
+// Each field takes 2 lines of height to align with the 2-line value display
 const PackedFieldsVariableDisplay = ({
   fields,
 }: {
@@ -80,10 +82,15 @@ const PackedFieldsVariableDisplay = ({
   return (
     <div className="space-y-0.5">
       {changedFields.map((f, idx) => (
-        <div key={idx} className="text-xs font-mono leading-tight">
-          <span className="text-gray-400 mr-0.5">↳</span>
-          <span className="text-gray-400">{f.type_label}</span>{' '}
-          <span className="text-gray-900 font-medium">{f.name}</span>
+        <div key={idx} className="space-y-0">
+          {/* Line 1: field name */}
+          <div className="text-xs font-mono leading-tight">
+            <span className="text-gray-400 mr-0.5">·</span>
+            <span className="text-gray-400">{f.type_label}</span>{' '}
+            <span className="text-gray-900 font-medium">{f.name}</span>
+          </div>
+          {/* Line 2: empty spacer to match value column's 2-line layout */}
+          <div className="text-xs leading-tight">&nbsp;</div>
         </div>
       ))}
     </div>
@@ -91,24 +98,33 @@ const PackedFieldsVariableDisplay = ({
 };
 
 // Render packed field VALUES in VALUE column (before on line 1, after on line 2)
+// headerText is used to create an invisible spacer that matches the variable column header
 const PackedFieldsValueDisplay = ({
   fields,
   chainId,
-  initialRaw,
-  finalRaw,
+  initialEncoded,
+  finalEncoded,
+  headerText,
 }: {
   fields: PackedFieldResponse[];
   chainId: string;
-  initialRaw: string;
-  finalRaw: string;
+  initialEncoded: string;
+  finalEncoded: string;
+  headerText?: string;
 }) => {
   const changedFields = getChangedPackedFields(fields);
 
   return (
     <div className="space-y-0.5">
+      {/* Invisible spacer matching the variable column header (same text = same wrapping) */}
+      {headerText && (
+        <div className="text-xs font-mono leading-tight pb-0.5 border-b border-transparent break-words invisible">
+          {headerText}
+        </div>
+      )}
       {changedFields.map((f, idx) => {
-        const initialDisplay = f.initial_display ?? formatDecodedValue(f.initial_decoded);
-        const finalDisplay = f.final_display ?? formatDecodedValue(f.final_decoded);
+        const initialDisplay = formatDecodedValue(f.before.value_decoded);
+        const finalDisplay = formatDecodedValue(f.after.value_decoded);
         const isInitialZero = initialDisplay === '0' || initialDisplay === 'false';
         const isFinalZero = finalDisplay === '0' || finalDisplay === 'false';
         return (
@@ -116,11 +132,7 @@ const PackedFieldsValueDisplay = ({
             <div className={cn('text-xs font-mono leading-tight flex items-center gap-1', isInitialZero ? 'text-gray-300' : 'text-gray-500')}>
               <HoverCell
                 display={initialDisplay}
-                {...makeHoverProps(
-                  f.initial_decoded,
-                  f.initial_display ?? initialDisplay,
-                  initialRaw
-                )}
+                {...makeHoverProps(f.before.value_decoded, initialEncoded)}
                 chainId={chainId}
                 colorClass={cn('text-xs font-mono', isInitialZero ? 'text-gray-300' : 'text-gray-500')}
                 forceActions
@@ -130,11 +142,7 @@ const PackedFieldsValueDisplay = ({
             <div className={cn('text-xs font-mono leading-tight', isFinalZero ? 'text-gray-300' : 'text-gray-900')}>
               <HoverCell
                 display={finalDisplay}
-                {...makeHoverProps(
-                  f.final_decoded,
-                  f.final_display ?? finalDisplay,
-                  finalRaw
-                )}
+                {...makeHoverProps(f.after.value_decoded, finalEncoded)}
                 chainId={chainId}
                 colorClass={cn('text-xs font-mono', isFinalZero ? 'text-gray-300' : 'text-gray-900')}
                 forceActions
@@ -150,10 +158,10 @@ const PackedFieldsValueDisplay = ({
 const isPlainObject = (val: unknown): val is Record<string, unknown> =>
   val !== null && typeof val === 'object' && !Array.isArray(val);
 
-const makeHoverProps = (decoded: unknown, display: string | null, raw: string) => {
+const makeHoverProps = (decoded: unknown, encoded: string) => {
   return {
-    value: decoded !== null && decoded !== undefined ? getCopyValue(decoded, display ?? raw, raw) : (display ?? raw),
-    tooltip: getTooltipValue(decoded, display ?? raw, raw),
+    value: decoded !== null && decoded !== undefined ? getCopyValue(decoded, encoded) : encoded,
+    tooltip: getTooltipValue(decoded, encoded),
   };
 };
 
@@ -237,7 +245,7 @@ const StructDiffDisplay = ({
                   <span className={cn(isZeroBefore ? 'text-gray-300' : 'text-gray-500')}>
                     <HoverCell
                       display={beforeDisplay}
-                      {...makeHoverProps(beforeVal, beforeDisplay, '')}
+                      {...makeHoverProps(beforeVal, '')}
                       chainId={chainId}
                       colorClass={cn('text-xs font-mono', isZeroBefore ? 'text-gray-300' : 'text-gray-500')}
                       forceActions
@@ -252,7 +260,7 @@ const StructDiffDisplay = ({
                 >
                   <HoverCell
                     display={afterDisplay}
-                    {...makeHoverProps(afterVal, afterDisplay, '')}
+                    {...makeHoverProps(afterVal, '')}
                     chainId={chainId}
                     colorClass={cn('text-xs font-mono', isZeroAfter ? 'text-gray-300' : hasChanged ? 'text-gray-900' : 'text-gray-500')}
                     forceActions
@@ -272,6 +280,7 @@ export function SlotRow({
   showHex,
   chainId,
   showStep = true,
+  isFirst = false,
 }: SlotRowProps) {
   const [expanded, setExpanded] = useState(false);
   const hasInterimChanges = slot.changes.length > 1;
@@ -324,22 +333,17 @@ export function SlotRow({
   };
   const slotNumber = formatSlotNumber(slot.slot);
 
-  const getDisplayValue = (
-    display: string | null,
-    decoded: unknown,
-    raw: string
-  ): string => {
-    if (showHex) return raw;
-    if (display) return formatDecodedValue(display);
+  const getDisplayValue = (decoded: unknown, encoded: string): string => {
+    if (showHex) return encoded;
     if (decoded !== null && decoded !== undefined) return formatDecodedValue(decoded);
-    return raw;
+    return encoded;
   };
 
   // Use packed fields display if available and not in hex mode
-  const initialValue = getDisplayValue(slot.initial_display, slot.initial_decoded, slot.initial_raw);
-  const finalValue = getDisplayValue(slot.final_display, slot.final_decoded, slot.final_raw);
-  const structInitial = isPlainObject(slot.initial_decoded) ? (slot.initial_decoded as Record<string, unknown>) : null;
-  const structFinal = isPlainObject(slot.final_decoded) ? (slot.final_decoded as Record<string, unknown>) : null;
+  const initialValue = getDisplayValue(slot.before.value_decoded, slot.before.value_encoded);
+  const finalValue = getDisplayValue(slot.after.value_decoded, slot.after.value_encoded);
+  const structInitial = isPlainObject(slot.before.value_decoded) ? (slot.before.value_decoded as Record<string, unknown>) : null;
+  const structFinal = isPlainObject(slot.after.value_decoded) ? (slot.after.value_decoded as Record<string, unknown>) : null;
 
   const formatKey = (key: string | null): { display: string; full: string } | null => {
     if (!key) return null;
@@ -381,13 +385,11 @@ export function SlotRow({
     </div>
   );
 
-  // Render packed fields tooltip showing ALL fields with their values
+  // Render packed fields tooltip showing field types and names (no values)
   const renderPackedFieldsTooltip = (fields: PackedFieldResponse[]) => (
     <div className="space-y-1 font-mono text-[10px]">
       {fields.map((f, idx) => {
         const changed = hasFieldChanged(f);
-        const initialDisplay = f.initial_display ?? formatDecodedValue(f.initial_decoded);
-        const finalDisplay = f.final_display ?? formatDecodedValue(f.final_decoded);
         return (
           <div
             key={idx}
@@ -398,16 +400,7 @@ export function SlotRow({
           >
             <span className="text-gray-500">{f.type_label}</span>
             <span className={changed ? 'text-yellow-300' : 'text-gray-300'}>{f.name}</span>
-            <span className="text-gray-500">=</span>
-            {changed ? (
-              <>
-                <span className="text-red-400">{initialDisplay}</span>
-                <span className="text-gray-500">→</span>
-                <span className="text-green-400">{finalDisplay}</span>
-              </>
-            ) : (
-              <span className="text-gray-400">{finalDisplay}</span>
-            )}
+            {changed && <span className="text-yellow-400 ml-1">*</span>}
           </div>
         );
       })}
@@ -529,7 +522,7 @@ export function SlotRow({
   return (
     <>
       <tr className={cn('hover:bg-gray-50/50', expanded && 'bg-gray-50/30')}>
-        <td className="px-1 py-0.5 w-5">
+        <td className={cn('px-1 py-0.5 w-5', isFirst && 'pt-2')}>
           {canExpand ? (
             <button
               onClick={() => setExpanded(!expanded)}
@@ -542,26 +535,32 @@ export function SlotRow({
           )}
         </td>
 
-        <td className="px-1 py-0.5 align-top w-48 whitespace-normal">
+        <td className={cn('px-1 py-0.5 align-top w-48 whitespace-normal', isFirst && 'pt-2')}>
           <HoverCard content={variableHoverContent} delay={200} maxWidth="max-w-sm">
             <div className="space-y-0 break-words">
               {/* Top line: struct type + variable name (for struct mappings) */}
               {slot.struct_definition?.name && (
-                <div className="text-xs font-mono leading-tight">
+                <div className={cn(
+                  "text-xs font-mono leading-tight",
+                  (slot.struct_field || hasPacked) && "pb-0.5 border-b border-dashed border-gray-300"
+                )}>
                   <span className="text-gray-400">{slot.struct_definition.name}</span>{' '}
                   <span className="text-gray-900 font-medium">{slot.variable_name}</span>
                 </div>
               )}
               {/* Top line for simple mappings (no struct): show variable name */}
               {slot.is_mapping && !slot.struct_definition?.name && slot.variable_name && (
-                <div className="text-xs font-mono leading-tight">
+                <div className={cn(
+                  "text-xs font-mono leading-tight",
+                  slot.value_type && "pb-0.5 border-b border-dashed border-gray-300"
+                )}>
                   <span className="text-gray-900 font-medium">{slot.variable_name}</span>
                 </div>
               )}
               {/* Bottom line: member type + member name (for struct fields) */}
               {slot.struct_field && slot.struct_definition ? (
                 <div className="text-xs font-mono leading-tight">
-                  <span className="text-gray-400 mr-0.5">↳</span>
+                  <span className="text-gray-400 mr-0.5">·</span>
                   <span className="text-gray-400">
                     {slot.struct_definition.members.find(m => m.name === slot.struct_field)?.type_label}
                   </span>{' '}
@@ -573,8 +572,8 @@ export function SlotRow({
                   <span className="text-gray-400 mr-0.5">↳</span>
                   <span className="text-gray-400">{slot.value_type}</span>
                 </div>
-              ) : !slot.struct_definition?.name && !slot.is_mapping ? (
-                /* Regular variable (no struct, no mapping) */
+              ) : !slot.struct_definition?.name && !slot.is_mapping && !hasPacked ? (
+                /* Regular variable (no struct, no mapping, no packed) */
                 <div className="text-xs font-mono leading-tight">
                   {(slot.value_type || slot.type_label) && (
                     <><span className="text-gray-400">{slot.value_type || slot.type_label}</span>{' '}</>
@@ -585,7 +584,7 @@ export function SlotRow({
                   )}
                 </div>
               ) : null}
-              {/* Packed field names (shown in VARIABLE column) */}
+              {/* Packed field names - shown INSTEAD of variable name for packed slots */}
               {hasPacked && (
                 <PackedFieldsVariableDisplay fields={slot.packed_fields!} />
               )}
@@ -593,37 +592,35 @@ export function SlotRow({
           </HoverCard>
         </td>
 
-        <td className="px-1 py-0.5 align-top">
+        <td className={cn('px-1 py-0.5 align-top', isFirst && 'pt-2')}>
           {hasPacked && !showHex ? (
-            <PackedFieldsValueDisplay fields={slot.packed_fields!} chainId={chainId} initialRaw={slot.initial_raw} finalRaw={slot.final_raw} />
+            <PackedFieldsValueDisplay
+              fields={slot.packed_fields!}
+              chainId={chainId}
+              initialEncoded={slot.before.value_encoded}
+              finalEncoded={slot.after.value_encoded}
+              headerText={slot.struct_definition?.name ? `${slot.struct_definition.name} ${slot.variable_name || ''}` : undefined}
+            />
           ) : (structInitial || structFinal) && !showHex ? (
             <StructDiffDisplay initial={structInitial} final={structFinal} chainId={chainId} structDefinition={slot.struct_definition} />
           ) : (
             <div className="space-y-0">
-              <div className={cn('text-xs font-mono leading-tight flex items-center gap-1', isZeroValue(slot.initial_raw, slot.initial_decoded) ? 'text-gray-300' : 'text-gray-500')}>
+              <div className={cn('text-xs font-mono leading-tight flex items-center gap-1', isZeroValue(slot.before.value_encoded, slot.before.value_decoded) ? 'text-gray-300' : 'text-gray-500')}>
                 <HoverCell
                   display={initialValue}
-                  {...makeHoverProps(
-                    slot.initial_decoded,
-                    slot.initial_display ?? slot.initial_raw,
-                    slot.initial_raw
-                  )}
+                  {...makeHoverProps(slot.before.value_decoded, slot.before.value_encoded)}
                   chainId={chainId}
-                  colorClass={cn('text-xs font-mono', isZeroValue(slot.initial_raw, slot.initial_decoded) ? 'text-gray-300' : 'text-gray-500')}
+                  colorClass={cn('text-xs font-mono', isZeroValue(slot.before.value_encoded, slot.before.value_decoded) ? 'text-gray-300' : 'text-gray-500')}
                   forceActions
                 />
                 <span className="text-gray-400">→</span>
               </div>
-              <div className={cn('text-xs font-mono leading-tight', isZeroValue(slot.final_raw, slot.final_decoded) ? 'text-gray-300' : 'text-gray-900')}>
+              <div className={cn('text-xs font-mono leading-tight', isZeroValue(slot.after.value_encoded, slot.after.value_decoded) ? 'text-gray-300' : 'text-gray-900')}>
                 <HoverCell
                   display={finalValue}
-                  {...makeHoverProps(
-                    slot.final_decoded,
-                    slot.final_display ?? slot.final_raw,
-                    slot.final_raw
-                  )}
+                  {...makeHoverProps(slot.after.value_decoded, slot.after.value_encoded)}
                   chainId={chainId}
-                  colorClass={cn('text-xs font-mono', isZeroValue(slot.final_raw, slot.final_decoded) ? 'text-gray-300' : 'text-gray-900')}
+                  colorClass={cn('text-xs font-mono', isZeroValue(slot.after.value_encoded, slot.after.value_decoded) ? 'text-gray-300' : 'text-gray-900')}
                   forceActions
                 />
               </div>
@@ -631,7 +628,7 @@ export function SlotRow({
           )}
         </td>
 
-        <td className="px-1 py-0.5 w-8">
+        <td className={cn('px-1 py-0.5 w-8', isFirst && 'pt-2')}>
           <HoverCard content={<div className="font-mono text-xs text-gray-100 break-all">{slot.slot}</div>} position="top">
             <HoverCell
               display={slotNumber}
@@ -643,7 +640,7 @@ export function SlotRow({
         </td>
 
         {showStep && (
-          <td className="px-1 py-0.5 text-right w-8">
+          <td className={cn('px-1 py-0.5 text-right w-8', isFirst && 'pt-2')}>
             {firstStep !== null && firstStep !== undefined && (
               <HoverCard content={<div className="font-mono text-[10px] text-gray-100">Step: {firstStep}</div>} position="top">
                 <span className="text-[10px] text-gray-400 font-mono cursor-default">
@@ -657,46 +654,38 @@ export function SlotRow({
 
       {/* Expanded interim changes rows */}
       {expanded && hasInterimChanges && slot.changes.map((change, idx) => {
-          const oldVal = getDisplayValue(change.old_display, change.old_decoded, change.old_raw);
-          const newVal = getDisplayValue(change.new_display, change.new_decoded, change.new_raw);
-          const changeStructOld = isPlainObject(change.old_decoded) ? (change.old_decoded as Record<string, unknown>) : null;
-          const changeStructNew = isPlainObject(change.new_decoded) ? (change.new_decoded as Record<string, unknown>) : null;
-          const isFirst = idx === 0;
+          const oldVal = getDisplayValue(change.before.value_decoded, change.before.value_encoded);
+          const newVal = getDisplayValue(change.after.value_decoded, change.after.value_encoded);
+          const changeStructOld = isPlainObject(change.before.value_decoded) ? (change.before.value_decoded as Record<string, unknown>) : null;
+          const changeStructNew = isPlainObject(change.after.value_decoded) ? (change.after.value_decoded as Record<string, unknown>) : null;
+          const isFirstChange = idx === 0;
 
           return (
-            <tr key={idx} className={cn('bg-gray-100/80', !isFirst && 'border-t border-gray-300')}>
-              <td className="px-1 py-0.5" />
-              <td className="px-1 py-0.5">
-                <span className="text-[10px] text-gray-400 pl-1">{idx + 1}/{slot.changes.length}</span>
+            <tr key={idx} className={cn('bg-gray-100/80', !isFirstChange && 'border-t border-gray-300')}>
+              <td className="pl-3 py-0.5" />
+              <td className="pl-3 py-0.5">
+                <span className="text-[10px] text-gray-400">{idx + 1}/{slot.changes.length}</span>
               </td>
-              <td className="px-1 py-0.5">
+              <td className="pl-3 py-0.5">
                 {(changeStructOld || changeStructNew) && !showHex ? (
                   <StructDiffDisplay initial={changeStructOld} final={changeStructNew} chainId={chainId} structDefinition={slot.struct_definition} />
                 ) : (
                   <div className="space-y-0">
-                    <div className={cn('text-xs font-mono leading-tight flex items-center gap-1', isZeroValue(change.old_raw, change.old_decoded) ? 'text-gray-300' : 'text-gray-500')}>
+                    <div className={cn('text-xs font-mono leading-tight flex items-center gap-1', isZeroValue(change.before.value_encoded, change.before.value_decoded) ? 'text-gray-300' : 'text-gray-500')}>
                       <HoverCell
                         display={oldVal}
-                        {...makeHoverProps(
-                          change.old_decoded,
-                          change.old_display ?? change.old_raw,
-                          change.old_raw
-                        )}
+                        {...makeHoverProps(change.before.value_decoded, change.before.value_encoded)}
                         chainId={chainId}
-                        colorClass={cn('text-xs font-mono', isZeroValue(change.old_raw, change.old_decoded) ? 'text-gray-300' : 'text-gray-500')}
+                        colorClass={cn('text-xs font-mono', isZeroValue(change.before.value_encoded, change.before.value_decoded) ? 'text-gray-300' : 'text-gray-500')}
                       />
                       <span className="text-gray-400">→</span>
                     </div>
-                    <div className={cn('text-xs font-mono leading-tight', isZeroValue(change.new_raw, change.new_decoded) ? 'text-gray-300' : 'text-gray-900')}>
+                    <div className={cn('text-xs font-mono leading-tight', isZeroValue(change.after.value_encoded, change.after.value_decoded) ? 'text-gray-300' : 'text-gray-900')}>
                       <HoverCell
                         display={newVal}
-                        {...makeHoverProps(
-                          change.new_decoded,
-                          change.new_display ?? change.new_raw,
-                          change.new_raw
-                        )}
+                        {...makeHoverProps(change.after.value_decoded, change.after.value_encoded)}
                         chainId={chainId}
-                        colorClass={cn('text-xs font-mono', isZeroValue(change.new_raw, change.new_decoded) ? 'text-gray-300' : 'text-gray-900')}
+                        colorClass={cn('text-xs font-mono', isZeroValue(change.after.value_encoded, change.after.value_decoded) ? 'text-gray-300' : 'text-gray-900')}
                       />
                     </div>
                   </div>

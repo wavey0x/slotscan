@@ -82,9 +82,9 @@ class Settings(BaseSettings):
 
     @property
     def etherscan_urls(self) -> dict[int, str]:
-        """Get Etherscan API URLs by chain ID."""
+        """Get Etherscan API V2 URLs by chain ID."""
         return {
-            1: "https://api.etherscan.io/api",
+            1: "https://api.etherscan.io/v2/api?chainid=1",
         }
 
 

@@ -5,6 +5,22 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 
+# === Value Types ===
+
+
+class ValuePair(BaseModel):
+    """Encoded and decoded value pair."""
+
+    value_encoded: str
+    value_decoded: Optional[Any] = None
+
+
+class ValuePairDecoded(BaseModel):
+    """Decoded value only (for packed fields where encoded is shared)."""
+
+    value_decoded: Optional[Any] = None
+
+
 # === Response Models ===
 
 
@@ -64,12 +80,11 @@ class SlotValueResponse(BaseModel):
     """A single slot with its value."""
 
     slot: str
-    raw_value: str
+    value_encoded: str
+    value_decoded: Optional[Any] = None
     variable_name: Optional[str] = None
     variable_path: Optional[str] = None
     type_label: Optional[str] = None
-    decoded_value: Optional[Any] = None
-    display_value: Optional[str] = None
 
 
 class StorageSnapshotResponse(BaseModel):
@@ -87,12 +102,8 @@ class StorageSnapshotResponse(BaseModel):
 class StorageChangeResponse(BaseModel):
     """A single storage change (interim step)."""
 
-    old_raw: str
-    new_raw: str
-    old_decoded: Optional[Any] = None
-    new_decoded: Optional[Any] = None
-    old_display: Optional[str] = None
-    new_display: Optional[str] = None
+    before: ValuePair
+    after: ValuePair
     pc: Optional[int] = None  # Program counter of the SSTORE operation
     step: Optional[int] = None  # Sequence number in overall transaction execution
 
@@ -104,10 +115,8 @@ class PackedFieldResponse(BaseModel):
     type_label: str
     offset: int
     size: int
-    initial_decoded: Optional[Any] = None
-    initial_display: Optional[str] = None
-    final_decoded: Optional[Any] = None
-    final_display: Optional[str] = None
+    before: ValuePairDecoded
+    after: ValuePairDecoded
 
 
 class StructMemberResponse(BaseModel):
@@ -155,12 +164,8 @@ class SlotChangeResponse(BaseModel):
     value_type: Optional[str] = None  # Value type for mappings (cleaned up)
 
     # Summary: first and last values
-    initial_raw: str  # Value before transaction (pre-state)
-    final_raw: str  # Value after all changes
-    initial_decoded: Optional[Any] = None
-    final_decoded: Optional[Any] = None
-    initial_display: Optional[str] = None
-    final_display: Optional[str] = None
+    before: ValuePair
+    after: ValuePair
 
     # Packed storage fields (multiple values in one slot)
     packed_fields: Optional[list[PackedFieldResponse]] = None
