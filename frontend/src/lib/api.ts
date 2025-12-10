@@ -47,9 +47,11 @@ async function fetchAPI<T>(url: string): Promise<T> {
   try {
     const res = await fetchWithTimeout(url);
     if (!res.ok) {
-      const error = await res.json().catch(() => ({ error: 'Request failed', code: 'UNKNOWN' }));
+      const body = await res.json().catch(() => ({ error: 'Request failed', code: 'UNKNOWN' }));
+      // FastAPI wraps error details in { detail: {...} }
+      const error = body.detail || body;
       throw new APIError(
-        error.error || 'Request failed',
+        error.error || error.message || 'Request failed',
         error.code || 'UNKNOWN',
         error
       );
