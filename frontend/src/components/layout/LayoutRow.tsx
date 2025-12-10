@@ -12,7 +12,7 @@ import { CopyButton } from '@/components/ui/CopyButton';
 import { MappingKeyInput } from './MappingKeyInput';
 import { ArrayIndexInput } from './ArrayIndexInput';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { cn } from '@/lib/utils';
+import { cn, formatDecodedValue } from '@/lib/utils';
 
 interface LayoutRowProps {
   variable: StorageVariableResponse;
@@ -27,40 +27,6 @@ interface LayoutRowProps {
 function truncateType(label: string, maxLen: number = 40): string {
   if (label.length <= maxLen) return label;
   return label.substring(0, maxLen - 3) + '...';
-}
-
-// Format a decoded value for display
-function formatDecodedValue(value: unknown): string {
-  if (value === null || value === undefined) return '-';
-  if (typeof value === 'boolean') return value ? 'true' : 'false';
-  if (typeof value === 'string') {
-    // Show addresses in full (42 chars including 0x)
-    if (value.startsWith('0x') && value.length === 42) {
-      return value;
-    }
-    // Truncate other long hex values (not addresses)
-    if (value.startsWith('0x') && value.length > 66) {
-      return `${value.slice(0, 10)}...${value.slice(-6)}`;
-    }
-    return value;
-  }
-  if (typeof value === 'number' || typeof value === 'bigint') {
-    const num = BigInt(value);
-    const abs = num < 0 ? -num : num;
-    // Use scientific notation for very large numbers (> 10^30)
-    if (abs > BigInt('1000000000000000000000000000000')) {
-      const str = abs.toString();
-      const exp = str.length - 1;
-      const mantissa = str[0] + '.' + str.slice(1, 3);
-      return (num < 0 ? '-' : '') + mantissa + 'e' + exp;
-    }
-    // Format large numbers with commas
-    if (abs > BigInt(1000000)) {
-      return num.toLocaleString();
-    }
-    return num.toString();
-  }
-  return String(value);
 }
 
 // Format hex value for display (show full value)
