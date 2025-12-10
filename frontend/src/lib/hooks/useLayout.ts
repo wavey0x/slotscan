@@ -7,7 +7,8 @@ export function useLayout(chainId: string, address: string) {
   return useQuery({
     queryKey: ['layout', chainId, address],
     queryFn: () => fetchLayout(chainId, address),
-    staleTime: 5 * 60 * 1000,
+    staleTime: Infinity, // Layout is immutable for a contract
+    gcTime: Infinity, // Keep cached forever
     enabled: !!chainId && !!address,
   });
 }

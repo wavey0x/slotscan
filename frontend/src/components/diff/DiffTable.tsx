@@ -28,7 +28,18 @@ export function DiffTable({ chainId, address, txHash }: DiffTableProps) {
   }, [data?.slots]);
 
   if (isLoading) {
-    return <Loading />;
+    return (
+      <Loading
+        messages={[
+          'Fetching transaction',
+          'Tracing execution',
+          'Extracting SSTOREs',
+          'Matching storage slots',
+          'Decoding values',
+        ]}
+        subtitle="This may take up to 2 minutes"
+      />
+    );
   }
 
   if (error) {

@@ -1,29 +1,34 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { EtherscanLink } from '@/components/ui/EtherscanLink';
 import { truncateAddress } from '@/lib/utils';
 import { getAddressExplorerUrl } from '@/lib/constants';
 import { cn } from '@/lib/utils';
 
+export type TabType = 'layout' | 'transaction';
+
 interface ContractNavProps {
   chain: string;
   address: string;
   contractName?: string | null;
+  activeTab: TabType;
+  onTabChange: (tab: TabType) => void;
 }
 
-export function ContractNav({ chain, address, contractName }: ContractNavProps) {
-  const pathname = usePathname();
+export function ContractNav({
+  chain,
+  address,
+  contractName,
+  activeTab,
+  onTabChange,
+}: ContractNavProps) {
   const abbreviatedAddress = truncateAddress(address);
 
-  const isLayoutPage = pathname.endsWith('/layout');
-  const basePath = `/${chain}/${address}`;
-
-  const tabs = [
-    { label: 'Transactions', href: basePath, active: !isLayoutPage },
-    { label: 'Layout', href: `${basePath}/layout`, active: isLayoutPage },
+  const tabs: { label: string; value: TabType }[] = [
+    { label: 'Layout', value: 'layout' },
+    { label: 'Transaction', value: 'transaction' },
   ];
 
   return (
@@ -51,18 +56,18 @@ export function ContractNav({ chain, address, contractName }: ContractNavProps) 
         {/* Navigation tabs */}
         <nav className="flex items-center gap-1">
           {tabs.map((tab) => (
-            <Link
-              key={tab.href}
-              href={tab.href}
+            <button
+              key={tab.value}
+              onClick={() => onTabChange(tab.value)}
               className={cn(
-                'px-3 py-1.5 text-sm no-underline transition-colors',
-                tab.active
+                'px-3 py-1.5 text-sm transition-colors',
+                activeTab === tab.value
                   ? 'text-gray-900 border-b-2 border-black -mb-[1px]'
                   : 'text-gray-500 hover:text-gray-700'
               )}
             >
               {tab.label}
-            </Link>
+            </button>
           ))}
         </nav>
       </div>

@@ -5,8 +5,10 @@ import logging
 from typing import Any, Optional
 
 from web3 import Web3
+from web3.exceptions import Web3RPCError
 
 from app.config import Settings
+from app.models.errors import RPCError
 from app.models.domain import (
     DecodedValue,
     SlotValue,
@@ -86,37 +88,67 @@ class StorageReader:
         return snapshot
 
     async def read_slot(
-        self, chain_id: int, address: str, slot: int, block_number: int
+        self, chain_id: int, address: str, slot: int, block_number: int | str
     ) -> str:
         """Read a single slot value (hex string)."""
         web3 = self.web3_provider.get_web3(chain_id)
         slot_hex = hex(slot)
 
-        async with self._semaphore:
-            value = await web3.eth.get_storage_at(
-                address, slot_hex, block_identifier=block_number
-            )
+        try:
+            async with self._semaphore:
+                value = await web3.eth.get_storage_at(
+                    address, slot_hex, block_identifier=block_number
+                )
+        except Web3RPCError as e:
+            error_msg = str(e)
+            # Check for block not found error
+            if "block not found" in error_msg.lower():
+                raise RPCError(
+                    "eth_getStorageAt",
+                    f"Block {block_number} not available (node may not have historical state)"
+                )
+            raise RPCError("eth_getStorageAt", error_msg)
+        except Exception as e:
+            raise RPCError("eth_getStorageAt", str(e))
 
         return "0x" + bytes(value).hex().zfill(64)
 
     async def read_slots_batch(
         self, chain_id: int, address: str, slots: list[int], block_number: int
     ) -> dict[int, str]:
-        """Read multiple slots in parallel."""
+        """
+        Read multiple slots using JSON-RPC batching.
+
+        Uses batched RPC calls to reduce HTTP overhead (100 slots = 1 HTTP request).
+        Falls back to individual parallel calls if batching fails.
+        """
         if not slots:
             return {}
 
         unique_slots = list(set(slots))
 
+        # Try batch RPC first (much faster - 100 slots in 1 HTTP request)
+        try:
+            return await self.web3_provider.batch_get_storage_at(
+                chain_id, address, unique_slots, block_number
+            )
+        except Exception as e:
+            logger.warning(f"Batch storage read failed, falling back to individual calls: {e}")
+            return await self._read_slots_individual(chain_id, address, unique_slots, block_number)
+
+    async def _read_slots_individual(
+        self, chain_id: int, address: str, slots: list[int], block_number: int
+    ) -> dict[int, str]:
+        """Fallback: read slots individually with parallel calls."""
         tasks = [
             self.read_slot(chain_id, address, slot, block_number)
-            for slot in unique_slots
+            for slot in slots
         ]
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         slot_values = {}
-        for slot, result in zip(unique_slots, results):
+        for slot, result in zip(slots, results):
             if isinstance(result, Exception):
                 logger.warning(f"Failed to read slot {slot}: {result}")
                 slot_values[slot] = "0x" + "00" * 32
@@ -284,7 +316,7 @@ class StorageReader:
         chain_id: int,
         address: str,
         slot: int,
-        block_number: int,
+        block_number: int | str,
         layout: Optional[StorageLayout] = None,
         use_heuristic_unverified: bool = False,
     ) -> SlotValue:

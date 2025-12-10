@@ -3,14 +3,17 @@
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import { Container } from '@/components/layout/Container';
-import { ContractNav } from '@/components/layout/ContractNav';
+import { ContractNav, TabType } from '@/components/layout/ContractNav';
+import { LayoutTable } from '@/components/layout/LayoutTable';
 import { DiffTable } from '@/components/diff/DiffTable';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { EtherscanLink } from '@/components/ui/EtherscanLink';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { truncateHash, updateRecentSearchName } from '@/lib/utils';
+import { Loading } from '@/components/ui/Loading';
+import { truncateHash, updateRecentSearchName, getRecentTransactions, saveRecentTransaction, updateRecentTransactionBlock } from '@/lib/utils';
 import { getTxExplorerUrl, getBlockExplorerUrl } from '@/lib/constants';
+import { useLayout } from '@/lib/hooks/useLayout';
 import { useContract } from '@/lib/hooks/useContract';
 import { useTxDiff } from '@/lib/hooks/useTxDiff';
 
@@ -18,23 +21,176 @@ interface ContractPageProps {
   params: { chain: string; address: string };
 }
 
-// Separate component for tx diff view to use hooks properly
-function TxDiffView({ chain, address, txHash }: { chain: string; address: string; txHash: string }) {
-  const { data: contract } = useContract(chain, address);
-  const { data: diffData } = useTxDiff(chain, address, txHash);
-  const contractName = contract?.name;
+// Layout view component
+function LayoutView({
+  chain,
+  address,
+  contractName,
+}: {
+  chain: string;
+  address: string;
+  contractName?: string | null;
+}) {
+  const { data: layout, isLoading, error } = useLayout(chain, address);
 
-  // Update recent search with contract name when loaded
-  useEffect(() => {
-    if (contractName) {
-      updateRecentSearchName(chain, address, contractName);
-    }
-  }, [chain, address, contractName]);
+  if (isLoading) {
+    return (
+      <Loading
+        messages={[
+          'Fetching contract',
+          'Loading storage layout',
+          'Parsing variable types',
+        ]}
+      />
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6 border border-gray-300">
+        <div className="text-gray-900 mb-2">Storage layout not available</div>
+        <p className="text-sm text-gray-500">
+          Contract may not be verified or source code is unavailable.
+        </p>
+      </div>
+    );
+  }
+
+  if (!layout) {
+    return (
+      <div className="p-6 border border-gray-300 text-gray-500">
+        No storage layout available
+      </div>
+    );
+  }
 
   return (
-    <Container>
-      <ContractNav chain={chain} address={address} contractName={contractName} />
+    <>
+      <div className="mb-6">
+        <h1 className="text-lg font-medium text-gray-900">Storage Layout</h1>
+      </div>
+      <LayoutTable chainId={chain} address={address} layout={layout} />
+    </>
+  );
+}
 
+// Transaction input prompt
+function TransactionPrompt({
+  chain,
+  address,
+  onSubmit,
+}: {
+  chain: string;
+  address: string;
+  onSubmit: (txHash: string) => void;
+}) {
+  const [input, setInput] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [recentTx, setRecentTx] = useState<{ txHash: string; blockNumber?: number; timestamp: number }[]>([]);
+
+  // Load recent transactions on mount
+  useEffect(() => {
+    setRecentTx(getRecentTransactions(chain, address));
+  }, [chain, address]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const value = input.trim();
+
+    if (!value) {
+      setError('Please enter a transaction hash');
+      return;
+    }
+
+    if (!/^0x[a-fA-F0-9]{64}$/.test(value)) {
+      setError('Invalid transaction hash format');
+      return;
+    }
+
+    saveRecentTransaction(chain, address, value);
+    onSubmit(value);
+  };
+
+  const handleRecentClick = (txHash: string) => {
+    saveRecentTransaction(chain, address, txHash);
+    onSubmit(txHash);
+  };
+
+  return (
+    <div className="max-w-lg">
+      <h2 className="text-lg font-medium text-gray-900 mb-4">Analyze Transaction</h2>
+      <p className="text-sm text-gray-500 mb-4">
+        Enter a transaction hash to analyze storage changes made by that transaction.
+      </p>
+
+      <form onSubmit={handleSubmit} className="space-y-3">
+        <Input
+          type="text"
+          value={input}
+          onChange={(e) => {
+            setInput(e.target.value);
+            setError(null);
+          }}
+          placeholder="Transaction hash (0x...)"
+          className="w-full font-mono text-sm"
+        />
+        {error && <p className="text-red text-xs">{error}</p>}
+        <Button type="submit" variant="primary" className="w-full">
+          Analyze
+        </Button>
+      </form>
+
+      {/* Recent transactions */}
+      {recentTx.length > 0 && (
+        <div className="mt-8">
+          <div className="text-xs text-gray-500 uppercase tracking-wide mb-3">
+            Recent
+          </div>
+          <div className="border border-gray-300 divide-y divide-gray-300">
+            {recentTx.map((tx) => (
+              <button
+                key={tx.txHash}
+                onClick={() => handleRecentClick(tx.txHash)}
+                className="w-full text-left px-3 py-2 hover:bg-gray-100 transition-colors"
+              >
+                <div className="font-mono text-sm text-gray-900">
+                  {truncateHash(tx.txHash, 12)}
+                </div>
+                {tx.blockNumber && (
+                  <div className="text-xs text-gray-500">
+                    Block {tx.blockNumber.toLocaleString()}
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Transaction diff view
+function TransactionDiffView({
+  chain,
+  address,
+  txHash,
+}: {
+  chain: string;
+  address: string;
+  txHash: string;
+}) {
+  const { data: diffData } = useTxDiff(chain, address, txHash);
+
+  // Update recent transaction with block number when loaded
+  useEffect(() => {
+    if (diffData?.block_number) {
+      updateRecentTransactionBlock(chain, address, txHash, diffData.block_number);
+    }
+  }, [chain, address, txHash, diffData?.block_number]);
+
+  return (
+    <>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-lg font-medium text-gray-900">State Changes</h1>
       </div>
@@ -78,76 +234,73 @@ function TxDiffView({ chain, address, txHash }: { chain: string; address: string
       </dl>
 
       <DiffTable chainId={chain} address={address} txHash={txHash} />
-    </Container>
-  );
-}
-
-// Prompt view when no tx hash provided
-function PromptView({ chain, address }: { chain: string; address: string }) {
-  const router = useRouter();
-  const { data: contract } = useContract(chain, address);
-  const contractName = contract?.name;
-
-  const [input, setInput] = useState('');
-  const [error, setError] = useState<string | null>(null);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const value = input.trim();
-
-    if (!value) {
-      setError('Please enter a transaction hash');
-      return;
-    }
-
-    if (!/^0x[a-fA-F0-9]{64}$/.test(value)) {
-      setError('Invalid transaction hash format');
-      return;
-    }
-    router.push(`/${chain}/${address}?tx=${value}`);
-  };
-
-  return (
-    <Container>
-      <ContractNav chain={chain} address={address} contractName={contractName} />
-
-      <div className="max-w-md">
-        <h2 className="text-lg font-medium text-gray-900 mb-4">View Storage Changes</h2>
-        <p className="text-sm text-gray-500 mb-4">
-          Enter a transaction hash to analyze storage changes made by that transaction.
-        </p>
-
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <Input
-            type="text"
-            value={input}
-            onChange={(e) => {
-              setInput(e.target.value);
-              setError(null);
-            }}
-            placeholder="Transaction hash (0x...)"
-            className="w-full font-mono text-sm"
-          />
-          {error && <p className="text-red text-xs">{error}</p>}
-          <Button type="submit" variant="primary" className="w-full">
-            Analyze Transaction
-          </Button>
-        </form>
-      </div>
-    </Container>
+    </>
   );
 }
 
 export default function ContractPage({ params }: ContractPageProps) {
   const { chain, address } = params;
+  const router = useRouter();
   const searchParams = useSearchParams();
   const txHash = searchParams.get('tx');
 
-  // If tx hash provided, show transaction diff view
-  if (txHash) {
-    return <TxDiffView chain={chain} address={address} txHash={txHash} />;
-  }
+  // Determine initial tab based on URL
+  const [activeTab, setActiveTab] = useState<TabType>(txHash ? 'transaction' : 'layout');
 
-  // Otherwise prompt for tx hash
-  return <PromptView chain={chain} address={address} />;
+  // Sync tab with URL when txHash changes
+  useEffect(() => {
+    if (txHash) {
+      setActiveTab('transaction');
+    }
+  }, [txHash]);
+
+  // Fetch contract for name
+  const { data: contract } = useContract(chain, address);
+  const { data: layout } = useLayout(chain, address);
+  const contractName = contract?.name || layout?.contract_name;
+
+  // Update recent search with contract name when loaded
+  useEffect(() => {
+    if (contractName) {
+      updateRecentSearchName(chain, address, contractName);
+    }
+  }, [chain, address, contractName]);
+
+  // Handle tab change
+  const handleTabChange = (tab: TabType) => {
+    setActiveTab(tab);
+    // If switching to layout, clear the tx param from URL
+    if (tab === 'layout' && txHash) {
+      router.replace(`/${chain}/${address}`);
+    }
+  };
+
+  // Handle transaction submit from prompt
+  const handleTxSubmit = (hash: string) => {
+    router.push(`/${chain}/${address}?tx=${hash}`);
+  };
+
+  return (
+    <Container>
+      <ContractNav
+        chain={chain}
+        address={address}
+        contractName={contractName}
+        activeTab={activeTab}
+        onTabChange={handleTabChange}
+      />
+
+      {activeTab === 'layout' && (
+        <LayoutView chain={chain} address={address} contractName={contractName} />
+      )}
+
+      {activeTab === 'transaction' && !txHash && (
+        <TransactionPrompt chain={chain} address={address} onSubmit={handleTxSubmit} />
+      )}
+
+      {activeTab === 'transaction' && txHash && (
+        <TransactionDiffView chain={chain} address={address} txHash={txHash} />
+      )}
+    </Container>
+  );
 }

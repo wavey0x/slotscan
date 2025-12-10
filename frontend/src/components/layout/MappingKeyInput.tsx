@@ -21,22 +21,35 @@ interface MappingKeyInputProps {
   valueType?: StorageTypeResponse;
   chainId: string;
   address: string;
-  block: number | 'latest';
   lookups: ComputedSlotLookup[];
   onLookup: (lookup: ComputedSlotLookup) => void;
 }
 
-function formatDecodedValue(value: unknown): string {
-  if (value === null || value === undefined) return '-';
-  if (typeof value === 'boolean') return value ? 'true' : 'false';
-  if (typeof value === 'bigint') return value.toString();
-  if (typeof value === 'number') return value.toLocaleString();
-  if (typeof value === 'string') {
-    if (value === '0x0000000000000000000000000000000000000000') return '0x0...0';
-    return value;
+function formatDecodedValue(value: unknown, rawValue?: string): string {
+  if (value !== null && value !== undefined) {
+    if (typeof value === 'boolean') return value ? 'true' : 'false';
+    if (typeof value === 'bigint') return value.toString();
+    if (typeof value === 'number') return value.toLocaleString();
+    if (typeof value === 'string') {
+      if (value === '0x0000000000000000000000000000000000000000') return '0x0...0';
+      return value;
+    }
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
   }
-  if (typeof value === 'object') return JSON.stringify(value);
-  return String(value);
+  // Fall back to raw value interpretation
+  if (rawValue) {
+    // Check if all zeros
+    if (rawValue === '0x' + '0'.repeat(64)) return '0';
+    // Try to interpret as uint256
+    try {
+      const bigVal = BigInt(rawValue);
+      return bigVal.toString();
+    } catch {
+      return rawValue;
+    }
+  }
+  return '-';
 }
 
 function truncateSlot(slot: string): string {
@@ -50,7 +63,6 @@ export function MappingKeyInput({
   valueType,
   chainId,
   address,
-  block,
   lookups,
   onLookup,
 }: MappingKeyInputProps) {
@@ -77,12 +89,6 @@ export function MappingKeyInput({
       }
     }
 
-    // Check block
-    if (block === 'latest') {
-      setError('Enter a block number first');
-      return;
-    }
-
     setIsLoading(true);
     setError(null);
 
@@ -105,8 +111,8 @@ export function MappingKeyInput({
 
       const slotHex = slotToHex(computedSlot);
 
-      // Fetch the value
-      const result = await fetchSlotValue(chainId, address, slotHex, block);
+      // Fetch the value at latest block
+      const result = await fetchSlotValue(chainId, address, slotHex, 'latest');
 
       // Add to lookups
       onLookup({
@@ -207,7 +213,7 @@ export function MappingKeyInput({
                     </td>
                     <td className="py-1.5 px-1">
                       <HoverCell
-                        display={formatDecodedValue(lookup.decodedValue)}
+                        display={formatDecodedValue(lookup.decodedValue, lookup.rawValue)}
                         value={lookup.rawValue}
                         chainId={chainId}
                         colorClass={cn(

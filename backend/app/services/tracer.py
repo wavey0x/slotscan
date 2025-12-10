@@ -1,5 +1,6 @@
 """Transaction tracer for extracting storage changes from transactions."""
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -16,6 +17,7 @@ from app.models.domain import (
 )
 from app.models.errors import RPCError, TraceNotAvailableError, TransactionNotFoundError
 from app.repositories.cache import CacheRepository
+from app.repositories.trace_cache import TraceCacheRepository, CachedTraceData
 from app.services.decoder import TypeDecoder
 from app.services.web3_provider import Web3Provider
 # Note: compute_mapping_slot etc. removed - using preimage lookup instead of brute-force
@@ -32,11 +34,13 @@ class TransactionTracer:
         settings: Settings,
         decoder: TypeDecoder,
         cache_repo: Optional[CacheRepository] = None,
+        trace_cache_repo: Optional[TraceCacheRepository] = None,
     ):
         self.web3_provider = web3_provider
         self.settings = settings
         self.decoder = decoder
         self.cache_repo = cache_repo
+        self.trace_cache_repo = trace_cache_repo
 
     async def trace_transaction(
         self,
@@ -50,25 +54,63 @@ class TransactionTracer:
         Trace a transaction and extract storage changes for a contract.
 
         Uses debug_traceTransaction with prestateTracer.
+        Caches raw trace data (after RPC, before decoding) for fast repeated access.
         """
         contract_address = Web3.to_checksum_address(contract_address)
 
-        # Check cache first
-        # Cache disabled for testing; always compute fresh
+        # Check trace cache first (raw data before decoding)
+        # This skips expensive RPC calls (~80% of time) on cache hit
+        cached_trace = None
+        if self.trace_cache_repo:
+            cached_trace = await self.trace_cache_repo.get(chain_id, tx_hash, contract_address)
 
-        # Get block number
-        block_number = await self.get_transaction_block(chain_id, tx_hash)
+        if cached_trace:
+            # Cache hit - decode from cached raw data
+            logger.info(f"Trace cache HIT for {tx_hash[:10]}... - skipping RPC calls")
 
-        # Execute trace
-        try:
-            trace_result = await self._execute_trace(chain_id, tx_hash)
-        except TraceNotAvailableError:
-            # Return degraded response
-            diff = TransactionDiff(
+            raw_changes = cached_trace.raw_changes
+            preimage_lookup = cached_trace.preimage_lookup
+            block_number = cached_trace.block_number
+            execution_order_available = True  # Cached data has execution order
+
+            # Apply limits
+            is_complete = len(raw_changes) <= self.settings.max_sstore_ops
+            if not is_complete:
+                raw_changes = raw_changes[: self.settings.max_sstore_ops]
+
+            # Decode and return
+            decoded_changes = self._decode_changes(raw_changes, layout, preimage_lookup)
+
+            return TransactionDiff(
                 chain_id=chain_id,
                 contract_address=contract_address,
                 tx_hash=tx_hash,
                 block_number=block_number,
+                changes=decoded_changes,
+                is_complete=is_complete,
+                layout=layout,
+                trace_unavailable=False,
+                execution_order_available=execution_order_available,
+            )
+
+        # Cache miss - execute expensive RPC calls
+        logger.info(f"Trace cache MISS for {tx_hash[:10]}... - executing RPC calls")
+
+        # Parallelize independent RPC calls (prestateTracer + receipt)
+        # This saves ~500ms-2s compared to sequential execution
+        try:
+            trace_result, receipt = await asyncio.gather(
+                self._execute_trace(chain_id, tx_hash),
+                self._get_receipt(chain_id, tx_hash),
+            )
+        except TraceNotAvailableError:
+            # Need block number for degraded response - get from receipt
+            receipt = await self._get_receipt(chain_id, tx_hash)
+            diff = TransactionDiff(
+                chain_id=chain_id,
+                contract_address=contract_address,
+                tx_hash=tx_hash,
+                block_number=receipt["blockNumber"],
                 changes=[],
                 is_complete=False,
                 layout=layout,
@@ -76,8 +118,6 @@ class TransactionTracer:
             )
             return diff
 
-        # Get receipt for block number
-        receipt = await self._get_receipt(chain_id, tx_hash)
         block_number = receipt["blockNumber"]
         prestate_changes = self._extract_contract_changes(trace_result, contract_address)
 
@@ -110,11 +150,13 @@ class TransactionTracer:
         # Build changes from SSTORE trace (preferred - captures all writes with real execution order)
         # or fall back to prestateTracer (only captures first→last per slot, no execution order)
         execution_order_available = False
+        trace_step_count = 0
         if sstore_trace:
             raw_changes, had_unknown_sstores = self._build_changes_from_sstore_trace(
                 sstore_trace, trace_result, contract_address
             )
             execution_order_available = True  # We have real SSTORE step numbers for captured slots
+            trace_step_count = len(sstore_trace) + len(sha3_trace)
         else:
             # No SSTORE trace; fall back to prestateTracer diff (no steps)
             raw_changes = [
@@ -122,6 +164,24 @@ class TransactionTracer:
                 for i, (slot, old, new) in enumerate(prestate_changes)
             ]
             execution_order_available = False
+
+        # Save to trace cache (before decoding, after RPC)
+        # This caches raw-ish data so decoding logic changes don't invalidate cache
+        # Note: Cache even empty results to avoid re-running expensive RPC calls
+        if self.trace_cache_repo:
+            try:
+                await self.trace_cache_repo.save(CachedTraceData(
+                    chain_id=chain_id,
+                    tx_hash=tx_hash,
+                    contract_address=contract_address,
+                    block_number=block_number,
+                    raw_changes=raw_changes,
+                    preimage_lookup=preimage_lookup,
+                    trace_step_count=trace_step_count,
+                ))
+            except Exception as e:
+                # Don't fail the request if cache save fails
+                logger.warning(f"Failed to save trace to cache: {e}")
 
         # Check limits
         is_complete = len(raw_changes) <= self.settings.max_sstore_ops

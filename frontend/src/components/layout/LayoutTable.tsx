@@ -8,14 +8,12 @@ import { LayoutRow } from './LayoutRow';
 interface LayoutTableProps {
   chainId: string;
   address: string;
-  block: number | 'latest';
   layout: StorageLayoutResponse;
 }
 
 export function LayoutTable({
   chainId,
   address,
-  block,
   layout,
 }: LayoutTableProps) {
   const [showHex, setShowHex] = useState(false);
@@ -58,7 +56,6 @@ export function LayoutTable({
               types={layout.types}
               chainId={chainId}
               address={address}
-              block={block}
               showHex={showHex}
             />
           ))}

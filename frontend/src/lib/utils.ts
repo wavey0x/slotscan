@@ -125,6 +125,55 @@ export function updateRecentSearchName(chain: string, address: string, name: str
   }
 }
 
+// Recent transactions per contract
+const RECENT_TX_KEY = 'slotscan_recent_tx';
+const MAX_RECENT_TX = 5;
+
+export interface RecentTransaction {
+  txHash: string;
+  blockNumber?: number;
+  timestamp: number;
+}
+
+function getRecentTxKey(chain: string, address: string): string {
+  return `${RECENT_TX_KEY}_${chain}_${address.toLowerCase()}`;
+}
+
+export function saveRecentTransaction(chain: string, address: string, txHash: string, blockNumber?: number) {
+  try {
+    const key = getRecentTxKey(chain, address);
+    const existing = getRecentTransactions(chain, address);
+    const filtered = existing.filter((t) => t.txHash.toLowerCase() !== txHash.toLowerCase());
+    const updated = [{ txHash, blockNumber, timestamp: Date.now() }, ...filtered].slice(0, MAX_RECENT_TX);
+    localStorage.setItem(key, JSON.stringify(updated));
+  } catch {
+    // localStorage not available
+  }
+}
+
+export function updateRecentTransactionBlock(chain: string, address: string, txHash: string, blockNumber: number) {
+  try {
+    const key = getRecentTxKey(chain, address);
+    const existing = getRecentTransactions(chain, address);
+    const updated = existing.map((t) =>
+      t.txHash.toLowerCase() === txHash.toLowerCase() ? { ...t, blockNumber } : t
+    );
+    localStorage.setItem(key, JSON.stringify(updated));
+  } catch {
+    // localStorage not available
+  }
+}
+
+export function getRecentTransactions(chain: string, address: string): RecentTransaction[] {
+  try {
+    const key = getRecentTxKey(chain, address);
+    const stored = localStorage.getItem(key);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Parse a variable path like "rewardData[0x...]" or "accountData[?]" into components
  * Now accepts optional API-provided mapping data for direct use

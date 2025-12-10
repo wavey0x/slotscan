@@ -10,6 +10,7 @@ from app.config import Settings, get_settings
 from app.db import get_session
 from app.repositories.cache import CacheRepository
 from app.repositories.contracts import ContractRepository
+from app.repositories.trace_cache import TraceCacheRepository
 from app.services.decoder import TypeDecoder
 from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
@@ -56,6 +57,13 @@ async def get_cache_repository(
     )
 
 
+async def get_trace_cache_repository(
+    session: AsyncSession = Depends(get_session),
+) -> TraceCacheRepository:
+    """Get TraceCacheRepository with session."""
+    return TraceCacheRepository(session)
+
+
 async def get_contract_resolver(
     web3_provider: Web3Provider = Depends(get_web3_provider),
     settings: Settings = Depends(get_settings),
@@ -91,6 +99,7 @@ async def get_transaction_tracer(
     settings: Settings = Depends(get_settings),
     decoder: TypeDecoder = Depends(get_decoder),
     cache_repo: CacheRepository = Depends(get_cache_repository),
+    trace_cache_repo: TraceCacheRepository = Depends(get_trace_cache_repository),
 ) -> TransactionTracer:
     """Get TransactionTracer with dependencies."""
     return TransactionTracer(
@@ -98,4 +107,5 @@ async def get_transaction_tracer(
         settings=settings,
         decoder=decoder,
         cache_repo=cache_repo,
+        trace_cache_repo=trace_cache_repo,
     )

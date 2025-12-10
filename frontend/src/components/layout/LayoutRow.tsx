@@ -16,7 +16,6 @@ interface LayoutRowProps {
   types: Record<string, StorageTypeResponse>;
   chainId: string;
   address: string;
-  block: number | 'latest';
   showHex: boolean;
 }
 
@@ -30,7 +29,6 @@ export function LayoutRow({
   types,
   chainId,
   address,
-  block,
   showHex,
 }: LayoutRowProps) {
   const [expanded, setExpanded] = useState(false);
@@ -190,7 +188,6 @@ export function LayoutRow({
               valueType={getFinalValueType()}
               chainId={chainId}
               address={address}
-              block={block}
               lookups={lookups}
               onLookup={handleLookup}
             />
@@ -209,7 +206,6 @@ export function LayoutRow({
               arrayLength={staticArrayLength}
               chainId={chainId}
               address={address}
-              block={block}
               lookups={lookups}
               onLookup={handleLookup}
             />

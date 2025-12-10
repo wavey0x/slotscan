@@ -8,6 +8,7 @@ interface LoadingProps {
   messages?: string[];
   interval?: number;
   className?: string;
+  subtitle?: string;
 }
 
 const defaultMessages = [
@@ -25,7 +26,8 @@ export function Loading({
   message,
   messages = defaultMessages,
   interval = 600,
-  className
+  className,
+  subtitle
 }: LoadingProps) {
   const [messageIndex, setMessageIndex] = useState(0);
 
@@ -50,6 +52,11 @@ export function Loading({
         <div className="text-gray-500 text-sm transition-opacity duration-150">
           {displayMessage}
         </div>
+        {subtitle && (
+          <div className="text-gray-400 text-xs mt-2">
+            {subtitle}
+          </div>
+        )}
       </div>
     </div>
   );

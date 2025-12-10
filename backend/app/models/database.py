@@ -95,3 +95,41 @@ class TxDiffCache(Base):
         Index("idx_tx_diffs_lookup", chain_id, contract_address, tx_hash, unique=True),
         Index("idx_tx_diffs_block", chain_id, contract_address, block_number),
     )
+
+
+class CachedTrace(Base):
+    """Cached raw trace data (before decoding).
+
+    Stores the raw-ish trace data after RPC calls but before variable resolution.
+    This is future-proof: decoding logic changes don't invalidate cache.
+    """
+
+    __tablename__ = "cached_traces"
+
+    id = Column(Integer, primary_key=True)
+    chain_id = Column(Integer, nullable=False)
+    tx_hash = Column(String(66), nullable=False)
+    contract_address = Column(String(42), nullable=False)
+    block_number = Column(BigInteger, nullable=False)
+
+    # Raw trace data (JSONB for flexibility)
+    # raw_changes: List of [slot, old_value, new_value, pc, exec_index]
+    raw_changes = Column(JSONB, nullable=False)
+    # preimage_lookup: Dict of {hash: preimage} for mapping key resolution
+    preimage_lookup = Column(JSONB, nullable=False)
+
+    # Metadata
+    trace_step_count = Column(Integer)  # For debugging/monitoring
+    change_count = Column(Integer)
+
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index(
+            "idx_cached_traces_lookup",
+            chain_id,
+            tx_hash,
+            contract_address,
+            unique=True,
+        ),
+    )

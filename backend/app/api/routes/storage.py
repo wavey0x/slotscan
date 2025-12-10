@@ -133,7 +133,7 @@ async def get_slot(
     chain_id: int,
     address: str,
     slot: str,
-    block: int = Query(..., ge=0, description="Block number"),
+    block: str = Query(..., description="Block number or 'latest'"),
     heuristic: bool = Query(False, description="Enable heuristic decode for unverified"),
     resolver: ContractResolver = Depends(get_contract_resolver),
     layout_parser: LayoutParser = Depends(get_layout_parser),
@@ -143,7 +143,21 @@ async def get_slot(
     Get a single slot value.
 
     Slot can be provided as hex (0x...) or decimal.
+    Block can be a number or 'latest'.
     """
+    # Parse block
+    if block.lower() == "latest":
+        block_number = "latest"
+    else:
+        try:
+            block_number = int(block)
+            if block_number < 0:
+                raise ValueError()
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Invalid block format", "code": "INVALID_BLOCK"},
+            )
     # Parse slot
     try:
         if slot.startswith("0x"):
@@ -201,10 +215,9 @@ async def get_slot(
 
     return SlotValueResponse(
         slot=hex(slot_int),
-        raw_value=result.raw_value,
+        value_encoded=result.raw_value,
+        value_decoded=result.decoded_value.decoded if result.decoded_value else None,
         variable_name=result.variable.name if result.variable else None,
         variable_path=result.variable_path,
         type_label=result.variable.label if result.variable else None,
-        decoded_value=result.decoded_value.decoded if result.decoded_value else None,
-        display_value=result.decoded_value.display if result.decoded_value else None,
     )

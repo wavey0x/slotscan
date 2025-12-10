@@ -11,6 +11,7 @@ export function Providers({ children }: { children: ReactNode }) {
           queries: {
             refetchOnWindowFocus: false,
             retry: 1,
+            gcTime: 30 * 60 * 1000, // Keep inactive query data for 30 minutes
           },
         },
       })

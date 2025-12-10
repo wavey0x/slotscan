@@ -7,7 +7,8 @@ export function useContract(chainId: string, address: string) {
   return useQuery({
     queryKey: ['contract', chainId, address],
     queryFn: () => fetchContract(chainId, address),
-    staleTime: 5 * 60 * 1000,
+    staleTime: Infinity, // Contract metadata is immutable
+    gcTime: Infinity, // Keep cached forever
     enabled: !!chainId && !!address,
   });
 }
