@@ -12,6 +12,18 @@ const mono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: 'SlotScan',
   description: 'Ethereum smart contract storage analyzer',
+  metadataBase: new URL('https://slotscan.io'),
+  openGraph: {
+    title: 'SlotScan',
+    description: 'Ethereum smart contract storage analyzer',
+    siteName: 'SlotScan',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'SlotScan',
+    description: 'Ethereum smart contract storage analyzer',
+  },
 };
 
 export default function RootLayout({
