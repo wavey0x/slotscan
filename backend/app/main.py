@@ -26,7 +26,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     # Startup
-    logger.info("Starting StorageScan API...")
+    logger.info("Starting SlotScan API...")
 
     # Create tables if they don't exist (dev mode)
     settings = get_settings()
@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    logger.info("Shutting down StorageScan API...")
+    logger.info("Shutting down SlotScan API...")
     await engine.dispose()
 
 
@@ -47,7 +47,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
 
     app = FastAPI(
-        title="StorageScan API",
+        title="SlotScan API",
         description="Ethereum storage analyzer API",
         version="1.0.0",
         docs_url="/api/slotscan/docs",
@@ -81,7 +81,7 @@ def create_app() -> FastAPI:
     @app.get("/")
     async def root():
         return {
-            "name": "StorageScan API",
+            "name": "SlotScan API",
             "version": "1.0.0",
             "docs": "/api/slotscan/docs",
         }

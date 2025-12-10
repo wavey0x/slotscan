@@ -1,6 +1,6 @@
-# StorageScan Next Steps
+# SlotScan Next Steps
 
-This document outlines potential enhancements and improvements for StorageScan beyond the MVP implementation.
+This document outlines potential enhancements and improvements for SlotScan beyond the MVP implementation.
 
 ## Current Status: MVP Complete
 

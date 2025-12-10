@@ -1,6 +1,5 @@
 """Database connection and session management."""
 
-from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -25,16 +24,6 @@ async_session_factory = async_sessionmaker(
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     """Get database session for dependency injection."""
-    async with async_session_factory() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
-
-
-@asynccontextmanager
-async def get_session_context() -> AsyncGenerator[AsyncSession, None]:
-    """Get database session as context manager."""
     async with async_session_factory() as session:
         try:
             yield session

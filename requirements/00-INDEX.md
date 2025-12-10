@@ -1,6 +1,6 @@
-# StorageScan Service Requirements Index
+# SlotScan Service Requirements Index
 
-This directory contains detailed requirements for each service/module in the StorageScan application. Scope is lean MVP: single FastAPI service, Postgres as the only cache/persistence layer (JSONB blobs), no Redis, no background workers, and on-demand computation per request.
+This directory contains detailed requirements for each service/module in the SlotScan application. Scope is lean MVP: single FastAPI service, Postgres as the only cache/persistence layer (JSONB blobs), no Redis, no background workers, and on-demand computation per request.
 
 ## Service Checklist
 

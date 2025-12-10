@@ -457,6 +457,11 @@ def _group_changes_by_slot(
         first = slot_change_list[0]
         last = slot_change_list[-1]
 
+        # Cache the variable's type lookup to avoid repeated regex-based synthesis
+        first_var_type = None
+        if layout and first.variable:
+            first_var_type = layout.get_type(first.variable.type_id)
+
         # Build interim changes list
         interim_changes = [
             StorageChangeResponse(
@@ -518,17 +523,16 @@ def _group_changes_by_slot(
             # Check if this variable IS a struct (not a mapping to a struct)
             # This handles cases like `CurrentRateInfo currentRateInfo` where the variable itself is a struct
             if struct_definition is None:
-                var_type = layout.get_type(first.variable.type_id)
-                if var_type and var_type.members:
+                if first_var_type and first_var_type.members:
                     # This is a struct type - build struct_definition from its members
-                    struct_name = var_type.label
+                    struct_name = first_var_type.label
                     if "." in struct_name:
                         struct_name = struct_name.rsplit(".", 1)[1]
                     if struct_name.startswith("struct "):
                         struct_name = struct_name[7:]
 
                     members = []
-                    for member in var_type.members:
+                    for member in first_var_type.members:
                         member_type = layout.get_type(member.type_id)
                         members.append(
                             StructMemberResponse(
@@ -652,15 +656,14 @@ def _group_changes_by_slot(
                 and not first.is_mapping
                 and first.encoding != "dynamic_array"
             ):
-                var_type = layout.get_type(first.variable.type_id)
-                if var_type and var_type.members:
+                if first_var_type and first_var_type.members:
                     # Calculate which slot offset within the struct this change represents
                     try:
                         current_slot = int(slot, 16) if slot.startswith("0x") else int(slot)
                         struct_slot_offset = current_slot - first.variable.slot
 
                         # Find members in this slot offset
-                        slot_members = [m for m in var_type.members if m.slot == struct_slot_offset]
+                        slot_members = [m for m in first_var_type.members if m.slot == struct_slot_offset]
 
                         if len(slot_members) > 0:
                             packed_fields = []
@@ -713,7 +716,7 @@ def _group_changes_by_slot(
                 variable_path=first.variable_path,
                 type_label=_normalize_contract_label(
                     first.variable.label if first.variable else None,
-                    layout.get_type(first.variable.type_id).kind if (layout and first.variable and layout.get_type(first.variable.type_id)) else None
+                    first_var_type.kind if first_var_type else None
                 ) if first.variable else None,
                 params=params,
                 mapping_base_slot=first.mapping_base_slot,

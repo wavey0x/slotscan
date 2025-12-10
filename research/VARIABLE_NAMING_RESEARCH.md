@@ -1,6 +1,6 @@
 # Variable Naming Research
 
-This document tracks issues and findings related to storage variable name resolution in StorageScan.
+This document tracks issues and findings related to storage variable name resolution in SlotScan.
 
 ## Fixed Issues
 

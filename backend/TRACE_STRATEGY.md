@@ -1,10 +1,10 @@
-# StorageScan Trace Strategy
+# SlotScan Trace Strategy
 
-This document describes how StorageScan traces Ethereum transactions to extract storage changes, including the RPC calls made, their purposes, and how results are merged.
+This document describes how SlotScan traces Ethereum transactions to extract storage changes, including the RPC calls made, their purposes, and how results are merged.
 
 ## Overview
 
-StorageScan uses a multi-pass tracing strategy to extract complete, decoded storage changes from transactions. The approach combines:
+SlotScan uses a multi-pass tracing strategy to extract complete, decoded storage changes from transactions. The approach combines:
 
 1. **prestateTracer** - Reliable source of truth for which slots changed
 2. **Custom JS/structLogs tracer** - Execution order and mapping key resolution

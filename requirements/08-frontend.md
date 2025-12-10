@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Frontend is a Next.js 14+ application providing the user interface for StorageScan. It features a minimalist design focused on displaying storage layouts and transaction diffs clearly. MVP focus: desktop-first, deep links, layout tree, tx diff table, raw/decoded toggle, and clear degraded states (hex-only, trace unavailable). Charts/exports are out of scope.
+The Frontend is a Next.js 14+ application providing the user interface for SlotScan. It features a minimalist design focused on displaying storage layouts and transaction diffs clearly. MVP focus: desktop-first, deep links, layout tree, tx diff table, raw/decoded toggle, and clear degraded states (hex-only, trace unavailable). Charts/exports are out of scope.
 
 ## Implementation Status: ✅ Complete
 
@@ -119,7 +119,7 @@ export default function HomePage() {
   return (
     <Container>
       <div className="flex flex-col items-center justify-center min-h-[60vh]">
-        <h1 className="text-3xl font-light mb-8">StorageScan</h1>
+        <h1 className="text-3xl font-light mb-8">SlotScan</h1>
         <SearchForm />
         <RecentSearches className="mt-12" />
       </div>

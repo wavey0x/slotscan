@@ -1,4 +1,4 @@
-# StorageScan - Ethereum Storage Analyzer
+# SlotScan - Ethereum Storage Analyzer
 
 A minimalist tool for analyzing smart contract storage layouts, current values, and historical changes across EVM-compatible chains.
 
@@ -67,7 +67,7 @@ Given `(chain, address, block OR transaction)`, provide:
 > "I was told that a protocol's `maxWithdrawal` limit was changed right before I tried to withdraw, causing my transaction to fail. The variable is private so I can't just call a getter. I want to check what the value was at a specific block to verify this claim."
 
 **User Journey:**
-1. User navigates to StorageScan
+1. User navigates to SlotScan
 2. Enters the protocol's contract address
 3. Enters the block number they care about
 4. Sees the full storage layout with decoded values
@@ -92,7 +92,7 @@ Given `(chain, address, block OR transaction)`, provide:
 > "A protocol was exploited in a complex transaction involving flash loans and multiple internal calls. I need to quickly see which storage slots were modified during this transaction to understand the attack vector."
 
 **User Journey:**
-1. Researcher navigates to StorageScan
+1. Researcher navigates to SlotScan
 2. Enters the victim contract address
 3. Pastes the exploit transaction hash
 4. Sees a clear list of all storage changes in that transaction:
@@ -183,7 +183,7 @@ Given `(chain, address, block OR transaction)`, provide:
 ### Project Structure
 
 ```
-storagescan/
+slotscan/
 ├── backend/
 │   ├── app/
 │   │   ├── __init__.py
@@ -597,7 +597,7 @@ For unverified contracts, show "raw slot view" only:
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│  StorageScan                                          [chain ▼]   │
+│  SlotScan                                             [chain ▼]   │
 ├────────────────────────────────────────────────────────────────────┤
 │                                                                    │
 │         ┌──────────────────────────────────────────────┐          │
@@ -623,7 +623,7 @@ For unverified contracts, show "raw slot view" only:
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│  StorageScan    [← Back]                              [chain ▼]   │
+│  SlotScan       [← Back]                              [chain ▼]   │
 ├────────────────────────────────────────────────────────────────────┤
 │                                                                    │
 │  0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48                       │
@@ -898,16 +898,16 @@ GET  /api/v1/contracts/{chainId}/{address}/range?from={block}&to={block}&mode={n
 
 ```bash
 # Get contract info
-storagescan info --chain mainnet --address 0x...
+slotscan info --chain mainnet --address 0x...
 
 # View storage layout
-storagescan layout --chain mainnet --address 0x... --block latest
+slotscan layout --chain mainnet --address 0x... --block latest
 
 # View transaction diff
-storagescan diff --chain mainnet --address 0x... --tx 0x...
+slotscan diff --chain mainnet --address 0x... --tx 0x...
 
 # View block changes
-storagescan changes --chain mainnet --address 0x... --from 19234000 --to 19234567
+slotscan changes --chain mainnet --address 0x... --from 19234000 --to 19234567
 ```
 
 ### 12.3 Block Range Queries

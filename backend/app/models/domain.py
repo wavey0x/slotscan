@@ -1,7 +1,20 @@
-"""Domain models for StorageScan."""
+"""Domain models for SlotScan."""
 
+import re
 from dataclasses import dataclass, field, asdict
 from typing import Optional, Any
+
+# Pre-compiled regex patterns for type synthesis (performance optimization)
+_UINT_PATTERN = re.compile(r'^t_uint(\d+)$')
+_INT_PATTERN = re.compile(r'^t_int(\d+)$')
+_BYTES_PATTERN = re.compile(r'^t_bytes(\d+)$')
+_HASHMAP_PATTERN = re.compile(r'^HashMap\[(.+),\s*(.+)\]$')
+_DYNARRAY_PATTERN = re.compile(r'^DynArray\[(.+),\s*(\d+)\]$')
+_STATIC_ARRAY_PATTERN = re.compile(r'^(.+)\[(\d+)\]$')
+# Vyper patterns (without t_ prefix)
+_VYPER_UINT_PATTERN = re.compile(r'^uint(\d+)$')
+_VYPER_INT_PATTERN = re.compile(r'^int(\d+)$')
+_VYPER_BYTES_PATTERN = re.compile(r'^bytes(\d+)$')
 
 
 @dataclass
@@ -132,14 +145,16 @@ class StorageLayout:
             return self.types[type_id]
 
         # Synthesize common primitive types if not in dictionary
-        return self._synthesize_primitive_type(type_id)
+        synthesized = self._synthesize_primitive_type(type_id)
+        if synthesized:
+            # Cache synthesized type to avoid repeated regex matching
+            self.types[type_id] = synthesized
+        return synthesized
 
     def _synthesize_primitive_type(self, type_id: str) -> Optional[StorageType]:
         """Create StorageType for common primitive types not in the types dict."""
-        import re
-
         # uint types: t_uint8, t_uint16, ..., t_uint256
-        uint_match = re.match(r'^t_uint(\d+)$', type_id)
+        uint_match = _UINT_PATTERN.match(type_id)
         if uint_match:
             bits = int(uint_match.group(1))
             return StorageType(
@@ -151,7 +166,7 @@ class StorageLayout:
             )
 
         # int types: t_int8, t_int16, ..., t_int256
-        int_match = re.match(r'^t_int(\d+)$', type_id)
+        int_match = _INT_PATTERN.match(type_id)
         if int_match:
             bits = int(int_match.group(1))
             return StorageType(
@@ -193,7 +208,7 @@ class StorageLayout:
             )
 
         # bytesN types: t_bytes1, t_bytes2, ..., t_bytes32
-        bytes_match = re.match(r'^t_bytes(\d+)$', type_id)
+        bytes_match = _BYTES_PATTERN.match(type_id)
         if bytes_match:
             n = int(bytes_match.group(1))
             return StorageType(
@@ -227,7 +242,7 @@ class StorageLayout:
         # --- Vyper type synthesis ---
 
         # Vyper HashMap: HashMap[key_type, value_type]
-        hashmap_match = re.match(r'^HashMap\[(.+),\s*(.+)\]$', type_id)
+        hashmap_match = _HASHMAP_PATTERN.match(type_id)
         if hashmap_match:
             return StorageType(
                 id=type_id,
@@ -240,7 +255,7 @@ class StorageLayout:
             )
 
         # Vyper DynArray: DynArray[element_type, max_len]
-        dynarray_match = re.match(r'^DynArray\[(.+),\s*(\d+)\]$', type_id)
+        dynarray_match = _DYNARRAY_PATTERN.match(type_id)
         if dynarray_match:
             return StorageType(
                 id=type_id,
@@ -253,7 +268,7 @@ class StorageLayout:
             )
 
         # Vyper static array: type[length] e.g. uint256[10]
-        static_array_match = re.match(r'^(.+)\[(\d+)\]$', type_id)
+        static_array_match = _STATIC_ARRAY_PATTERN.match(type_id)
         if static_array_match:
             element_type = static_array_match.group(1).strip()
             length = int(static_array_match.group(2))
@@ -290,7 +305,7 @@ class StorageLayout:
             )
 
         # Vyper uint types: uint8, uint16, ..., uint256
-        vyper_uint_match = re.match(r'^uint(\d+)$', type_id)
+        vyper_uint_match = _VYPER_UINT_PATTERN.match(type_id)
         if vyper_uint_match:
             bits = int(vyper_uint_match.group(1))
             return StorageType(
@@ -302,7 +317,7 @@ class StorageLayout:
             )
 
         # Vyper int types: int8, int16, ..., int256
-        vyper_int_match = re.match(r'^int(\d+)$', type_id)
+        vyper_int_match = _VYPER_INT_PATTERN.match(type_id)
         if vyper_int_match:
             bits = int(vyper_int_match.group(1))
             return StorageType(
@@ -314,7 +329,7 @@ class StorageLayout:
             )
 
         # Vyper bytes types: bytes1, bytes2, ..., bytes32
-        vyper_bytes_match = re.match(r'^bytes(\d+)$', type_id)
+        vyper_bytes_match = _VYPER_BYTES_PATTERN.match(type_id)
         if vyper_bytes_match:
             n = int(vyper_bytes_match.group(1))
             return StorageType(

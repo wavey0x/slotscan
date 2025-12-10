@@ -605,7 +605,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
 
     app = FastAPI(
-        title="StorageScan API",
+        title="SlotScan API",
         description="Ethereum storage analyzer API",
         version="1.0.0",
         docs_url="/api/docs",
@@ -698,7 +698,7 @@ class Settings(BaseSettings):
     cors_origins: List[str] = ["http://localhost:3000"]
 
     # Database
-    database_url: str = "postgresql+asyncpg://wavey@localhost:5432/storagescan_dev"
+    database_url: str = "postgresql+asyncpg://wavey@localhost:5432/slotscan_dev"
 
     # RPC endpoints
     rpc_urls: dict = {

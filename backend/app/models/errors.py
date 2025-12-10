@@ -1,13 +1,13 @@
-"""Custom exceptions for StorageScan."""
+"""Custom exceptions for SlotScan."""
 
 
-class StorageScanError(Exception):
-    """Base exception for StorageScan."""
+class SlotScanError(Exception):
+    """Base exception for SlotScan."""
 
     pass
 
 
-class NotAContractError(StorageScanError):
+class NotAContractError(SlotScanError):
     """Raised when address has no bytecode."""
 
     def __init__(self, address: str):
@@ -15,7 +15,7 @@ class NotAContractError(StorageScanError):
         super().__init__(f"No contract code at {address}")
 
 
-class RPCError(StorageScanError):
+class RPCError(SlotScanError):
     """Raised when RPC call fails."""
 
     def __init__(self, method: str, error: str):
@@ -24,13 +24,25 @@ class RPCError(StorageScanError):
         super().__init__(f"RPC {method} failed: {error}")
 
 
-class CompilationError(StorageScanError):
+class CompilationError(SlotScanError):
     """Raised when solc compilation fails."""
 
     pass
 
 
-class LayoutNotFoundError(StorageScanError):
+class UnsupportedCompilerVersionError(SlotScanError):
+    """Raised when compiler version doesn't support storage layout output."""
+
+    def __init__(self, version: str, min_version: str = "0.5.13"):
+        self.version = version
+        self.min_version = min_version
+        super().__init__(
+            f"Storage layout not available for contracts compiled with Solidity {version}. "
+            f"This feature requires Solidity {min_version} or later."
+        )
+
+
+class LayoutNotFoundError(SlotScanError):
     """Raised when contract not found in compiler output."""
 
     def __init__(self, contract_name: str):
@@ -38,7 +50,7 @@ class LayoutNotFoundError(StorageScanError):
         super().__init__(f"Storage layout not found for {contract_name}")
 
 
-class TransactionNotFoundError(StorageScanError):
+class TransactionNotFoundError(SlotScanError):
     """Raised when transaction doesn't exist."""
 
     def __init__(self, tx_hash: str):
@@ -46,7 +58,7 @@ class TransactionNotFoundError(StorageScanError):
         super().__init__(f"Transaction not found: {tx_hash}")
 
 
-class TraceNotAvailableError(StorageScanError):
+class TraceNotAvailableError(SlotScanError):
     """Raised when node doesn't support tracing."""
 
     def __init__(self, reason: str):
@@ -54,7 +66,7 @@ class TraceNotAvailableError(StorageScanError):
         super().__init__(f"Tracing not available: {reason}")
 
 
-class DecodeError(StorageScanError):
+class DecodeError(SlotScanError):
     """Raised when decoding fails."""
 
     def __init__(self, type_label: str, reason: str):
@@ -63,7 +75,7 @@ class DecodeError(StorageScanError):
         super().__init__(f"Failed to decode {type_label}: {reason}")
 
 
-class SlotLimitExceeded(StorageScanError):
+class SlotLimitExceeded(SlotScanError):
     """Raised when too many slots requested."""
 
     def __init__(self, requested: int, limit: int):

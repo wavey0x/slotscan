@@ -1,5 +1,6 @@
 """Contract resolver for fetching metadata, proxy detection, and verification lookup."""
 
+import asyncio
 import json
 import logging
 from typing import Optional
@@ -12,6 +13,7 @@ from app.models.domain import ContractMetadata, ProxyInfo, StorageLayout, Verifi
 from app.models.errors import NotAContractError, RPCError
 from app.repositories.contracts import ContractRepository
 from app.services.layout import LayoutParser
+from app.services.namespace_storage import NamespaceStorageParser
 from app.services.web3_provider import Web3Provider
 
 logger = logging.getLogger(__name__)
@@ -51,6 +53,7 @@ class ContractResolver:
         self.settings = settings
         self.contract_repo = contract_repo
         self.layout_parser = layout_parser or LayoutParser()
+        self.namespace_parser = NamespaceStorageParser()
 
     async def resolve(
         self,
@@ -143,6 +146,28 @@ class ContractResolver:
             except Exception as e:
                 logger.warning(f"Failed to compile layout: {e}", exc_info=True)
                 parsed_layout = None
+
+        # Check for namespaced storage (ERC-7201 pattern)
+        # If the compiled layout has very few variables but sources are available,
+        # the contract might be using namespaced storage
+        if (parsed_layout and
+            len(parsed_layout.variables) < 10 and
+            verification and
+            verification.sources and
+            language != "Vyper"):
+            try:
+                namespace_layout = self.namespace_parser.parse_namespaced_storage(
+                    verification.sources
+                )
+                if namespace_layout and len(namespace_layout.variables) > 0:
+                    logger.info(
+                        f"Found namespaced storage with {len(namespace_layout.variables)} "
+                        f"additional variables"
+                    )
+                    # Merge namespace variables with standard layout
+                    parsed_layout = self._merge_layouts(parsed_layout, namespace_layout)
+            except Exception as e:
+                logger.warning(f"Failed to parse namespace storage: {e}")
 
         # Build result - use bytecode cache metadata if verification was skipped
         if cached_by_bytecode and parsed_layout and not verification:
@@ -278,14 +303,19 @@ class ContractResolver:
                 )
 
         try:
-            # Check EIP-1967
-            impl_value = await web3.eth.get_storage_at(
+            # Fetch EIP-1967 and EIP-1822 slots in parallel
+            impl_task = web3.eth.get_storage_at(
                 address, EIP1967_IMPL_SLOT, block_identifier=block_id
             )
+            uups_task = web3.eth.get_storage_at(
+                address, EIP1822_SLOT, block_identifier=block_id
+            )
+            impl_value, uups_value = await asyncio.gather(impl_task, uups_task)
+
             impl_address = self._extract_address(bytes(impl_value))
 
             if impl_address and impl_address != ZERO_ADDRESS:
-                # Also try to get admin
+                # EIP-1967 found, fetch admin slot
                 admin_value = await web3.eth.get_storage_at(
                     address, EIP1967_ADMIN_SLOT, block_identifier=block_id
                 )
@@ -299,10 +329,7 @@ class ContractResolver:
                     ),
                 )
 
-            # Check EIP-1822
-            uups_value = await web3.eth.get_storage_at(
-                address, EIP1822_SLOT, block_identifier=block_id
-            )
+            # Check EIP-1822 (already fetched)
             uups_address = self._extract_address(bytes(uups_value))
 
             if uups_address and uups_address != ZERO_ADDRESS:
@@ -343,6 +370,30 @@ class ContractResolver:
             except Exception:
                 return None
         return None
+
+    def _merge_layouts(
+        self, standard_layout: StorageLayout, namespace_layout: StorageLayout
+    ) -> StorageLayout:
+        """
+        Merge a standard storage layout with a namespaced storage layout.
+
+        The standard layout contains variables at sequential slots (0, 1, 2, ...).
+        The namespace layout contains variables at high slots (base_slot + offset).
+
+        Returns a combined layout with all variables and types.
+        """
+        # Combine variables (standard first, then namespace)
+        merged_variables = list(standard_layout.variables) + list(namespace_layout.variables)
+
+        # Combine types
+        merged_types = dict(standard_layout.types)
+        merged_types.update(namespace_layout.types)
+
+        return StorageLayout(
+            contract_name=standard_layout.contract_name,
+            variables=merged_variables,
+            types=merged_types,
+        )
 
     async def _fetch_verification(
         self, chain_id: int, address: str
@@ -390,14 +441,17 @@ class ContractResolver:
         return None
 
     def _parse_sourcify_response(
-        self, data: dict, match_type: str
+        self, data: dict | list, match_type: str
     ) -> VerificationResult:
         """Parse Sourcify response into VerificationResult."""
         sources = {}
         metadata = None
         storage_layout = None
 
-        for file_info in data.get("files", []):
+        # Sourcify API returns either a list of files directly, or a dict with "files" key
+        files = data if isinstance(data, list) else data.get("files", [])
+
+        for file_info in files:
             name = file_info.get("name", "")
             path = file_info.get("path", "")
             content = file_info.get("content", "")

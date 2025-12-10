@@ -283,8 +283,8 @@ class TransactionTracer:
         """
         Parse structLogs to extract SSTORE and SHA3 operations.
 
-        This is the Reth-compatible path - Reth doesn't support custom JS tracers
-        but does support the standard structLogs format with memory/stack access.
+        Uses the standard structLogs format with memory/stack access. Works on all
+        nodes with debug_traceTransaction support.
 
         For SHA3/KECCAK256:
         - When the opcode executes, stack has [offset, size]

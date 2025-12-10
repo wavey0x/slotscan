@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import {
   StorageVariableResponse,
   StorageTypeResponse,
@@ -69,7 +69,7 @@ function formatHexValue(hex: string): string {
   return hex;
 }
 
-export function LayoutRow({
+export const LayoutRow = memo(function LayoutRow({
   variable,
   types,
   chainId,
@@ -277,4 +277,4 @@ export function LayoutRow({
       )}
     </>
   );
-}
+});

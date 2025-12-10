@@ -138,7 +138,7 @@ The same PC (10749) appears multiple times because the same code location is exe
 
 ### 3.2 Why PC is Wrong for Sorting
 
-Current problem in StorageScan:
+Current problem in SlotScan:
 ```python
 # WRONG - slots with same PC can have different execution order
 def get_sort_key(x):

@@ -12,7 +12,10 @@ from typing import Optional
 import solcx
 
 from app.models.domain import StorageLayout, StorageType, StorageVariable
-from app.models.errors import CompilationError, LayoutNotFoundError
+from app.models.errors import CompilationError, LayoutNotFoundError, UnsupportedCompilerVersionError
+
+# Minimum Solidity version that supports --storage-layout output
+MIN_SOLC_VERSION_FOR_LAYOUT = (0, 5, 13)
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +131,14 @@ class LayoutParser:
 
         return version
 
+    def _parse_version_tuple(self, version: str) -> tuple[int, int, int]:
+        """Parse a normalized version string into a tuple for comparison."""
+        parts = version.split(".")
+        try:
+            return (int(parts[0]), int(parts[1]), int(parts[2]) if len(parts) > 2 else 0)
+        except (ValueError, IndexError):
+            return (0, 0, 0)
+
     async def _compile_with_layout(
         self,
         contract_name: str,
@@ -138,6 +149,11 @@ class LayoutParser:
     ) -> dict:
         """Compile sources with storageLayout output enabled."""
         normalized_version = await self._ensure_solc_version(version)
+
+        # Check if this Solidity version supports storage layout output
+        version_tuple = self._parse_version_tuple(normalized_version)
+        if version_tuple < MIN_SOLC_VERSION_FOR_LAYOUT:
+            raise UnsupportedCompilerVersionError(normalized_version)
 
         # Build standard JSON input
         std_settings: dict = {"outputSelection": {"*": {"*": ["storageLayout"]}}}

@@ -1,6 +1,6 @@
 # Trace Processing Requirements
 
-This document enumerates all data collection and processing requirements for trace processing in StorageScan. It is derived from the current implementation and identifies what is currently implemented, what is partially implemented, and what is missing.
+This document enumerates all data collection and processing requirements for trace processing in SlotScan. It is derived from the current implementation and identifies what is currently implemented, what is partially implemented, and what is missing.
 
 ## Table of Contents
 
@@ -15,7 +15,7 @@ This document enumerates all data collection and processing requirements for tra
 
 ## Overview
 
-StorageScan traces Ethereum transactions to extract and decode storage changes for a specific contract. The process involves:
+SlotScan traces Ethereum transactions to extract and decode storage changes for a specific contract. The process involves:
 
 1. **Trace Execution**: Running `debug_traceTransaction` to capture all SSTORE operations
 2. **SHA3 Preimage Collection**: Capturing keccak256 inputs to decode mapping keys

@@ -13,7 +13,7 @@ Ethereum smart contract storage analyzer. View storage layouts, decode values, a
 ### 1. Database (skip if you have postgres running)
 
 ```bash
-createdb storagescan_dev
+createdb slotscan_dev
 ```
 
 ### 2. Backend
@@ -39,7 +39,7 @@ npm run dev  # starts on :3000
 Copy `.env` to project root and edit:
 
 ```
-DATABASE_URL=postgresql+asyncpg://wavey@localhost:5432/storagescan_dev
+DATABASE_URL=postgresql+asyncpg://wavey@localhost:5432/slotscan_dev
 RPC_URL_1=http://your-rpc:8545
 ETHERSCAN_API_KEY_1=your-key
 ```

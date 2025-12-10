@@ -13,7 +13,7 @@ from app.models.api import (
     StorageVariableResponse,
 )
 from app.models.domain import StorageLayout
-from app.models.errors import NotAContractError, RPCError
+from app.models.errors import NotAContractError, RPCError, UnsupportedCompilerVersionError
 from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
 
@@ -70,6 +70,9 @@ async def get_contract(
             has_layout = True
             if resolver.contract_repo:
                 await resolver.contract_repo.save(metadata)
+        except UnsupportedCompilerVersionError:
+            # Old compiler version doesn't support storage layout
+            has_layout = False
         except Exception:
             has_layout = False
 
@@ -123,6 +126,16 @@ async def get_layout(
                 sources=metadata.sources,
                 compiler_version=metadata.compiler_version or "0.8.19",
                 compiler_settings=metadata.compiler_settings,
+            )
+        except UnsupportedCompilerVersionError as e:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": str(e),
+                    "code": "UNSUPPORTED_COMPILER_VERSION",
+                    "compiler_version": e.version,
+                    "min_version": e.min_version,
+                },
             )
         except Exception as e:
             raise HTTPException(

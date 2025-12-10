@@ -102,6 +102,19 @@ function LayoutView({
       );
     }
 
+    // Handle old compiler versions
+    if (errorCode === 'UNSUPPORTED_COMPILER_VERSION') {
+      return (
+        <div className="p-6 border border-gray-300">
+          <div className="text-gray-900 mb-2">Storage layout unavailable</div>
+          <p className="text-sm text-gray-500">
+            This contract was compiled with Solidity {details?.compiler_version || '< 0.5.13'}.
+            Storage layout output requires Solidity 0.5.13 or later.
+          </p>
+        </div>
+      );
+    }
+
     // Handle other errors
     return (
       <div className="p-6 border border-gray-300">

@@ -158,13 +158,12 @@ const PackedFieldRow = ({
       {/* Value column: stacked before/after using flexbox */}
       <td className="px-1 py-0.5 align-top">
         <div className="flex flex-col">
-          <div className={cn('text-xs font-mono leading-tight flex items-center gap-1',
-            isInitialZero ? 'text-gray-300' : 'text-gray-500')}>
+          <div className="text-xs font-mono leading-tight flex items-center gap-1 text-gray-300">
             <HoverCell
               display={initialDisplay}
               {...makeHoverProps(field.before.value_decoded, initialEncoded)}
               chainId={chainId}
-              colorClass={cn('text-xs font-mono', isInitialZero ? 'text-gray-300' : 'text-gray-500')}
+              colorClass="text-xs font-mono text-gray-300"
               forceActions
             />
             <span className="text-gray-400">→</span>
@@ -275,7 +274,7 @@ const InterimPackedChangeRows = ({
                 </span>
                 {/* Before → After values */}
                 <span className="flex items-center gap-1">
-                  <span className={isBeforeZero ? 'text-gray-300' : 'text-gray-500'}>{beforeDisplay}</span>
+                  <span className="text-gray-300">{beforeDisplay}</span>
                   <span className="text-gray-400">→</span>
                   <span className={isAfterZero ? 'text-gray-300' : 'text-gray-700'}>{afterDisplay}</span>
                 </span>
@@ -684,12 +683,12 @@ export function SlotRow({
 
               return (
                 <div className="flex flex-col">
-                  <div className={cn('text-xs font-mono leading-tight flex items-center gap-1', isInitialZero ? 'text-gray-300' : 'text-gray-500')}>
+                  <div className="text-xs font-mono leading-tight flex items-center gap-1 text-gray-300">
                     <HoverCell
                       display={initialValue}
                       {...makeHoverProps(beforeDecoded, slot.before.value_encoded)}
                       chainId={chainId}
-                      colorClass={cn('text-xs font-mono', isInitialZero ? 'text-gray-300' : 'text-gray-500')}
+                      colorClass="text-xs font-mono text-gray-300"
                       forceActions
                     />
                     <span className="text-gray-400">→</span>
@@ -765,12 +764,12 @@ export function SlotRow({
             </td>
             <td className="pl-3 py-0.5 align-top">
               <div className="flex flex-col">
-                <div className={cn('text-xs font-mono leading-tight flex items-center gap-1', isZeroValue(change.before.value_encoded, change.before.value_decoded) ? 'text-gray-300' : 'text-gray-500')}>
+                <div className="text-xs font-mono leading-tight flex items-center gap-1 text-gray-300">
                   <HoverCell
                     display={oldVal}
                     {...makeHoverProps(change.before.value_decoded, change.before.value_encoded)}
                     chainId={chainId}
-                    colorClass={cn('text-xs font-mono', isZeroValue(change.before.value_encoded, change.before.value_decoded) ? 'text-gray-300' : 'text-gray-500')}
+                    colorClass="text-xs font-mono text-gray-300"
                   />
                   <span className="text-gray-400">→</span>
                 </div>

@@ -1,6 +1,5 @@
 """Application configuration loaded from environment variables."""
 
-import os
 from functools import lru_cache
 from typing import Optional
 from pydantic_settings import BaseSettings
@@ -12,7 +11,7 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = Field(
-        default="postgresql+asyncpg://wavey@localhost:5432/storagescan_dev",
+        default="postgresql+asyncpg://wavey@localhost:5432/slotscan_dev",
         alias="DATABASE_URL"
     )
     db_pool_size: int = Field(default=5, alias="DB_POOL_SIZE")

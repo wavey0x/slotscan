@@ -44,9 +44,6 @@ export function formatNumber(value: number | string): string {
   return num.toLocaleString();
 }
 
-// Abbreviate extremely large integers (>= 1e30) for display while preserving readability
-const BIG_ABBREV_THRESHOLD = BigInt('1000000000000000000000000000000'); // 10^30
-
 function tryParseBigInt(value: string): bigint | null {
   const cleaned = value.replace(/,/g, '');
   if (/^-?\d+$/.test(cleaned)) {
@@ -57,14 +54,6 @@ function tryParseBigInt(value: string): bigint | null {
     }
   }
   return null;
-}
-
-function abbreviateBigInt(value: bigint): string {
-  const isNegative = value < 0;
-  const absStr = (isNegative ? -value : value).toString();
-  const mantissa = absStr.length > 1 ? `${absStr[0]}.${absStr.slice(1, 5)}` : absStr;
-  const exponent = absStr.length - 1;
-  return `${isNegative ? '-' : ''}${mantissa}e${exponent}`;
 }
 
 const RECENT_SEARCHES_KEY = 'slotscan_recent_searches';

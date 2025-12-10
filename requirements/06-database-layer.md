@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Database Layer handles all persistence for StorageScan: contract metadata and storage layouts. For testing, storage-level caching (snapshots and tx diffs) is disabled; every request is computed fresh. Postgres remains the only persistence layer; no Redis or background workers.
+The Database Layer handles all persistence for SlotScan: contract metadata and storage layouts. For testing, storage-level caching (snapshots and tx diffs) is disabled; every request is computed fresh. Postgres remains the only persistence layer; no Redis or background workers.
 
 ## Location
 
@@ -524,7 +524,7 @@ class DatabaseConfig:
     def __init__(self):
         self.url = os.getenv(
             "DATABASE_URL",
-            "postgresql+asyncpg://wavey@localhost:5432/storagescan_dev"
+            "postgresql+asyncpg://wavey@localhost:5432/slotscan_dev"
         )
         self.pool_size = int(os.getenv("DB_POOL_SIZE", "5"))
         self.max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "10"))
