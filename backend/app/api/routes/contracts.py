@@ -17,7 +17,7 @@ from app.models.errors import NotAContractError, RPCError
 from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
 
-router = APIRouter(prefix="/api/contracts", tags=["contracts"])
+router = APIRouter(prefix="/api/slotscan/contracts", tags=["contracts"])
 
 
 @router.get("/{chain_id}/{address}", response_model=ContractResponse)

@@ -37,9 +37,28 @@ export function LayoutRow({
   const [lookups, setLookups] = useState<ComputedSlotLookup[]>([]);
 
   const varType = types[variable.type_id];
-  const isMapping = varType?.kind === 'mapping';
-  const isDynamicArray = varType?.encoding === 'dynamic_array';
-  const isInteractive = isMapping || isDynamicArray;
+
+  // Detect type categories
+  const isMapping = varType?.kind === 'mapping' ||
+    varType?.key_type !== null ||
+    variable.type_label.startsWith('mapping(') ||
+    variable.type_label.includes('=>');
+
+  const isDynamicArray = varType?.encoding === 'dynamic_array' ||
+    (varType?.kind === 'array' && varType?.array_length === null);
+
+  // Static array: has array_length OR type label matches pattern like address[32]
+  const staticArrayMatch = variable.type_label.match(/\[(\d+)\]$/);
+  const isStaticArray = !isDynamicArray && (
+    (varType?.kind === 'array' && varType?.array_length !== null) ||
+    staticArrayMatch !== null
+  );
+
+  const staticArrayLength = varType?.array_length ||
+    (staticArrayMatch ? parseInt(staticArrayMatch[1], 10) : undefined);
+
+  const isArray = isDynamicArray || isStaticArray;
+  const isInteractive = isMapping || isArray;
 
   // Handle new lookup result
   const handleLookup = (lookup: ComputedSlotLookup) => {
@@ -61,6 +80,17 @@ export function LayoutRow({
         currentType = types[currentType.value_type];
       } else {
         break;
+      }
+    }
+
+    // Fallback: parse from type label if no key types found
+    if (keyTypes.length === 0 && variable.type_label.includes('mapping(')) {
+      const match = variable.type_label.match(/mapping\((\w+)/);
+      if (match) {
+        keyTypes.push({
+          type: match[1],
+          label: match[1],
+        });
       }
     }
 
@@ -89,6 +119,14 @@ export function LayoutRow({
       currentType = nextType;
     }
     return currentType;
+  };
+
+  // Get element type for arrays
+  const getElementType = (): StorageTypeResponse | undefined => {
+    if (varType?.element_type) {
+      return types[varType.element_type];
+    }
+    return undefined;
   };
 
   return (
@@ -161,12 +199,14 @@ export function LayoutRow({
       )}
 
       {/* Expanded input row for arrays */}
-      {expanded && isDynamicArray && (
+      {expanded && isArray && !isMapping && (
         <tr className="bg-gray-50/50">
           <td colSpan={6} className="px-4 py-3 border-b border-gray-100">
             <ArrayIndexInput
               baseSlot={variable.slot}
-              elementType={varType?.element_type ? types[varType.element_type] : undefined}
+              elementType={getElementType()}
+              isDynamic={isDynamicArray}
+              arrayLength={staticArrayLength}
               chainId={chainId}
               address={address}
               block={block}

@@ -6,12 +6,18 @@ import { Button } from '@/components/ui/Button';
 import { HoverCell } from '@/components/ui/HoverCell';
 import { StorageTypeResponse, ComputedSlotLookup } from '@/lib/types';
 import { fetchSlotValue } from '@/lib/api';
-import { computeDynamicArraySlot, slotToHex } from '@/lib/slot-utils';
+import {
+  computeDynamicArraySlot,
+  computeStaticArraySlot,
+  slotToHex,
+} from '@/lib/slot-utils';
 import { cn } from '@/lib/utils';
 
 interface ArrayIndexInputProps {
   baseSlot: number;
   elementType?: StorageTypeResponse;
+  isDynamic: boolean;
+  arrayLength?: number;
   chainId: string;
   address: string;
   block: number | 'latest';
@@ -40,6 +46,8 @@ function truncateSlot(slot: string): string {
 export function ArrayIndexInput({
   baseSlot,
   elementType,
+  isDynamic,
+  arrayLength,
   chainId,
   address,
   block,
@@ -64,6 +72,12 @@ export function ArrayIndexInput({
       return;
     }
 
+    // Validate against array length for static arrays
+    if (!isDynamic && arrayLength !== undefined && index >= arrayLength) {
+      setError(`Index out of bounds (max: ${arrayLength - 1})`);
+      return;
+    }
+
     if (block === 'latest') {
       setError('Enter a block number first');
       return;
@@ -74,11 +88,23 @@ export function ArrayIndexInput({
 
     try {
       // Compute the slot for the array element
-      const computedSlot = computeDynamicArraySlot(
-        BigInt(baseSlot),
-        index,
-        elementSlots
-      );
+      let computedSlot: bigint;
+
+      if (isDynamic) {
+        // Dynamic array: keccak256(baseSlot) + index * elementSlots
+        computedSlot = computeDynamicArraySlot(
+          BigInt(baseSlot),
+          index,
+          elementSlots
+        );
+      } else {
+        // Static array: baseSlot + index * elementSlots
+        computedSlot = computeStaticArraySlot(
+          BigInt(baseSlot),
+          index,
+          elementSlots
+        );
+      }
 
       const slotHex = slotToHex(computedSlot);
 
@@ -109,13 +135,18 @@ export function ArrayIndexInput({
         <Input
           type="number"
           min={0}
+          max={!isDynamic && arrayLength ? arrayLength - 1 : undefined}
           value={indexInput}
           onChange={(e) => {
             setIndexInput(e.target.value);
             setError(null);
           }}
-          placeholder="Enter array index"
-          className="w-40 h-7 text-xs font-mono"
+          placeholder={
+            !isDynamic && arrayLength
+              ? `Enter index (0-${arrayLength - 1})`
+              : 'Enter array index'
+          }
+          className="w-48 h-7 text-xs font-mono"
           disabled={isLoading}
         />
         <Button
@@ -127,11 +158,10 @@ export function ArrayIndexInput({
         >
           {isLoading ? 'Loading...' : 'Lookup'}
         </Button>
-        {elementType && (
-          <span className="text-[10px] text-gray-400 ml-2">
-            element: {elementType.label}
-          </span>
-        )}
+        <span className="text-[10px] text-gray-400 ml-2">
+          {isDynamic ? 'dynamic array' : `${arrayLength} elements`}
+          {elementType?.label && ` of ${elementType.label}`}
+        </span>
       </form>
 
       {error && <p className="text-red text-xs">{error}</p>}
@@ -161,7 +191,8 @@ export function ArrayIndexInput({
                 const isZero =
                   lookup.rawValue === '0x' + '0'.repeat(64) ||
                   lookup.decodedValue === 0 ||
-                  lookup.decodedValue === '0';
+                  lookup.decodedValue === '0' ||
+                  lookup.decodedValue === '0x0000000000000000000000000000000000000000';
 
                 return (
                   <tr key={idx} className="border-b border-gray-100">
