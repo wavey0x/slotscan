@@ -1,8 +1,7 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useMemo } from 'react';
 import { StorageLayoutResponse, SlotValueResponse } from '@/lib/types';
-import { Toggle } from '@/components/ui/Toggle';
 import { LayoutRow } from './LayoutRow';
 import { useStorage } from '@/lib/hooks/useStorage';
 
@@ -10,15 +9,15 @@ interface LayoutTableProps {
   chainId: string;
   address: string;
   layout: StorageLayoutResponse;
+  showHex: boolean;
 }
 
 export function LayoutTable({
   chainId,
   address,
   layout,
+  showHex,
 }: LayoutTableProps) {
-  const [showHex, setShowHex] = useState(false);
-
   // Fetch storage values at latest block
   const { data: storage, isLoading: storageLoading } = useStorage(chainId, address, 'latest');
 
@@ -37,29 +36,6 @@ export function LayoutTable({
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          {storage?.block_number ? (
-            <div className="flex flex-col text-xs">
-              <span className="flex items-center gap-1.5">
-                <span className="text-gray-400">Block</span>
-                <span className="font-mono text-gray-700">{storage.block_number.toLocaleString()}</span>
-              </span>
-              <span className="text-gray-400">
-                {layout.variables.length} variables
-              </span>
-            </div>
-          ) : storageLoading ? (
-            <span className="text-xs text-gray-400">Loading values...</span>
-          ) : (
-            <span className="text-xs text-gray-500">
-              {layout.variables.length} variables
-            </span>
-          )}
-        </div>
-        <Toggle label="HEX" checked={showHex} onChange={setShowHex} />
-      </div>
-
       <table className="w-full table-fixed">
         <colgroup>
           <col className="w-6" />

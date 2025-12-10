@@ -42,6 +42,7 @@ class Contract(Base):
 
     __table_args__ = (
         Index("idx_contracts_chain_address", chain_id, address, unique=True),
+        Index("idx_contracts_code_hash", code_hash),
     )
 
 

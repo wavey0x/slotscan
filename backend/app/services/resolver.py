@@ -88,10 +88,24 @@ class ContractResolver:
         if proxy_info:
             verify_address = proxy_info.implementation_address
 
-        # Fetch verification
-        verification = await self._fetch_verification(chain_id, verify_address)
+        # Check bytecode cache for non-proxies and EIP-1167 minimal proxies
+        # (EIP-1967/1822 proxies have same bytecode but different implementations, can't cache)
         parsed_layout = None
-        if verification and verification.storage_layout:
+        cached_by_bytecode = None
+        use_bytecode_cache = not proxy_info or proxy_info.proxy_type == "eip1167"
+
+        if use_bytecode_cache and self.contract_repo:
+            cached_by_bytecode = await self.contract_repo.get_layout_by_code_hash(code_hash)
+            if cached_by_bytecode and cached_by_bytecode.storage_layout:
+                logger.info(f"Bytecode cache hit for {address} (code_hash={code_hash[:16]}...)")
+                parsed_layout = StorageLayout.from_dict(cached_by_bytecode.storage_layout)
+
+        # Fetch verification only if we don't have a layout from bytecode cache
+        verification = None
+        if not parsed_layout:
+            verification = await self._fetch_verification(chain_id, verify_address)
+
+        if not parsed_layout and verification and verification.storage_layout:
             try:
                 if "types" in verification.storage_layout and "storage" in verification.storage_layout:
                     parsed_layout = self.layout_parser.parse_from_raw_layout(
@@ -130,24 +144,44 @@ class ContractResolver:
                 logger.warning(f"Failed to compile layout: {e}", exc_info=True)
                 parsed_layout = None
 
-        # Build result
-        result = ContractMetadata(
-            chain_id=chain_id,
-            address=address,
-            code_hash=code_hash,
-            is_proxy=proxy_info is not None,
-            proxy_type=proxy_info.proxy_type if proxy_info else None,
-            implementation_address=(
-                proxy_info.implementation_address if proxy_info else None
-            ),
-            is_verified=verification is not None,
-            verification_source=verification.source if verification else None,
-            name=verification.name if verification else None,
-            compiler_version=verification.compiler_version if verification else None,
-            sources=verification.sources if verification else None,
-            compiler_settings=verification.compiler_settings if verification else None,
-            storage_layout=parsed_layout,
-        )
+        # Build result - use bytecode cache metadata if verification was skipped
+        if cached_by_bytecode and parsed_layout and not verification:
+            # Reuse metadata from the cached contract with same bytecode
+            result = ContractMetadata(
+                chain_id=chain_id,
+                address=address,
+                code_hash=code_hash,
+                is_proxy=proxy_info is not None,
+                proxy_type=proxy_info.proxy_type if proxy_info else None,
+                implementation_address=(
+                    proxy_info.implementation_address if proxy_info else None
+                ),
+                is_verified=True,  # Same bytecode as a verified contract
+                verification_source=cached_by_bytecode.verification_source,
+                name=cached_by_bytecode.name,
+                compiler_version=cached_by_bytecode.compiler_version,
+                sources=None,  # Don't copy large source data
+                compiler_settings=None,
+                storage_layout=parsed_layout,
+            )
+        else:
+            result = ContractMetadata(
+                chain_id=chain_id,
+                address=address,
+                code_hash=code_hash,
+                is_proxy=proxy_info is not None,
+                proxy_type=proxy_info.proxy_type if proxy_info else None,
+                implementation_address=(
+                    proxy_info.implementation_address if proxy_info else None
+                ),
+                is_verified=verification is not None,
+                verification_source=verification.source if verification else None,
+                name=verification.name if verification else None,
+                compiler_version=verification.compiler_version if verification else None,
+                sources=verification.sources if verification else None,
+                compiler_settings=verification.compiler_settings if verification else None,
+                storage_layout=parsed_layout,
+            )
 
         # Cache result only if verified AND has storage layout
         # (compilation may fail temporarily, we'll retry next request)

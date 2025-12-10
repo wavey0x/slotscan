@@ -15,8 +15,10 @@ import { truncateHash, truncateAddress, updateRecentSearchName, getRecentTransac
 import { getTxExplorerUrl, getBlockExplorerUrl, getAddressExplorerUrl } from '@/lib/constants';
 import { useLayout } from '@/lib/hooks/useLayout';
 import { useContract } from '@/lib/hooks/useContract';
+import { useStorage } from '@/lib/hooks/useStorage';
 import { useTxDiff } from '@/lib/hooks/useTxDiff';
 import { APIError } from '@/lib/api';
+import { Toggle } from '@/components/ui/Toggle';
 
 interface ContractPageProps {
   params: { chain: string; address: string };
@@ -33,6 +35,8 @@ function LayoutView({
   contractName?: string | null;
 }) {
   const { data: layout, isLoading, error } = useLayout(chain, address);
+  const { data: storage } = useStorage(chain, address, 'latest');
+  const [showHex, setShowHex] = useState(false);
 
   if (isLoading) {
     return (
@@ -120,9 +124,31 @@ function LayoutView({
   return (
     <>
       <div className="mb-6">
-        <h1 className="text-lg font-medium text-gray-900">Storage Layout</h1>
+        <h1 className="text-lg font-medium text-gray-900 mb-3">Storage Layout</h1>
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 text-sm leading-snug">
+          {storage?.block_number && (
+            <>
+              <dt className="text-gray-500">Block:</dt>
+              <dd>
+                <span className="group inline-flex items-center gap-2 -ml-2 px-2 transition border border-transparent hover:border-dashed hover:border-gray-400">
+                  <span className="font-mono text-gray-900">{storage.block_number.toLocaleString()}</span>
+                  <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                    <CopyButton value={String(storage.block_number)} />
+                    <EtherscanLink href={getBlockExplorerUrl(chain, storage.block_number)} title="View block on Etherscan" />
+                  </span>
+                </span>
+              </dd>
+            </>
+          )}
+          <dt className="text-gray-500">Variables:</dt>
+          <dd className="font-mono text-gray-900">{layout.variables.length}</dd>
+        </dl>
+        <div className="mt-2">
+          <Toggle label="HEX" checked={showHex} onChange={setShowHex} />
+        </div>
       </div>
-      <LayoutTable chainId={chain} address={address} layout={layout} />
+
+      <LayoutTable chainId={chain} address={address} layout={layout} showHex={showHex} />
     </>
   );
 }
@@ -170,12 +196,7 @@ function TransactionPrompt({
   };
 
   return (
-    <div className="max-w-lg">
-      <h2 className="text-lg font-medium text-gray-900 mb-4">Analyze Transaction</h2>
-      <p className="text-sm text-gray-500 mb-4">
-        Enter a transaction hash to analyze storage changes made by that transaction.
-      </p>
-
+    <div className="max-w-md mx-auto text-center">
       <form onSubmit={handleSubmit} className="space-y-3">
         <Input
           type="text"
@@ -185,21 +206,21 @@ function TransactionPrompt({
             setError(null);
           }}
           placeholder="Transaction hash (0x...)"
-          className="w-full font-mono text-sm"
+          className="w-full font-mono text-sm text-center"
         />
         {error && <p className="text-red text-xs">{error}</p>}
         <Button type="submit" variant="secondary" className="w-full">
-          Analyze
+          Analyze txn storage changes
         </Button>
       </form>
 
       {/* Recent transactions */}
       {recentTx.length > 0 && (
-        <div className="mt-8">
-          <div className="text-xs text-gray-500 uppercase tracking-wide mb-3">
+        <div className="mt-16">
+          <div className="text-xs text-gray-400 uppercase tracking-wide mb-3">
             Recent
           </div>
-          <div className="border border-gray-300 divide-y divide-gray-300">
+          <div className="border border-gray-300 divide-y divide-gray-300 text-left">
             {recentTx.map((tx) => (
               <button
                 key={tx.txHash}
@@ -234,6 +255,7 @@ function TransactionDiffView({
   txHash: string;
 }) {
   const { data: diffData } = useTxDiff(chain, address, txHash);
+  const [showHex, setShowHex] = useState(false);
 
   // Update recent transaction with block number when loaded
   useEffect(() => {
@@ -244,49 +266,42 @@ function TransactionDiffView({
 
   return (
     <>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-lg font-medium text-gray-900">State Changes</h1>
+      <div className="mb-6">
+        <h1 className="text-lg font-medium text-gray-900 mb-3">State Changes</h1>
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 text-sm leading-snug">
+          <dt className="text-gray-500">Txn Hash:</dt>
+          <dd>
+            <span className="group inline-flex items-center gap-2 -ml-2 px-2 transition border border-transparent hover:border-dashed hover:border-gray-400">
+              <span className="font-mono text-gray-900">{truncateHash(txHash, 10)}</span>
+              <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                <CopyButton value={txHash} />
+                <EtherscanLink href={getTxExplorerUrl(chain, txHash)} title="View transaction on Etherscan" />
+              </span>
+            </span>
+          </dd>
+          {diffData && (
+            <>
+              <dt className="text-gray-500">Block:</dt>
+              <dd>
+                <span className="group inline-flex items-center gap-2 -ml-2 px-2 transition border border-transparent hover:border-dashed hover:border-gray-400">
+                  <span className="font-mono text-gray-900">{diffData.block_number.toLocaleString()}</span>
+                  <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                    <CopyButton value={String(diffData.block_number)} />
+                    <EtherscanLink href={getBlockExplorerUrl(chain, diffData.block_number)} title="View block on Etherscan" />
+                  </span>
+                </span>
+              </dd>
+              <dt className="text-gray-500">Slots:</dt>
+              <dd className="font-mono text-gray-900">{diffData.slots.length} modified</dd>
+            </>
+          )}
+        </dl>
+        <div className="mt-2">
+          <Toggle label="HEX" checked={showHex} onChange={setShowHex} />
+        </div>
       </div>
 
-      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm mb-6">
-        {/* Txn Hash */}
-        <dt className="text-gray-500">Txn Hash:</dt>
-        <dd>
-          <span className="group inline-flex items-center gap-2 -ml-2 px-2 py-0.5 transition border border-transparent hover:border-dashed hover:border-gray-400">
-            <span className="font-mono text-gray-900">{truncateHash(txHash, 10)}</span>
-            <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
-              <CopyButton value={txHash} />
-              <EtherscanLink href={getTxExplorerUrl(chain, txHash)} title="View transaction on Etherscan" />
-            </span>
-          </span>
-        </dd>
-
-        {/* Block */}
-        {diffData && (
-          <>
-            <dt className="text-gray-500">Block:</dt>
-            <dd>
-              <span className="group inline-flex items-center gap-2 -ml-2 px-2 py-0.5 transition border border-transparent hover:border-dashed hover:border-gray-400">
-                <span className="font-mono text-gray-900">{diffData.block_number.toLocaleString()}</span>
-                <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
-                  <CopyButton value={String(diffData.block_number)} />
-                  <EtherscanLink href={getBlockExplorerUrl(chain, diffData.block_number)} title="View block on Etherscan" />
-                </span>
-              </span>
-            </dd>
-          </>
-        )}
-
-        {/* Slots */}
-        {diffData && (
-          <>
-            <dt className="text-gray-500">Slots:</dt>
-            <dd className="font-mono text-gray-900 py-0.5">{diffData.slots.length} modified</dd>
-          </>
-        )}
-      </dl>
-
-      <DiffTable chainId={chain} address={address} txHash={txHash} />
+      <DiffTable chainId={chain} address={address} txHash={txHash} showHex={showHex} />
     </>
   );
 }

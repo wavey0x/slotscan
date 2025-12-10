@@ -1,21 +1,20 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useMemo } from 'react';
 import { SlotChangeResponse } from '@/lib/types';
 import { useTxDiff } from '@/lib/hooks/useTxDiff';
 import { Loading } from '@/components/ui/Loading';
-import { Toggle } from '@/components/ui/Toggle';
 import { SlotRow } from './SlotRow';
 
 interface DiffTableProps {
   chainId: string;
   address: string;
   txHash: string;
+  showHex: boolean;
 }
 
-export function DiffTable({ chainId, address, txHash }: DiffTableProps) {
+export function DiffTable({ chainId, address, txHash, showHex }: DiffTableProps) {
   const { data, isLoading, error } = useTxDiff(chainId, address, txHash);
-  const [showHex, setShowHex] = useState(false);
 
   // Sort slots by step (execution order) - must be called before early returns
   const sortedSlots = useMemo(() => {
@@ -72,14 +71,6 @@ export function DiffTable({ chainId, address, txHash }: DiffTableProps) {
 
   return (
     <div>
-      <div className="flex items-center justify-end mb-4">
-        <Toggle
-          label="HEX"
-          checked={showHex}
-          onChange={setShowHex}
-        />
-      </div>
-
       <table className="w-full">
         <thead>
           <tr className="border-b border-gray-300">

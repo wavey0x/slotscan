@@ -40,6 +40,17 @@ class ContractRepository:
         )
         return list(result.scalars().all())
 
+    async def get_layout_by_code_hash(self, code_hash: str) -> Optional[Contract]:
+        """Find any verified contract with this bytecode hash that has a layout."""
+        result = await self.session.execute(
+            select(Contract).where(
+                Contract.code_hash == code_hash,
+                Contract.is_verified == True,
+                Contract.storage_layout.isnot(None),
+            ).limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def save(self, metadata: ContractMetadata) -> Contract:
         """Save or update contract metadata using upsert."""
         storage_layout_dict = None
