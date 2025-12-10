@@ -11,11 +11,12 @@ import { EtherscanLink } from '@/components/ui/EtherscanLink';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Loading } from '@/components/ui/Loading';
-import { truncateHash, updateRecentSearchName, getRecentTransactions, saveRecentTransaction, updateRecentTransactionBlock } from '@/lib/utils';
-import { getTxExplorerUrl, getBlockExplorerUrl } from '@/lib/constants';
+import { truncateHash, truncateAddress, updateRecentSearchName, getRecentTransactions, saveRecentTransaction, updateRecentTransactionBlock } from '@/lib/utils';
+import { getTxExplorerUrl, getBlockExplorerUrl, getAddressExplorerUrl } from '@/lib/constants';
 import { useLayout } from '@/lib/hooks/useLayout';
 import { useContract } from '@/lib/hooks/useContract';
 import { useTxDiff } from '@/lib/hooks/useTxDiff';
+import { APIError } from '@/lib/api';
 
 interface ContractPageProps {
   params: { chain: string; address: string };
@@ -46,11 +47,63 @@ function LayoutView({
   }
 
   if (error) {
+    const apiError = error instanceof APIError ? error : null;
+    const errorCode = apiError?.code;
+    const details = apiError?.details as Record<string, string> | undefined;
+
+    // Handle proxy contracts
+    if (errorCode === 'PROXY_IMPL_NOT_VERIFIED' && details?.implementation_address) {
+      const proxyTypeDisplay: Record<string, string> = {
+        'eip1167': 'EIP-1167 Minimal Proxy',
+        'eip1967': 'EIP-1967 Transparent Proxy',
+        'eip1822': 'EIP-1822 UUPS Proxy',
+      };
+      const proxyLabel = proxyTypeDisplay[details.proxy_type || ''] || 'Proxy';
+
+      return (
+        <div className="p-6 border border-gray-300">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-800 rounded">
+              {proxyLabel}
+            </span>
+          </div>
+          <div className="text-gray-900 mb-2">Implementation not verified</div>
+          <p className="text-sm text-gray-500 mb-3">
+            This contract delegates to an implementation that is not verified on Sourcify or Etherscan.
+          </p>
+          <div className="text-sm">
+            <span className="text-gray-500">Implementation: </span>
+            <a
+              href={getAddressExplorerUrl(chain, details.implementation_address)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-mono text-blue-600 hover:underline"
+            >
+              {truncateAddress(details.implementation_address)}
+            </a>
+          </div>
+        </div>
+      );
+    }
+
+    // Handle unverified contracts
+    if (errorCode === 'NOT_VERIFIED') {
+      return (
+        <div className="p-6 border border-gray-300">
+          <div className="text-gray-900 mb-2">Contract not verified</div>
+          <p className="text-sm text-gray-500">
+            Source code is not available on Sourcify or Etherscan.
+          </p>
+        </div>
+      );
+    }
+
+    // Handle other errors
     return (
       <div className="p-6 border border-gray-300">
         <div className="text-gray-900 mb-2">Storage layout not available</div>
         <p className="text-sm text-gray-500">
-          Contract may not be verified or source code is unavailable.
+          {apiError?.message || 'Contract may not be verified or source code is unavailable.'}
         </p>
       </div>
     );
@@ -135,7 +188,7 @@ function TransactionPrompt({
           className="w-full font-mono text-sm"
         />
         {error && <p className="text-red text-xs">{error}</p>}
-        <Button type="submit" variant="primary" className="w-full">
+        <Button type="submit" variant="secondary" className="w-full">
           Analyze
         </Button>
       </form>

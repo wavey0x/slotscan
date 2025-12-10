@@ -134,13 +134,39 @@ async def get_layout(
             )
 
     if not layout:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "Contract not verified or layout unavailable",
-                "code": "NO_LAYOUT",
-            },
-        )
+        # Provide specific error messages based on contract state
+        if metadata.is_proxy:
+            proxy_type_display = {
+                "eip1167": "EIP-1167 Minimal Proxy",
+                "eip1967": "EIP-1967 Transparent Proxy",
+                "eip1822": "EIP-1822 UUPS Proxy",
+            }.get(metadata.proxy_type, f"{metadata.proxy_type} Proxy")
+
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"This is a {proxy_type_display}. The implementation at {metadata.implementation_address} is not verified.",
+                    "code": "PROXY_IMPL_NOT_VERIFIED",
+                    "proxy_type": metadata.proxy_type,
+                    "implementation_address": metadata.implementation_address,
+                },
+            )
+        elif not metadata.is_verified:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "Contract source code not verified on Sourcify or Etherscan",
+                    "code": "NOT_VERIFIED",
+                },
+            )
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "Contract is verified but storage layout could not be generated",
+                    "code": "NO_LAYOUT",
+                },
+            )
 
     return StorageLayoutResponse(
         contract_name=layout.contract_name,

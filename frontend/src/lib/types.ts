@@ -158,6 +158,13 @@ export interface ErrorResponse {
   details?: Record<string, unknown>;
 }
 
+export interface LayoutErrorResponse {
+  error: string;
+  code: 'NOT_CONTRACT' | 'NOT_VERIFIED' | 'NO_LAYOUT' | 'PROXY_IMPL_NOT_VERIFIED' | 'LAYOUT_PARSE_ERROR' | 'RPC_ERROR';
+  proxy_type?: string;
+  implementation_address?: string;
+}
+
 // === Layout Page Types ===
 
 export interface ComputedSlotLookup {

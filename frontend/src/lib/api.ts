@@ -1,5 +1,6 @@
 import type {
   ContractResponse,
+  LayoutErrorResponse,
   SlotValueResponse,
   StorageLayoutResponse,
   StorageSnapshotResponse,
@@ -9,6 +10,19 @@ import type {
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/slotscan';
 
 const API_TIMEOUT_MS = 120000; // 120s hard timeout to fail gracefully in UI
+
+// Custom error class that preserves API error details
+export class APIError extends Error {
+  code: string;
+  details?: Record<string, unknown>;
+
+  constructor(message: string, code: string, details?: Record<string, unknown>) {
+    super(message);
+    this.name = 'APIError';
+    this.code = code;
+    this.details = details;
+  }
+}
 
 async function fetchWithTimeout(url: string, externalSignal?: AbortSignal): Promise<Response> {
   const timeoutController = new AbortController();
@@ -34,15 +48,20 @@ async function fetchAPI<T>(url: string): Promise<T> {
     const res = await fetchWithTimeout(url);
     if (!res.ok) {
       const error = await res.json().catch(() => ({ error: 'Request failed', code: 'UNKNOWN' }));
-      const msg = error.error || 'Request failed';
-      const code = error.code ? ` (${error.code})` : '';
-      throw new Error(`${msg}${code}`);
+      throw new APIError(
+        error.error || 'Request failed',
+        error.code || 'UNKNOWN',
+        error
+      );
     }
     return res.json();
-  } catch (err: any) {
-    const isAbort = err?.name === 'AbortError';
+  } catch (err: unknown) {
+    if (err instanceof APIError) {
+      throw err;
+    }
+    const isAbort = (err as Error)?.name === 'AbortError';
     if (isAbort) {
-      throw new Error('Request timed out (60s)');
+      throw new APIError('Request timed out', 'TIMEOUT');
     }
     throw err;
   }

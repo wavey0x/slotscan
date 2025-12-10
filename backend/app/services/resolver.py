@@ -27,6 +27,15 @@ EIP1822_SLOT = "0xc5f16f0fcc639fa48a6947836d9850f504798523bf8c9a3a87d5876cf622bc
 
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
+# EIP-1167 Minimal Proxy bytecode patterns
+# Standard: 363d3d373d3d3d363d73<address>5af43d82803e903d91602b57fd5bf3
+EIP1167_PREFIX = bytes.fromhex("363d3d373d3d3d363d73")
+EIP1167_SUFFIX = bytes.fromhex("5af43d82803e903d91602b57fd5bf3")
+
+# Vyper minimal proxy variant
+VYPER_PROXY_PREFIX = bytes.fromhex("366000600037611000600036600073")
+VYPER_PROXY_SUFFIX = bytes.fromhex("5af4602c57600080fd5b6110006000f3")
+
 
 class ContractResolver:
     """Resolves contract metadata from address."""
@@ -71,8 +80,8 @@ class ContractResolver:
         bytecode = await self._check_is_contract(chain_id, address, block_number)
         code_hash = Web3.keccak(bytecode).hex()
 
-        # Detect proxy
-        proxy_info = await self.detect_proxy(chain_id, address, block_number)
+        # Detect proxy (pass bytecode for EIP-1167 detection)
+        proxy_info = await self.detect_proxy(chain_id, address, block_number, bytecode)
 
         # Determine which address to verify
         verify_address = address
@@ -177,24 +186,65 @@ class ContractResolver:
 
         return bytes(code)
 
+    def _detect_minimal_proxy(self, bytecode: bytes) -> Optional[str]:
+        """
+        Detect EIP-1167 minimal proxy pattern and extract implementation address.
+
+        Returns the implementation address if detected, None otherwise.
+        """
+        # Standard EIP-1167 pattern
+        if (len(bytecode) == 45 and
+            bytecode[:10] == EIP1167_PREFIX and
+            bytecode[-15:] == EIP1167_SUFFIX):
+            impl_bytes = bytecode[10:30]
+            try:
+                return Web3.to_checksum_address(impl_bytes)
+            except Exception:
+                pass
+
+        # Also check for slight variations (some compilers add metadata)
+        if bytecode.startswith(EIP1167_PREFIX):
+            # Find the suffix
+            suffix_pos = bytecode.find(EIP1167_SUFFIX)
+            if suffix_pos > 10:
+                impl_bytes = bytecode[10:30]
+                try:
+                    return Web3.to_checksum_address(impl_bytes)
+                except Exception:
+                    pass
+
+        return None
+
     async def detect_proxy(
         self,
         chain_id: int,
         address: str,
         block: Optional[int] = None,
+        bytecode: Optional[bytes] = None,
     ) -> Optional[ProxyInfo]:
         """
         Detect proxy pattern and resolve implementation.
 
         Detection order:
-        1. EIP-1967 implementation slot
-        2. EIP-1822 UUPS slot
+        1. EIP-1167 minimal proxy (bytecode pattern)
+        2. EIP-1967 implementation slot
+        3. EIP-1822 UUPS slot
         """
         web3 = self.web3_provider.get_web3(chain_id)
         block_id = block if block else "latest"
 
+        # Check EIP-1167 minimal proxy first (from bytecode)
+        if bytecode:
+            impl_address = self._detect_minimal_proxy(bytecode)
+            if impl_address and impl_address != ZERO_ADDRESS:
+                return ProxyInfo(
+                    proxy_type="eip1167",
+                    implementation_address=impl_address,
+                    admin_address=None,
+                )
+
         try:
-            # Check EIP-1967 first
+            # Check EIP-1967
             impl_value = await web3.eth.get_storage_at(
                 address, EIP1967_IMPL_SLOT, block_identifier=block_id
             )

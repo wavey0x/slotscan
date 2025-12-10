@@ -3,14 +3,11 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/Input";
-import { Select } from "@/components/ui/Select";
 import { Button } from "@/components/ui/Button";
-import { CHAINS } from "@/lib/constants";
 import { isAddress, saveRecentSearch } from "@/lib/utils";
 
 export function SearchForm() {
   const router = useRouter();
-  const [chain, setChain] = useState("1");
   const [address, setAddress] = useState("");
   const [error, setError] = useState("");
 
@@ -23,27 +20,18 @@ export function SearchForm() {
       return;
     }
 
-    saveRecentSearch({ chain, address });
-    router.push(`/${chain}/${address}`);
+    saveRecentSearch({ chain: "1", address });
+    router.push(`/1/${address}`);
   };
 
   return (
     <form onSubmit={handleSubmit} className="w-full max-w-xl space-y-4">
-      {/* Chain and address */}
-      <div className="flex gap-2">
-        <Select
-          value={chain}
-          onChange={setChain}
-          options={CHAINS}
-          className="w-40"
-        />
-        <Input
-          value={address}
-          onChange={(e) => setAddress(e.target.value)}
-          placeholder="Contract Address (0x...)"
-          className="flex-1 font-mono"
-        />
-      </div>
+      <Input
+        value={address}
+        onChange={(e) => setAddress(e.target.value)}
+        placeholder="Contract Address (0x...)"
+        className="font-mono"
+      />
 
       {error && <p className="text-red text-sm">{error}</p>}
 
