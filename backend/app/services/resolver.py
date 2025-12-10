@@ -60,7 +60,12 @@ class ContractResolver:
         """
         address = Web3.to_checksum_address(address)
 
-        # Cache bypassed for now to ensure fresh layout/metadata
+        # Check cache first
+        if self.contract_repo:
+            cached = await self.contract_repo.get(chain_id, address)
+            if cached and cached.is_verified and cached.storage_layout:
+                logger.debug(f"Cache hit for {address} on chain {chain_id}")
+                return self.contract_repo.to_metadata(cached)
 
         # Verify it's a contract
         bytecode = await self._check_is_contract(chain_id, address, block_number)
@@ -91,16 +96,26 @@ class ContractResolver:
                 parsed_layout = None
         # If no layout from verification but sources available, compile
         if not parsed_layout and verification and verification.sources and verification.compiler_version:
-            logger.info(f"Compiling layout for {verification.name} with {len(verification.sources)} source files")
+            language = getattr(verification, 'language', 'Solidity')
+            logger.info(f"Compiling {language} layout for {verification.name} with {len(verification.sources)} source files")
             try:
-                parsed_layout = await self.layout_parser.parse(
-                    contract_name=verification.name or "",
-                    sources=verification.sources,
-                    compiler_version=verification.compiler_version,
-                    compiler_settings=verification.compiler_settings,
-                    metadata_settings=verification.compiler_settings,
-                    contract_fqname=self._get_compilation_target(verification),
-                )
+                if language == "Vyper":
+                    # Compile Vyper to get storage layout
+                    parsed_layout = await self.layout_parser.parse_vyper(
+                        contract_name=verification.name or "",
+                        sources=verification.sources,
+                        compiler_version=verification.compiler_version,
+                    )
+                else:
+                    # Solidity compilation
+                    parsed_layout = await self.layout_parser.parse(
+                        contract_name=verification.name or "",
+                        sources=verification.sources,
+                        compiler_version=verification.compiler_version,
+                        compiler_settings=verification.compiler_settings,
+                        metadata_settings=verification.compiler_settings,
+                        contract_fqname=self._get_compilation_target(verification),
+                    )
                 logger.info(f"Layout compiled: {len(parsed_layout.variables) if parsed_layout else 0} variables")
             except Exception as e:
                 logger.warning(f"Failed to compile layout: {e}", exc_info=True)
@@ -313,7 +328,7 @@ class ContractResolver:
                     storage_layout = json.loads(content)
                 except json.JSONDecodeError:
                     pass
-            elif name.endswith(".sol"):
+            elif name.endswith(".sol") or name.endswith(".vy"):
                 # Extract original path from Sourcify's path field
                 # Format: contracts/.../sources/node_modules/@openzeppelin/...
                 # We need everything after /sources/
@@ -326,6 +341,7 @@ class ContractResolver:
         compiler_version = None
         compiler_settings = None
         contract_name = None
+        language = "Solidity"  # Default
 
         if metadata:
             compiler_version = metadata.get("compiler", {}).get("version")
@@ -334,6 +350,13 @@ class ContractResolver:
             target = metadata.get("settings", {}).get("compilationTarget", {})
             if target:
                 contract_name = list(target.values())[0]
+            # Detect language from metadata (Vyper contracts have "language": "Vyper")
+            language = metadata.get("language", "Solidity")
+
+        # Fallback: detect Vyper from file extensions if metadata doesn't specify
+        if language == "Solidity" and sources:
+            if any(name.endswith(".vy") for name in sources.keys()):
+                language = "Vyper"
 
         return VerificationResult(
             source="sourcify",
@@ -344,6 +367,7 @@ class ContractResolver:
             compiler_settings=compiler_settings,
             sources=sources,
             storage_layout=storage_layout,
+            language=language,
         )
 
     async def _try_etherscan(

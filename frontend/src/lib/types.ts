@@ -157,3 +157,13 @@ export interface ErrorResponse {
   code: string;
   details?: Record<string, unknown>;
 }
+
+// === Layout Page Types ===
+
+export interface ComputedSlotLookup {
+  keys?: string[];           // for mappings - the key values used
+  index?: number;            // for arrays - the index used
+  computedSlot: string;      // hex slot address
+  rawValue: string;          // hex raw value
+  decodedValue: unknown;     // decoded value
+}

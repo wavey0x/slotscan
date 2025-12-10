@@ -1302,6 +1302,64 @@ class TransactionTracer:
 
         return index
 
+    def _build_static_array_index(
+        self,
+        layout: StorageLayout,
+    ) -> dict[int, tuple[StorageVariable, StorageType | None, int, int]]:
+        """Build index of static array slot ranges.
+
+        For static arrays (encoding="inplace" with array_length), elements are
+        stored contiguously starting at the base slot.
+
+        Returns:
+            Dict mapping start_slot -> (variable, element_type, element_slots, end_slot)
+        """
+        index: dict[int, tuple[StorageVariable, StorageType | None, int, int]] = {}
+        for var in layout.variables:
+            var_type = layout.get_type(var.type_id)
+            if not var_type:
+                continue
+            # Static arrays have encoding="inplace" and array_length set
+            if var_type.encoding != "inplace" or not var_type.array_length:
+                continue
+
+            # Get element type and size
+            element_type = layout.get_type(var_type.element_type) if var_type.element_type else None
+            if element_type:
+                element_bytes = element_type.num_bytes or 32
+                element_slots = (element_bytes + 31) // 32
+            else:
+                element_slots = 1
+
+            start_slot = var.slot
+            end_slot = var.slot + (var_type.array_length * element_slots)
+            index[start_slot] = (var, element_type, element_slots, end_slot)
+            logger.debug(f"Static array {var.name}: slots {start_slot}-{end_slot-1}, element_slots={element_slots}")
+
+        return index
+
+    def _try_match_static_array_slot(
+        self,
+        slot_int: int,
+        layout: StorageLayout,
+        static_array_index: dict[int, tuple[StorageVariable, StorageType | None, int, int]],
+    ) -> Optional[dict]:
+        """Try to match a slot to a static array element.
+
+        For static arrays, elements are stored contiguously from base_slot.
+        """
+        for start_slot, (var, element_type, element_slots, end_slot) in static_array_index.items():
+            if start_slot <= slot_int < end_slot:
+                array_index = (slot_int - start_slot) // element_slots
+                return {
+                    "variable": var,
+                    "path": f"{var.name}[{array_index}]",
+                    "array_index": array_index,
+                    "element_type": element_type,
+                    "encoding": "inplace",
+                }
+        return None
+
     def _try_match_dynamic_bytes_slot(
         self,
         slot_int: int,
@@ -1561,6 +1619,7 @@ class TransactionTracer:
         base_slot_index = layout.get_base_slot_index() if layout else {}
         dynamic_array_index = self._build_dynamic_array_index(layout) if layout else {}
         dynamic_bytes_index = self._build_dynamic_bytes_index(layout) if layout else {}
+        static_array_index = self._build_static_array_index(layout) if layout else {}
         preimage_lookup = preimage_lookup or {}
 
         # Build mapping-to-array index: find all 32-byte preimages that resolve to mapping->array
@@ -1597,6 +1656,7 @@ class TransactionTracer:
         stats = {
             "total": 0,
             "layout_direct": 0,
+            "static_array": 0,
             "preimage_lookup": 0,
             "struct_offset": 0,
             "dynamic_array": 0,
@@ -1652,6 +1712,18 @@ class TransactionTracer:
                                 value_type = var_type.value_type
                             mapping_base_slot = variable.slot if var_type and var_type.encoding == "mapping" else None
                             variable_path = variable.name
+
+                            # Check if this is a static array element
+                            if var_type and var_type.encoding == "inplace" and var_type.array_length:
+                                static_arr_index = layout.get_static_array_index(variable, slot_int)
+                                if static_arr_index is not None:
+                                    stats["static_array"] += 1
+                                    resolution_path = "static_array"
+                                    variable_path = f"{variable.name}[{static_arr_index}]"
+                                    array_index = static_arr_index
+                                    # Use element type for decoding
+                                    if var_type.element_type:
+                                        value_type = var_type.element_type
 
                             # For mappings, decode using value type
                             decode_type = var_type
@@ -1785,6 +1857,29 @@ class TransactionTracer:
                                             new_decoded = self.decoder.decode(
                                                 new_bytes, decode_type, variable.offset if variable else 0
                                             )
+                                        except Exception:
+                                            pass
+
+                            # Try static array slot matching if preimage lookup didn't match
+                            if not variable and static_array_index:
+                                static_match = self._try_match_static_array_slot(
+                                    slot_int, layout, static_array_index
+                                )
+                                if static_match:
+                                    stats["static_array"] += 1
+                                    resolution_path = "static_array"
+                                    variable = static_match["variable"]
+                                    variable_path = static_match["path"]
+                                    encoding = static_match.get("encoding")
+                                    array_index = static_match.get("array_index")
+                                    element_type = static_match.get("element_type")
+                                    if element_type:
+                                        value_type = element_type.label if hasattr(element_type, 'label') else str(element_type)
+                                        try:
+                                            old_bytes = bytes.fromhex(old_value[2:])
+                                            new_bytes = bytes.fromhex(new_value[2:])
+                                            old_decoded = self.decoder.decode(old_bytes, element_type, 0)
+                                            new_decoded = self.decoder.decode(new_bytes, element_type, 0)
                                         except Exception:
                                             pass
 

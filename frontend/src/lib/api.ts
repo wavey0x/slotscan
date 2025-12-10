@@ -1,13 +1,14 @@
 import type {
   ContractResponse,
+  SlotValueResponse,
   StorageLayoutResponse,
   StorageSnapshotResponse,
   TransactionDiffResponse,
 } from './types';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/slotscan';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
 
-const API_TIMEOUT_MS = 60000; // 60s hard timeout to fail gracefully in UI
+const API_TIMEOUT_MS = 120000; // 120s hard timeout to fail gracefully in UI
 
 async function fetchWithTimeout(url: string, externalSignal?: AbortSignal): Promise<Response> {
   const timeoutController = new AbortController();
@@ -81,4 +82,15 @@ export async function fetchTxDiff(
   txHash: string
 ): Promise<TransactionDiffResponse> {
   return fetchAPI(`${API_BASE}/tx/${chainId}/${address}/${txHash}`);
+}
+
+export async function fetchSlotValue(
+  chainId: string,
+  address: string,
+  slot: string,
+  block: number | 'latest'
+): Promise<SlotValueResponse> {
+  const params = new URLSearchParams();
+  params.set('block', block.toString());
+  return fetchAPI(`${API_BASE}/storage/${chainId}/${address}/slot/${slot}?${params}`);
 }

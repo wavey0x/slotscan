@@ -11,12 +11,13 @@ from app.api.dependencies import (
     get_storage_reader,
 )
 from app.models.api import SlotValueResponse, StorageSnapshotResponse
+from app.models.domain import StorageLayout
 from app.models.errors import NotAContractError, RPCError
 from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
 from app.services.storage import StorageReader
 
-router = APIRouter(prefix="/api/slotscan/storage", tags=["storage"])
+router = APIRouter(prefix="/api/storage", tags=["storage"])
 
 
 @router.get("/{chain_id}/{address}", response_model=StorageSnapshotResponse)

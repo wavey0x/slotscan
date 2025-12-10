@@ -16,6 +16,9 @@ eth-abi>=5.0.0
 # Solidity compiler
 py-solc-x>=2.0.0
 
+# Vyper compiler (version manager)
+vvm>=0.3.0
+
 # HTTP client
 httpx>=0.26.0
 

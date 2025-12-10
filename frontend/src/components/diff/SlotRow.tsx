@@ -319,6 +319,17 @@ export function SlotRow({
   const isDynamicArray = slot.is_dynamic_array && slot.array_index !== null;
   const canExpand = hasInterimChanges;
 
+  // Use variable_path for display (includes array index/mapping key), fallback to variable_name
+  const variableDisplayName = (() => {
+    if (slot.variable_path) {
+      // Extract the core path without parenthetical labels like "(length)"
+      const match = slot.variable_path.match(/^([^(]+)/);
+      return match ? match[1].trim() : slot.variable_path;
+    }
+    return slot.variable_name || formatSlotShort(slot.slot, 4);
+  })();
+
+  // For backward compatibility, also keep plain variable name
   const variableName = slot.variable_name || formatSlotShort(slot.slot, 4);
 
   const variableLabel = (() => {
@@ -326,6 +337,10 @@ export function SlotRow({
     const match = slot.variable_path.match(/\(([^)]+)\)$/);
     return match ? match[1] : null;
   })();
+
+  // Check if this is a static array element (has array_index but not is_mapping or is_dynamic_array)
+  const isStaticArray = slot.array_index !== null && slot.array_index !== undefined &&
+                        !slot.is_mapping && !slot.is_dynamic_array;
 
   const formatSlotNumber = (slotHex: string): string => {
     try {
@@ -488,7 +503,7 @@ export function SlotRow({
         </>
       )}
 
-      {isDynamicArray && (
+      {(isDynamicArray || isStaticArray) && (
         <>
           <HoverCardDivider />
           <HoverCardSection title="Array Index">
@@ -649,7 +664,7 @@ export function SlotRow({
                     {(singlePackedField?.type_label || slot.value_type || slot.type_label) && (
                       <><span className="text-gray-400">{singlePackedField?.type_label || slot.value_type || slot.type_label}</span>{' '}</>
                     )}
-                    <span className="text-gray-900 font-medium">{singlePackedField?.name || variableName}</span>
+                    <span className="text-gray-900 font-medium">{singlePackedField?.name || variableDisplayName}</span>
                     {variableLabel && (
                       <span className="text-gray-400 ml-1">({variableLabel})</span>
                     )}

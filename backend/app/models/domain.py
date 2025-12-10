@@ -66,7 +66,7 @@ class StorageLayout:
         Does not attempt to resolve hashed element slots (requires keys/indices).
         """
         for var in self.variables:
-            var_type = self.types.get(var.type_id)
+            var_type = self.get_type(var.type_id)  # Use get_type() for synthesis fallback
             if not var_type:
                 continue
 
@@ -104,6 +104,27 @@ class StorageLayout:
             if var.name == name:
                 return var
         return None
+
+    def get_static_array_index(self, var: StorageVariable, slot: int) -> Optional[int]:
+        """
+        Calculate array index for a slot within a static array.
+        Returns None if slot doesn't belong to this array or type isn't static array.
+        """
+        var_type = self.get_type(var.type_id)
+        if not var_type or var_type.encoding != "inplace" or not var_type.array_length:
+            return None
+
+        # Calculate element size in slots
+        element_type = self.get_type(var_type.element_type) if var_type.element_type else None
+        element_slots = 1
+        if element_type and element_type.num_bytes:
+            element_slots = (element_type.num_bytes + 31) // 32
+
+        offset = slot - var.slot
+        if offset < 0 or offset >= var_type.array_length * element_slots:
+            return None
+
+        return offset // element_slots
 
     def get_type(self, type_id: str) -> Optional[StorageType]:
         """Get type definition by ID, synthesizing primitives if not found."""
@@ -198,6 +219,127 @@ class StorageLayout:
             return StorageType(
                 id=type_id,
                 label="bytes",
+                kind="value",
+                encoding="bytes",
+                num_bytes=32,
+            )
+
+        # --- Vyper type synthesis ---
+
+        # Vyper HashMap: HashMap[key_type, value_type]
+        hashmap_match = re.match(r'^HashMap\[(.+),\s*(.+)\]$', type_id)
+        if hashmap_match:
+            return StorageType(
+                id=type_id,
+                label=type_id,
+                kind="mapping",
+                encoding="mapping",
+                key_type=hashmap_match.group(1).strip(),
+                value_type=hashmap_match.group(2).strip(),
+                num_bytes=32,
+            )
+
+        # Vyper DynArray: DynArray[element_type, max_len]
+        dynarray_match = re.match(r'^DynArray\[(.+),\s*(\d+)\]$', type_id)
+        if dynarray_match:
+            return StorageType(
+                id=type_id,
+                label=type_id,
+                kind="array",
+                encoding="dynamic_array",
+                element_type=dynarray_match.group(1).strip(),
+                array_length=int(dynarray_match.group(2)),
+                num_bytes=32,
+            )
+
+        # Vyper static array: type[length] e.g. uint256[10]
+        static_array_match = re.match(r'^(.+)\[(\d+)\]$', type_id)
+        if static_array_match:
+            element_type = static_array_match.group(1).strip()
+            length = int(static_array_match.group(2))
+            # Estimate bytes based on element count (assume 32 bytes per element)
+            return StorageType(
+                id=type_id,
+                label=type_id,
+                kind="array",
+                encoding="inplace",
+                element_type=element_type,
+                array_length=length,
+                num_bytes=32 * length,
+            )
+
+        # Vyper primitive types (same names as Solidity but without t_ prefix)
+        # address
+        if type_id == 'address':
+            return StorageType(
+                id=type_id,
+                label="address",
+                kind="value",
+                encoding="inplace",
+                num_bytes=20,
+            )
+
+        # bool
+        if type_id == 'bool':
+            return StorageType(
+                id=type_id,
+                label="bool",
+                kind="value",
+                encoding="inplace",
+                num_bytes=1,
+            )
+
+        # Vyper uint types: uint8, uint16, ..., uint256
+        vyper_uint_match = re.match(r'^uint(\d+)$', type_id)
+        if vyper_uint_match:
+            bits = int(vyper_uint_match.group(1))
+            return StorageType(
+                id=type_id,
+                label=f"uint{bits}",
+                kind="value",
+                encoding="inplace",
+                num_bytes=bits // 8,
+            )
+
+        # Vyper int types: int8, int16, ..., int256
+        vyper_int_match = re.match(r'^int(\d+)$', type_id)
+        if vyper_int_match:
+            bits = int(vyper_int_match.group(1))
+            return StorageType(
+                id=type_id,
+                label=f"int{bits}",
+                kind="value",
+                encoding="inplace",
+                num_bytes=bits // 8,
+            )
+
+        # Vyper bytes types: bytes1, bytes2, ..., bytes32
+        vyper_bytes_match = re.match(r'^bytes(\d+)$', type_id)
+        if vyper_bytes_match:
+            n = int(vyper_bytes_match.group(1))
+            return StorageType(
+                id=type_id,
+                label=f"bytes{n}",
+                kind="value",
+                encoding="inplace",
+                num_bytes=n,
+            )
+
+        # Vyper Bytes (dynamic bytes)
+        if type_id == 'Bytes':
+            return StorageType(
+                id=type_id,
+                label="Bytes",
+                kind="value",
+                encoding="bytes",
+                num_bytes=32,
+            )
+
+        # Vyper String
+        if type_id == 'String':
+            return StorageType(
+                id=type_id,
+                label="String",
                 kind="value",
                 encoding="bytes",
                 num_bytes=32,
@@ -534,3 +676,4 @@ class VerificationResult:
     compiler_settings: Optional[dict] = None
     sources: Optional[dict[str, str]] = None
     storage_layout: Optional[dict] = None
+    language: str = "Solidity"  # "Solidity" or "Vyper"
