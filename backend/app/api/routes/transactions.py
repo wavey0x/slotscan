@@ -27,6 +27,7 @@ from app.models.errors import (
     RPCError,
     TraceNotAvailableError,
     TransactionNotFoundError,
+    UnsupportedCompilerVersionError,
 )
 from app.services.decoder import TypeDecoder
 from app.services.layout import LayoutParser
@@ -793,6 +794,16 @@ async def get_tx_diff(
         raise HTTPException(
             status_code=404,
             detail={"error": "Not a contract", "code": "NOT_CONTRACT"},
+        )
+    except UnsupportedCompilerVersionError as e:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": str(e),
+                "code": "UNSUPPORTED_COMPILER_VERSION",
+                "compiler_version": e.version,
+                "min_version": e.min_version,
+            },
         )
     except RPCError as e:
         raise HTTPException(

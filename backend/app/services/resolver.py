@@ -143,6 +143,9 @@ class ContractResolver:
                         contract_fqname=self._get_compilation_target(verification),
                     )
                 logger.info(f"Layout compiled: {len(parsed_layout.variables) if parsed_layout else 0} variables")
+            except UnsupportedCompilerVersionError:
+                # Re-raise version errors so callers can handle them appropriately
+                raise
             except Exception as e:
                 logger.warning(f"Failed to compile layout: {e}", exc_info=True)
                 parsed_layout = None
