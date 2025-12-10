@@ -199,6 +199,17 @@ class TypeDecoder:
         label = (type_info.label or "").lower()
         base = type_info.base_type or label
 
+        # Vyper String[N] - the base slot contains length, return as length indicator
+        # Actual string decoding requires multiple slots and is handled separately
+        vyper_string_match = re.match(r'^string\[(\d+)\]$', label)
+        if vyper_string_match:
+            length = int.from_bytes(data, "big")
+            return f"[length: {length}]"
+
+        # Vyper nonreentrant lock - decode as uint
+        if "nonreentrant" in label and "lock" in label:
+            return int.from_bytes(data, "big")
+
         # Boolean
         if base in ("bool", "t_bool") or "bool" in label:
             return data[-1] != 0 if data else False
@@ -388,6 +399,75 @@ class TypeDecoder:
     def decode_array_length(self, slot_value: bytes) -> int:
         """Decode dynamic array length from its base slot."""
         return int.from_bytes(slot_value, "big")
+
+    def decode_vyper_string(
+        self, length_slot_value: bytes, data_slot_values: list[bytes], max_length: int
+    ) -> DecodedValue:
+        """
+        Decode a Vyper String[N] from its storage slots.
+
+        Vyper string storage format:
+        - Slot 0: Length as uint256
+        - Slots 1..N: String data (left-aligned, ceil(max_length/32) slots)
+
+        Args:
+            length_slot_value: The 32-byte value from the length slot
+            data_slot_values: List of 32-byte values from subsequent data slots
+            max_length: The N in String[N]
+
+        Returns:
+            DecodedValue with the decoded string
+        """
+        raw_hex = "0x" + length_slot_value.hex()
+        length = int.from_bytes(length_slot_value, "big")
+
+        if length == 0:
+            return DecodedValue(
+                raw=raw_hex,
+                decoded="",
+                type_label=f"String[{max_length}]",
+            )
+
+        if length > max_length:
+            # Invalid length, return raw
+            return DecodedValue(
+                raw=raw_hex,
+                decoded=f"[invalid length: {length}]",
+                type_label=f"String[{max_length}]",
+            )
+
+        # Concatenate data slots
+        all_data = b"".join(data_slot_values)
+
+        # Extract string bytes (length bytes from the start)
+        string_bytes = all_data[:length]
+
+        try:
+            decoded_str = string_bytes.decode("utf-8")
+            return DecodedValue(
+                raw=raw_hex,
+                decoded=decoded_str,
+                type_label=f"String[{max_length}]",
+            )
+        except UnicodeDecodeError:
+            return DecodedValue(
+                raw=raw_hex,
+                decoded="0x" + string_bytes.hex(),
+                type_label=f"String[{max_length}]",
+            )
+
+    @staticmethod
+    def is_vyper_string(type_label: str) -> tuple[bool, int]:
+        """
+        Check if a type label is a Vyper String[N] and return max length.
+
+        Returns:
+            (is_vyper_string, max_length) - max_length is 0 if not a Vyper string
+        """
+        match = re.match(r'^String\[(\d+)\]$', type_label or "")
+        if match:
+            return True, int(match.group(1))
+        return False, 0
 
     def decode_dynamic_bytes_slot(
         self, raw_value: bytes, type_label: str = "string"

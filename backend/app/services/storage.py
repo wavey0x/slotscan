@@ -44,7 +44,7 @@ class StorageReader:
         self,
         chain_id: int,
         address: str,
-        block_number: int,
+        block_number: int | str,
         layout: Optional[StorageLayout] = None,
         include_mapping_keys: Optional[dict[int, list[Any]]] = None,
     ) -> StorageSnapshot:
@@ -114,7 +114,7 @@ class StorageReader:
         return "0x" + bytes(value).hex().zfill(64)
 
     async def read_slots_batch(
-        self, chain_id: int, address: str, slots: list[int], block_number: int
+        self, chain_id: int, address: str, slots: list[int], block_number: int | str
     ) -> dict[int, str]:
         """
         Read multiple slots using JSON-RPC batching.
@@ -137,7 +137,7 @@ class StorageReader:
             return await self._read_slots_individual(chain_id, address, unique_slots, block_number)
 
     async def _read_slots_individual(
-        self, chain_id: int, address: str, slots: list[int], block_number: int
+        self, chain_id: int, address: str, slots: list[int], block_number: int | str
     ) -> dict[int, str]:
         """Fallback: read slots individually with parallel calls."""
         tasks = [
@@ -161,7 +161,7 @@ class StorageReader:
         self,
         chain_id: int,
         address: str,
-        block_number: int,
+        block_number: int | str,
         layout: StorageLayout,
         mapping_keys: Optional[dict[int, list[Any]]] = None,
     ) -> list[SlotValue]:
@@ -169,6 +169,7 @@ class StorageReader:
         slots_to_read = []
         slot_to_var: dict[int, tuple[StorageVariable, Any]] = {}
         mapping_slot_index: dict[int, tuple[StorageVariable, Any]] = {}
+        vyper_string_vars: dict[int, int] = {}  # base_slot -> max_length
 
         # Collect static slots from layout
         for var in layout.variables:
@@ -176,7 +177,18 @@ class StorageReader:
             if not var_type:
                 continue
 
-            if var_type.encoding in ("inplace", "bytes"):
+            # Check for Vyper String[N] type
+            is_vyper_str, max_len = self.decoder.is_vyper_string(var_type.label)
+            if is_vyper_str:
+                # Vyper strings: 1 slot for length + ceil(max_len/32) slots for data
+                num_data_slots = (max_len + 31) // 32
+                total_slots = 1 + num_data_slots
+                vyper_string_vars[var.slot] = max_len
+                for i in range(total_slots):
+                    slot = var.slot + i
+                    slots_to_read.append(slot)
+                    slot_to_var[slot] = (var, i)
+            elif var_type.encoding in ("inplace", "bytes"):
                 num_bytes = var_type.num_bytes or var.size or 32
                 num_slots = max(1, (num_bytes + 31) // 32)
                 for i in range(num_slots):
@@ -215,6 +227,7 @@ class StorageReader:
         # Build SlotValue results
         results = []
         base_slot_index = layout.get_base_slot_index()
+        processed_vyper_strings = set()  # Track which Vyper strings we've already processed
 
         for slot, raw_value in sorted(slot_values.items()):
             var_info = slot_to_var.get(slot)
@@ -226,6 +239,50 @@ class StorageReader:
                 variable_path = None
 
                 var_type = layout.get_type(variable.type_id)
+
+                # Handle Vyper String[N] types specially
+                if variable.slot in vyper_string_vars:
+                    # Skip if we already processed this string (only process base slot)
+                    if variable.slot in processed_vyper_strings:
+                        continue
+                    # Only process when we're at the base slot (extra == 0)
+                    if extra != 0:
+                        continue
+
+                    processed_vyper_strings.add(variable.slot)
+                    max_len = vyper_string_vars[variable.slot]
+                    num_data_slots = (max_len + 31) // 32
+
+                    # Gather length slot and data slots
+                    length_slot_value = bytes.fromhex(raw_value[2:])
+                    data_slot_values = []
+                    for i in range(1, num_data_slots + 1):
+                        data_slot = variable.slot + i
+                        if data_slot in slot_values:
+                            data_slot_values.append(bytes.fromhex(slot_values[data_slot][2:]))
+                        else:
+                            data_slot_values.append(b"\x00" * 32)
+
+                    # Decode Vyper string
+                    try:
+                        decoded = self.decoder.decode_vyper_string(
+                            length_slot_value, data_slot_values, max_len
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to decode Vyper string at slot {slot}: {e}")
+
+                    variable_path = variable.name
+                    results.append(
+                        SlotValue(
+                            slot=hex(slot),
+                            raw_value=raw_value,
+                            variable=variable,
+                            decoded_value=decoded,
+                            variable_path=variable_path,
+                        )
+                    )
+                    continue
+
                 decode_type = var_type
                 # For mappings, decode using the value type
                 if var_type and var_type.encoding == "mapping" and var_type.value_type:
@@ -279,7 +336,7 @@ class StorageReader:
         self,
         chain_id: int,
         address: str,
-        block_number: int,
+        block_number: int | str,
         additional_slots: Optional[list[int]] = None,
     ) -> list[SlotValue]:
         """Read storage for an unverified contract (scan 0-256)."""

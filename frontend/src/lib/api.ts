@@ -65,7 +65,7 @@ export async function fetchLayout(
 export async function fetchStorage(
   chainId: string,
   address: string,
-  block: number,
+  block: number | 'latest',
   mappingKeys?: Record<number, string[]>
 ): Promise<StorageSnapshotResponse> {
   const params = new URLSearchParams();

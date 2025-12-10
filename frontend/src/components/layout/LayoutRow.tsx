@@ -4,11 +4,14 @@ import { useState } from 'react';
 import {
   StorageVariableResponse,
   StorageTypeResponse,
+  SlotValueResponse,
   ComputedSlotLookup,
 } from '@/lib/types';
 import { HoverCell } from '@/components/ui/HoverCell';
+import { CopyButton } from '@/components/ui/CopyButton';
 import { MappingKeyInput } from './MappingKeyInput';
 import { ArrayIndexInput } from './ArrayIndexInput';
+import { Skeleton } from '@/components/ui/Skeleton';
 import { cn } from '@/lib/utils';
 
 interface LayoutRowProps {
@@ -17,11 +20,53 @@ interface LayoutRowProps {
   chainId: string;
   address: string;
   showHex: boolean;
+  slotValue?: SlotValueResponse;
+  storageLoading?: boolean;
 }
 
 function truncateType(label: string, maxLen: number = 40): string {
   if (label.length <= maxLen) return label;
   return label.substring(0, maxLen - 3) + '...';
+}
+
+// Format a decoded value for display
+function formatDecodedValue(value: unknown): string {
+  if (value === null || value === undefined) return '-';
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'string') {
+    // Show addresses in full (42 chars including 0x)
+    if (value.startsWith('0x') && value.length === 42) {
+      return value;
+    }
+    // Truncate other long hex values (not addresses)
+    if (value.startsWith('0x') && value.length > 66) {
+      return `${value.slice(0, 10)}...${value.slice(-6)}`;
+    }
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'bigint') {
+    const num = BigInt(value);
+    const abs = num < 0 ? -num : num;
+    // Use scientific notation for very large numbers (> 10^30)
+    if (abs > BigInt('1000000000000000000000000000000')) {
+      const str = abs.toString();
+      const exp = str.length - 1;
+      const mantissa = str[0] + '.' + str.slice(1, 3);
+      return (num < 0 ? '-' : '') + mantissa + 'e' + exp;
+    }
+    // Format large numbers with commas
+    if (abs > BigInt(1000000)) {
+      return num.toLocaleString();
+    }
+    return num.toString();
+  }
+  return String(value);
+}
+
+// Format hex value for display (show full value)
+function formatHexValue(hex: string): string {
+  if (!hex) return '-';
+  return hex;
 }
 
 export function LayoutRow({
@@ -30,6 +75,8 @@ export function LayoutRow({
   chainId,
   address,
   showHex,
+  slotValue,
+  storageLoading,
 }: LayoutRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [lookups, setLookups] = useState<ComputedSlotLookup[]>([]);
@@ -149,17 +196,13 @@ export function LayoutRow({
         </td>
 
         {/* Name */}
-        <td className="px-1 py-2 text-sm font-mono text-gray-900">
+        <td className="px-1 py-2 truncate text-xs font-mono text-gray-900" title={variable.name}>
           {variable.name}
         </td>
 
         {/* Type */}
-        <td className="px-1 py-2">
-          <HoverCell
-            display={truncateType(variable.type_label)}
-            value={variable.type_label}
-            colorClass="text-xs font-mono text-gray-500"
-          />
+        <td className="px-1 py-2 truncate text-xs font-mono text-gray-500" title={variable.type_label}>
+          {variable.type_label}
         </td>
 
         {/* Slot */}
@@ -167,21 +210,41 @@ export function LayoutRow({
           {variable.slot}
         </td>
 
-        {/* Offset */}
-        <td className="px-1 py-2 text-xs font-mono text-gray-500">
-          {variable.offset}
-        </td>
-
-        {/* Bytes */}
-        <td className="px-1 py-2 text-xs font-mono text-gray-500">
-          {variable.size}
+        {/* Value */}
+        <td className="px-1 py-2">
+          {storageLoading ? (
+            <Skeleton className="h-3 w-20" />
+          ) : slotValue ? (
+            <div className="flex items-center gap-1">
+              <span className={cn(
+                'font-mono leading-tight break-all',
+                showHex ? 'text-[10px]' : 'text-xs',
+                isInteractive ? 'text-gray-400' : 'text-gray-900'
+              )}>
+                {showHex
+                  ? slotValue.value_encoded
+                  : formatDecodedValue(slotValue.value_decoded)}
+              </span>
+              <CopyButton
+                value={
+                  showHex
+                    ? slotValue.value_encoded
+                    : String(slotValue.value_decoded ?? slotValue.value_encoded)
+                }
+              />
+            </div>
+          ) : isInteractive ? (
+            <span className="text-gray-400 text-[10px]">expand to query</span>
+          ) : (
+            <span className="text-gray-400 text-xs">-</span>
+          )}
         </td>
       </tr>
 
       {/* Expanded input row for mappings */}
       {expanded && isMapping && (
         <tr className="bg-gray-50/50">
-          <td colSpan={6} className="px-4 py-3 border-b border-gray-100">
+          <td colSpan={5} className="px-4 py-3 border-b border-gray-100">
             <MappingKeyInput
               baseSlot={variable.slot}
               keyTypes={getMappingKeyTypes()}
@@ -198,7 +261,7 @@ export function LayoutRow({
       {/* Expanded input row for arrays */}
       {expanded && isArray && !isMapping && (
         <tr className="bg-gray-50/50">
-          <td colSpan={6} className="px-4 py-3 border-b border-gray-100">
+          <td colSpan={5} className="px-4 py-3 border-b border-gray-100">
             <ArrayIndexInput
               baseSlot={variable.slot}
               elementType={getElementType()}

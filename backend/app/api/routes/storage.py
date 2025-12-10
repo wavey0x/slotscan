@@ -9,7 +9,9 @@ from app.api.dependencies import (
     get_contract_resolver,
     get_layout_parser,
     get_storage_reader,
+    get_web3_provider,
 )
+from app.services.web3_provider import Web3Provider
 from app.models.api import SlotValueResponse, StorageSnapshotResponse
 from app.models.domain import StorageLayout
 from app.models.errors import NotAContractError, RPCError
@@ -24,13 +26,14 @@ router = APIRouter(prefix="/api/slotscan/storage", tags=["storage"])
 async def get_storage(
     chain_id: int,
     address: str,
-    block: int = Query(..., ge=0, description="Block number"),
+    block: str = Query(..., description="Block number or 'latest'"),
     mapping_keys: Optional[str] = Query(
         None, description="JSON-encoded mapping keys: {slot: [keys]}"
     ),
     resolver: ContractResolver = Depends(get_contract_resolver),
     layout_parser: LayoutParser = Depends(get_layout_parser),
     storage_reader: StorageReader = Depends(get_storage_reader),
+    web3_provider: Web3Provider = Depends(get_web3_provider),
 ):
     """
     Get storage snapshot at a block.
@@ -38,6 +41,29 @@ async def get_storage(
     For verified contracts, returns all variables with decoded values.
     For unverified contracts, scans slots 0-256 for non-zero values.
     """
+    # Parse block parameter
+    use_latest = block.lower() == "latest"
+    if use_latest:
+        # Resolve "latest" to actual block number for the response
+        try:
+            web3 = web3_provider.get_web3(chain_id)
+            block_number = await web3.eth.block_number
+        except Exception as e:
+            raise HTTPException(
+                status_code=502,
+                detail={"error": f"Failed to get latest block: {e}", "code": "RPC_ERROR"},
+            )
+    else:
+        try:
+            block_number = int(block)
+            if block_number < 0:
+                raise ValueError()
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Invalid block format", "code": "INVALID_BLOCK"},
+            )
+
     # Parse mapping keys
     keys_dict = None
     if mapping_keys:
@@ -96,7 +122,7 @@ async def get_storage(
         snapshot = await storage_reader.read_at_block(
             chain_id=chain_id,
             address=address,
-            block_number=block,
+            block_number=block_number,
             layout=layout,
             include_mapping_keys=keys_dict,
         )
@@ -113,12 +139,11 @@ async def get_storage(
         slots=[
             SlotValueResponse(
                 slot=s.slot,
-                raw_value=s.raw_value,
+                value_encoded=s.raw_value,
+                value_decoded=s.decoded_value.decoded if s.decoded_value else None,
                 variable_name=s.variable.name if s.variable else None,
                 variable_path=s.variable_path,
                 type_label=s.variable.label if s.variable else None,
-                decoded_value=s.decoded_value.decoded if s.decoded_value else None,
-                display_value=s.decoded_value.display if s.decoded_value else None,
             )
             for s in snapshot.slots
         ],

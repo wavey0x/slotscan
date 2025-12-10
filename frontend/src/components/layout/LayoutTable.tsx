@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
-import { StorageLayoutResponse } from '@/lib/types';
+import { useState, useMemo } from 'react';
+import { StorageLayoutResponse, SlotValueResponse } from '@/lib/types';
 import { Toggle } from '@/components/ui/Toggle';
 import { LayoutRow } from './LayoutRow';
+import { useStorage } from '@/lib/hooks/useStorage';
 
 interface LayoutTableProps {
   chainId: string;
@@ -18,33 +19,69 @@ export function LayoutTable({
 }: LayoutTableProps) {
   const [showHex, setShowHex] = useState(false);
 
+  // Fetch storage values at latest block
+  const { data: storage, isLoading: storageLoading } = useStorage(chainId, address, 'latest');
+
+  // Create a map of slot number to value for quick lookup
+  const slotValues = useMemo(() => {
+    const map: Record<number, SlotValueResponse> = {};
+    if (storage?.slots) {
+      for (const slot of storage.slots) {
+        // Parse slot hex string to number for matching
+        const slotNum = parseInt(slot.slot, 16);
+        map[slotNum] = slot;
+      }
+    }
+    return map;
+  }, [storage?.slots]);
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <div className="text-xs text-gray-500">
-          {layout.variables.length} variables
+        <div className="flex items-center gap-3">
+          {storage?.block_number ? (
+            <div className="flex flex-col text-xs">
+              <span className="flex items-center gap-1.5">
+                <span className="text-gray-400">Block</span>
+                <span className="font-mono text-gray-700">{storage.block_number.toLocaleString()}</span>
+              </span>
+              <span className="text-gray-400">
+                {layout.variables.length} variables
+              </span>
+            </div>
+          ) : storageLoading ? (
+            <span className="text-xs text-gray-400">Loading values...</span>
+          ) : (
+            <span className="text-xs text-gray-500">
+              {layout.variables.length} variables
+            </span>
+          )}
         </div>
         <Toggle label="HEX" checked={showHex} onChange={setShowHex} />
       </div>
 
-      <table className="w-full">
+      <table className="w-full table-fixed">
+        <colgroup>
+          <col className="w-6" />
+          <col className="w-[100px]" />
+          <col className="w-[120px]" />
+          <col className="w-10" />
+          <col />
+        </colgroup>
         <thead>
           <tr className="border-b border-gray-300">
-            <th className="w-5 px-1 pt-2 pb-1"></th>
+            <th className="px-1 pt-2 pb-1"></th>
             <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase">
               Name
             </th>
             <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase">
               Type
             </th>
-            <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase w-16">
+            <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase">
               Slot
             </th>
-            <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase w-12">
-              Offset
-            </th>
-            <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase w-12">
-              Bytes
+            <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase">
+              Value
             </th>
           </tr>
         </thead>
@@ -57,6 +94,8 @@ export function LayoutTable({
               chainId={chainId}
               address={address}
               showHex={showHex}
+              slotValue={slotValues[variable.slot]}
+              storageLoading={storageLoading}
             />
           ))}
         </tbody>
