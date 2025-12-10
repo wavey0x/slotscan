@@ -10,7 +10,7 @@ from web3 import Web3
 
 from app.config import Settings
 from app.models.domain import ContractMetadata, ProxyInfo, StorageLayout, VerificationResult
-from app.models.errors import NotAContractError, RPCError
+from app.models.errors import NotAContractError, RPCError, UnsupportedCompilerVersionError
 from app.repositories.contracts import ContractRepository
 from app.services.layout import LayoutParser
 from app.services.namespace_storage import NamespaceStorageParser
@@ -519,6 +519,7 @@ class ContractResolver:
             return None
 
         params = {
+            "chainid": str(chain_id),  # Required for V2 API
             "module": "contract",
             "action": "getsourcecode",
             "address": address,
@@ -556,6 +557,11 @@ class ContractResolver:
         compiler_version = result.get("CompilerVersion", "")
         evm_version = result.get("EVMVersion", "")
 
+        # Detect Vyper from compiler version (e.g., "vyper:0.2.4" or "v0.2.4")
+        is_vyper = "vyper" in compiler_version.lower()
+        language = "Vyper" if is_vyper else "Solidity"
+        file_extension = ".vy" if is_vyper else ".sol"
+
         sources = {}
         metadata_settings = {
             "optimizer": {
@@ -578,7 +584,7 @@ class ContractResolver:
                 if "settings" in parsed:
                     metadata_settings.update(parsed["settings"])
             except json.JSONDecodeError:
-                sources[f"{contract_name}.sol"] = source_code
+                sources[f"{contract_name}{file_extension}"] = source_code
 
         elif source_code.startswith("{"):
             # Standard JSON input format
@@ -590,10 +596,14 @@ class ContractResolver:
                 if "settings" in parsed:
                     metadata_settings.update(parsed["settings"])
             except json.JSONDecodeError:
-                sources[f"{contract_name}.sol"] = source_code
+                sources[f"{contract_name}{file_extension}"] = source_code
         else:
             # Single file
-            sources[f"{contract_name}.sol"] = source_code
+            sources[f"{contract_name}{file_extension}"] = source_code
+
+        # Secondary detection: check for .vy files in sources
+        if not is_vyper and any(f.endswith(".vy") for f in sources.keys()):
+            language = "Vyper"
 
         # Parse compiler settings
         optimization = result.get("OptimizationUsed") == "1"
@@ -614,4 +624,5 @@ class ContractResolver:
             compiler_version=compiler_version,
             compiler_settings=metadata_settings or compiler_settings,
             sources=sources,
+            language=language,
         )

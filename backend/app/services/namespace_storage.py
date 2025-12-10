@@ -72,6 +72,17 @@ COMPLEX_TYPE_PATTERNS = [
     "bytes",  # dynamic bytes
 ]
 
+# Known library type slot counts - ONLY for well-known standard libraries
+# with guaranteed stable storage layouts. Everything else is parsed from source.
+STANDARD_LIBRARY_SLOT_COUNTS = {
+    # OpenZeppelin EnumerableSet - always 2 slots: _values[] + _indexes mapping
+    "EnumerableSet": 2,
+    # Solidity primitives that use 1 slot for metadata
+    "mapping": 1,
+    "string": 1,
+    "bytes": 1,
+}
+
 
 class NamespaceStorageParser:
     """Parses namespaced storage patterns from Solidity source code."""
@@ -164,7 +175,11 @@ class NamespaceStorageParser:
 
         return None
 
-    def parse_struct_members(self, struct_body: str) -> list[StructMember]:
+    def parse_struct_members(
+        self,
+        struct_body: str,
+        sources: Optional[dict[str, str]] = None,
+    ) -> list[StructMember]:
         """
         Parse struct members and calculate storage slot offsets.
 
@@ -173,14 +188,25 @@ class NamespaceStorageParser:
         - Value types < 32 bytes can pack into same slot
         - Complex types (mappings, arrays, structs) start a new slot
         - Mappings take 1 slot (base), data at keccak(key || slot)
+
+        Args:
+            struct_body: The content inside the struct braces
+            sources: All source files (for recursive struct parsing)
         """
         members = []
         current_slot = 0
         current_offset = 0
+        slot_count_cache: dict[str, int] = {}
 
         # Pattern to match struct members: type name;
         # Handle comments and whitespace
-        member_pattern = r'(?:///[^\n]*\n\s*)*(\S+(?:\s*<[^>]+>)?(?:\s*\[[^\]]*\])?)\s+(\w+)\s*;'
+        # Must handle complex types like:
+        #   mapping(address => uint256)
+        #   mapping(address => mapping(address => uint256))
+        #   EnumerableSet.AddressSet
+        #   uint256
+        # We capture everything up to the last identifier before the semicolon
+        member_pattern = r'(?:///[^\n]*\n\s*)*([^;\n]+?)\s+(\w+)\s*;'
 
         for match in re.finditer(member_pattern, struct_body):
             type_str = match.group(1).strip()
@@ -195,16 +221,23 @@ class NamespaceStorageParser:
                     current_slot += 1
                     current_offset = 0
 
+                # Get slot count for this complex type (recursively parses nested structs)
+                slot_count = self._get_complex_type_slots(
+                    type_str,
+                    sources or {},
+                    slot_count_cache,
+                )
+
                 members.append(StructMember(
                     name=name,
                     type_str=type_str,
                     slot_offset=current_slot,
                     byte_offset=0,
-                    size=32,  # Complex types take at least 1 slot
+                    size=32 * slot_count,  # Size in bytes
                 ))
 
-                # Complex types may span multiple slots, but we mark base only
-                current_slot += 1
+                # Advance by the number of slots this type occupies
+                current_slot += slot_count
 
             else:
                 size = self._get_type_size(type_str)
@@ -263,6 +296,107 @@ class NamespaceStorageParser:
 
         # Default to 32 bytes (full slot)
         return 32
+
+    def _get_complex_type_slots(
+        self,
+        type_str: str,
+        sources: dict[str, str],
+        cache: Optional[dict[str, int]] = None,
+    ) -> int:
+        """
+        Get number of storage slots a complex type occupies.
+
+        For struct types, recursively parses their definitions from source.
+        Results are cached to avoid re-parsing.
+        """
+        if cache is None:
+            cache = {}
+
+        # Check cache first
+        if type_str in cache:
+            return cache[type_str]
+
+        # Check standard library types (well-known, stable layouts)
+        for lib_pattern, slot_count in STANDARD_LIBRARY_SLOT_COUNTS.items():
+            if lib_pattern in type_str:
+                cache[type_str] = slot_count
+                return slot_count
+
+        # Interface types (IFoo) - just an address, 1 slot
+        if type_str.startswith('I') and len(type_str) > 1 and type_str[1].isupper():
+            cache[type_str] = 1
+            return 1
+
+        # Struct types (e.g., "AutopoolToken.TokenData" or "TokenData")
+        # Try to find and parse the struct definition from source
+        if '.' in type_str or type_str[0].isupper():
+            # Extract struct name (last part after dot, or full name)
+            struct_name = type_str.split('.')[-1] if '.' in type_str else type_str
+
+            # Try to find the struct definition
+            struct_body = self.find_struct_definition(struct_name, sources)
+
+            if struct_body:
+                # Recursively calculate slot count for this struct
+                slot_count = self._calculate_struct_slot_count(struct_body, sources, cache)
+                cache[type_str] = slot_count
+                logger.debug(f"Parsed struct {type_str}: {slot_count} slots")
+                return slot_count
+            else:
+                # Struct definition not found - default to 1 slot
+                logger.debug(f"Struct definition not found for {type_str}, defaulting to 1 slot")
+                cache[type_str] = 1
+                return 1
+
+        # Default: 1 slot
+        cache[type_str] = 1
+        return 1
+
+    def _calculate_struct_slot_count(
+        self,
+        struct_body: str,
+        sources: dict[str, str],
+        cache: dict[str, int],
+    ) -> int:
+        """Calculate total slots occupied by a struct from its body."""
+        current_slot = 0
+        current_byte_offset = 0
+
+        # Pattern to match struct members
+        member_pattern = r'(?:///[^\n]*\n\s*)*([^;\n]+?)\s+(\w+)\s*;'
+
+        for match in re.finditer(member_pattern, struct_body):
+            type_str = match.group(1).strip()
+
+            is_complex = self._is_complex_type(type_str)
+
+            if is_complex:
+                # Complex types start on new slot
+                if current_byte_offset > 0:
+                    current_slot += 1
+                    current_byte_offset = 0
+
+                slot_count = self._get_complex_type_slots(type_str, sources, cache)
+                current_slot += slot_count
+
+            else:
+                size = self._get_type_size(type_str)
+
+                if current_byte_offset + size > 32:
+                    current_slot += 1
+                    current_byte_offset = 0
+
+                current_byte_offset += size
+
+                if current_byte_offset >= 32:
+                    current_slot += 1
+                    current_byte_offset = 0
+
+        # Account for any remaining bytes in the last slot
+        if current_byte_offset > 0:
+            current_slot += 1
+
+        return max(1, current_slot)
 
     def create_namespace_layout(
         self,
@@ -334,7 +468,7 @@ class NamespaceStorageParser:
             logger.warning(f"Could not find struct definition for {namespace.struct_name}")
             return None
 
-        members = self.parse_struct_members(struct_body)
+        members = self.parse_struct_members(struct_body, sources)
 
         if not members:
             logger.warning(f"No members found in struct {namespace.struct_name}")

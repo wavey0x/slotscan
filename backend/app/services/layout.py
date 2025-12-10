@@ -17,6 +17,9 @@ from app.models.errors import CompilationError, LayoutNotFoundError, Unsupported
 # Minimum Solidity version that supports --storage-layout output
 MIN_SOLC_VERSION_FOR_LAYOUT = (0, 5, 13)
 
+# Minimum Vyper version that supports -f layout output
+MIN_VYPER_VERSION_FOR_LAYOUT = (0, 3, 0)
+
 logger = logging.getLogger(__name__)
 
 # Vyper type sizes in bytes
@@ -416,6 +419,14 @@ class LayoutParser:
         """
         normalized_version = self._normalize_vyper_version(version)
 
+        # Check if this Vyper version supports storage layout output
+        version_tuple = self._parse_version_tuple(normalized_version)
+        if version_tuple < MIN_VYPER_VERSION_FOR_LAYOUT:
+            raise UnsupportedCompilerVersionError(
+                normalized_version,
+                min_version="0.3.0 (Vyper)"
+            )
+
         # Try using vvm first (preferred - handles version management)
         try:
             import vvm
@@ -496,9 +507,13 @@ class LayoutParser:
         Normalize Vyper version string.
 
         Examples:
+            "vyper:0.2.4" -> "0.2.4"  (Etherscan format)
             "0.3.10+commit.91361694" -> "0.3.10"
             "v0.3.10" -> "0.3.10"
         """
+        # Handle Etherscan format: "vyper:0.2.4"
+        if version.lower().startswith("vyper:"):
+            version = version.split(":", 1)[1]
         if version.startswith("v"):
             version = version[1:]
         if "+" in version:

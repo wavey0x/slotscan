@@ -37,8 +37,8 @@ class UnsupportedCompilerVersionError(SlotScanError):
         self.version = version
         self.min_version = min_version
         super().__init__(
-            f"Storage layout not available for contracts compiled with Solidity {version}. "
-            f"This feature requires Solidity {min_version} or later."
+            f"Storage layout not available for compiler version {version}. "
+            f"This feature requires version {min_version} or later."
         )
 
 

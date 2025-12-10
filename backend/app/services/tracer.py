@@ -1022,6 +1022,29 @@ class TransactionTracer:
         # Check if base_slot points directly to a mapping variable
         # Use get_mapping_by_base_slot instead of get_variable_for_slot because the latter skips mappings
         variable = layout.get_mapping_by_base_slot(base_slot_int)
+
+        # Heuristic for namespaced storage (ERC-7201 pattern):
+        # If base_slot is small (< 256), it might be a relative offset within a namespace.
+        # Look for a mapping at slot (namespace_base + base_slot_int) where namespace_base
+        # is detected from the layout (large slot values indicate namespace storage).
+        if not variable and base_slot_int < 256:
+            # Detect namespace base from layout: find the smallest large slot (offset 0)
+            namespace_base = None
+            for var in layout.variables:
+                if var.slot > 2**200:  # Namespace slots are very large
+                    if namespace_base is None or var.slot < namespace_base:
+                        namespace_base = var.slot
+
+            if namespace_base is not None:
+                # Look for mapping at namespace_base + base_slot_int
+                target_slot = namespace_base + base_slot_int
+                variable = layout.get_mapping_by_base_slot(target_slot)
+                if variable:
+                    logger.debug(
+                        f"  Namespace heuristic: preimage base_slot={base_slot_int} matched "
+                        f"{variable.name} at absolute slot 0x{target_slot:x}"
+                    )
+
         logger.debug(f"  get_mapping_by_base_slot({base_slot_int}) = {variable.name if variable else None}")
         if variable:
             var_type = layout.get_type(variable.type_id)

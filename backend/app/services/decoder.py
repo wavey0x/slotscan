@@ -263,6 +263,18 @@ class TypeDecoder:
             heuristic_result = self.decode_heuristic(padded)
             return heuristic_result.decoded
 
+        # Solidity dynamic string
+        if label == "string" or (type_info.encoding == "bytes" and "string" in label):
+            padded = data.rjust(32, b"\x00")
+            result = self.decode_dynamic_bytes_slot(padded, "string")
+            return result.decoded
+
+        # Solidity dynamic bytes (not fixed bytesN)
+        if label == "bytes" or (type_info.encoding == "bytes" and label in ("bytes", "t_bytes_storage")):
+            padded = data.rjust(32, b"\x00")
+            result = self.decode_dynamic_bytes_slot(padded, "bytes")
+            return result.decoded
+
         # Default to hex
         return "0x" + data.hex()
 

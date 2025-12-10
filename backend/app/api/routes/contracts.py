@@ -120,13 +120,26 @@ async def get_layout(
 
     # Try to parse if not cached
     if not layout and metadata.is_verified and metadata.sources and metadata.name:
+        # Detect Vyper from compiler version (e.g., "vyper:0.2.4") or source files
+        is_vyper = (
+            (metadata.compiler_version and "vyper" in metadata.compiler_version.lower()) or
+            any(f.endswith(".vy") for f in metadata.sources.keys())
+        )
+
         try:
-            layout = await layout_parser.parse(
-                contract_name=metadata.name,
-                sources=metadata.sources,
-                compiler_version=metadata.compiler_version or "0.8.19",
-                compiler_settings=metadata.compiler_settings,
-            )
+            if is_vyper:
+                layout = await layout_parser.parse_vyper(
+                    contract_name=metadata.name,
+                    sources=metadata.sources,
+                    compiler_version=metadata.compiler_version or "0.3.10",
+                )
+            else:
+                layout = await layout_parser.parse(
+                    contract_name=metadata.name,
+                    sources=metadata.sources,
+                    compiler_version=metadata.compiler_version or "0.8.19",
+                    compiler_settings=metadata.compiler_settings,
+                )
         except UnsupportedCompilerVersionError as e:
             raise HTTPException(
                 status_code=404,
