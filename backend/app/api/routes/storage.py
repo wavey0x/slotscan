@@ -14,7 +14,7 @@ from app.api.dependencies import (
 from app.services.web3_provider import Web3Provider
 from app.models.api import SlotValueResponse, StorageSnapshotResponse
 from app.models.domain import StorageLayout
-from app.models.errors import NotAContractError, RPCError, UnsupportedCompilerVersionError
+from app.models.errors import NotAContractError, RPCError
 from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
 from app.services.storage import StorageReader
@@ -87,16 +87,6 @@ async def get_storage(
         raise HTTPException(
             status_code=404,
             detail={"error": "Not a contract", "code": "NOT_CONTRACT"},
-        )
-    except UnsupportedCompilerVersionError as e:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": str(e),
-                "code": "UNSUPPORTED_COMPILER_VERSION",
-                "compiler_version": e.version,
-                "min_version": e.min_version,
-            },
         )
     except RPCError as e:
         raise HTTPException(
@@ -212,16 +202,6 @@ async def get_slot(
         raise HTTPException(
             status_code=404,
             detail={"error": "Not a contract", "code": "NOT_CONTRACT"},
-        )
-    except UnsupportedCompilerVersionError as e:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": str(e),
-                "code": "UNSUPPORTED_COMPILER_VERSION",
-                "compiler_version": e.version,
-                "min_version": e.min_version,
-            },
         )
     except RPCError as e:
         raise HTTPException(
