@@ -5,7 +5,13 @@ import logging
 from typing import Any, Optional
 
 from web3 import Web3
-from web3.exceptions import Web3RPCError
+
+# web3.py v7 introduced Web3RPCError, v6 uses generic exceptions
+try:
+    from web3.exceptions import Web3RPCError
+except ImportError:
+    # Fallback for web3.py v6
+    Web3RPCError = Exception
 
 from app.config import Settings
 from app.models.errors import RPCError

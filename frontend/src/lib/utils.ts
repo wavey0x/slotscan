@@ -38,6 +38,11 @@ export function formatSlotShort(slot: string, chars = 6): string {
   return truncateHash(slot, chars);
 }
 
+export function truncateSlot(slot: string): string {
+  if (slot.length <= 18) return slot;
+  return slot.substring(0, 10) + '...' + slot.substring(slot.length - 6);
+}
+
 export function formatNumber(value: number | string): string {
   const num = typeof value === 'string' ? parseFloat(value) : value;
   if (isNaN(num)) return String(value);

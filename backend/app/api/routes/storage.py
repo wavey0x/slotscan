@@ -18,8 +18,26 @@ from app.models.errors import NotAContractError, RPCError
 from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
 from app.services.storage import StorageReader
+from app.utils.type_labels import normalize_contract_label
 
 router = APIRouter(prefix="/api/slotscan/storage", tags=["storage"])
+
+
+def _get_type_label(variable, layout: StorageLayout | None) -> str | None:
+    """Get display type label for a variable, normalizing contract types to address."""
+    if not variable:
+        return None
+
+    label = variable.label
+    kind = None
+
+    # Look up the type to get its kind
+    if layout:
+        var_type = layout.get_type(variable.type_id)
+        if var_type:
+            kind = var_type.kind
+
+    return normalize_contract_label(label, kind)
 
 
 @router.get("/{chain_id}/{address}", response_model=StorageSnapshotResponse)
@@ -47,7 +65,7 @@ async def get_storage(
         # Resolve "latest" to actual block number for the response
         try:
             web3 = web3_provider.get_web3(chain_id)
-            block_number = await web3.eth.block_number
+            block_number = await web3.eth.get_block_number()
         except Exception as e:
             raise HTTPException(
                 status_code=502,
@@ -143,7 +161,7 @@ async def get_storage(
                 value_decoded=s.decoded_value.decoded if s.decoded_value else None,
                 variable_name=s.variable.name if s.variable else None,
                 variable_path=s.variable_path,
-                type_label=s.variable.label if s.variable else None,
+                type_label=_get_type_label(s.variable, layout),
             )
             for s in snapshot.slots
         ],
@@ -211,6 +229,12 @@ async def get_slot(
 
     # Get layout
     layout = metadata.storage_layout
+    if layout and isinstance(layout, dict):
+        try:
+            layout = StorageLayout.from_dict(layout)
+        except Exception:
+            layout = None
+
     if not layout and metadata.is_verified and metadata.sources and metadata.name:
         try:
             layout = await layout_parser.parse(
@@ -244,5 +268,5 @@ async def get_slot(
         value_decoded=result.decoded_value.decoded if result.decoded_value else None,
         variable_name=result.variable.name if result.variable else None,
         variable_path=result.variable_path,
-        type_label=result.variable.label if result.variable else None,
+        type_label=_get_type_label(result.variable, layout),
     )

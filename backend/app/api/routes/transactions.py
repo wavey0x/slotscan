@@ -32,94 +32,22 @@ from app.services.decoder import TypeDecoder
 from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
 from app.services.tracer import TransactionTracer
+from app.utils.type_labels import (
+    clean_type_label,
+    normalize_contract_label,
+    strip_type_prefix,
+    strip_struct_parent,
+)
 
 
 import re
 
 
-def _strip_type_prefix(label: str) -> str:
-    """Strip 't_' prefix from Solidity type identifiers for display.
-
-    Also handles t_ prefixes inside complex types like mapping(t_address,t_uint256).
-    """
-    if not label:
-        return label
-
-    # First strip leading t_
-    result = label
-    if result.startswith("t_"):
-        result = result[2:]
-
-    # Strip t_ inside parentheses (for complex types)
-    # e.g., "mapping(t_address,t_uint256)" -> "mapping(address,uint256)"
-    import re
-    result = re.sub(r'\bt_([a-zA-Z])', r'\1', result)
-
-    # Clean up mapping syntax: "mapping(address,uint256)" -> "mapping(address => uint256)"
-    # Handle nested mappings too
-    def format_mapping(m):
-        inner = m.group(1)
-        # Split on comma, but be careful with nested mappings
-        # Simple case: just key,value
-        if '(' not in inner:
-            parts = inner.split(',')
-            if len(parts) == 2:
-                return f"mapping({parts[0].strip()} => {parts[1].strip()})"
-        return m.group(0)
-
-    result = re.sub(r'mapping\(([^)]+)\)', format_mapping, result)
-
-    return result
-
-
-def _strip_struct_parent(label: str) -> str:
-    """Strip parent contract/interface name from struct labels.
-
-    e.g., "struct GovStaker.RewardData" → "struct RewardData"
-         "struct RewardDistributorMultiEpoch.RewardType[]" → "struct RewardType[]"
-         "mapping(address => struct Parent.Child)" → "mapping(address => struct Child)"
-    """
-    if not label:
-        return label
-
-    # Handle struct types with parent prefix at the start
-    if label.startswith("struct "):
-        rest = label[7:]  # Remove "struct " prefix
-        # Check for parent.Name pattern
-        if "." in rest:
-            # Split at last dot to handle nested types, preserve array suffix
-            # e.g., "Parent.Child[]" -> "Child[]"
-            parts = rest.rsplit(".", 1)
-            return f"struct {parts[1]}"
-        return label
-
-    # Handle struct references embedded in complex types (mappings, arrays, etc.)
-    # e.g., "mapping(address => struct Parent.Child)"
-    import re
-    def replace_struct(match):
-        struct_type = match.group(1)  # e.g., "Parent.Child" or "Parent.Child[]"
-        if "." in struct_type:
-            # Strip parent, preserve suffix (like [])
-            parts = struct_type.rsplit(".", 1)
-            return f"struct {parts[1]}"
-        return match.group(0)  # Return unchanged if no parent
-
-    # Find and replace all "struct Parent.Child" patterns
-    result = re.sub(r'struct\s+([A-Za-z0-9_.]+(?:\[\])?)', replace_struct, label)
-    return result
-
-
-def _clean_type_label(label: str) -> str:
-    """Clean a type label for display: strip t_ prefix and struct parent names."""
-    result = _strip_type_prefix(label)
-    return _strip_struct_parent(result)
-
-
-def _normalize_contract_label(label: str, kind: str | None = None) -> str:
-    """Convert contract/interface labels to address for display."""
-    if (kind and kind.lower() == "contract") or (label and label.lower().startswith("contract")):
-        return "address"
-    return _clean_type_label(label)
+# Re-export with underscore prefix for backwards compatibility within this module
+_strip_type_prefix = strip_type_prefix
+_strip_struct_parent = strip_struct_parent
+_clean_type_label = clean_type_label
+_normalize_contract_label = normalize_contract_label
 
 
 def _extract_keys_from_path(variable_path: Optional[str]) -> Optional[str]:

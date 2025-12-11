@@ -13,7 +13,7 @@ import {
   getKeyTypeHint,
   validateKey,
 } from '@/lib/slot-utils';
-import { cn } from '@/lib/utils';
+import { cn, truncateSlot } from '@/lib/utils';
 
 interface MappingKeyInputProps {
   baseSlot: number;
@@ -50,11 +50,6 @@ function formatDecodedValue(value: unknown, rawValue?: string): string {
     }
   }
   return '-';
-}
-
-function truncateSlot(slot: string): string {
-  if (slot.length <= 18) return slot;
-  return slot.substring(0, 10) + '...' + slot.substring(slot.length - 6);
 }
 
 export function MappingKeyInput({
