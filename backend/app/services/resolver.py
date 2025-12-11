@@ -27,6 +27,13 @@ EIP1967_ADMIN_SLOT = "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a71785
 # EIP-1822 UUPS Slot
 EIP1822_SLOT = "0xc5f16f0fcc639fa48a6947836d9850f504798523bf8c9a3a87d5876cf622bcf7"
 
+# ZeppelinOS (pre-EIP-1967) Implementation Slot - keccak256("org.zeppelinos.proxy.implementation")
+# Used by USDC and other older OpenZeppelin proxies
+ZEPPELINOS_IMPL_SLOT = "0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3"
+
+# ZeppelinOS Admin Slot - keccak256("org.zeppelinos.proxy.admin")
+ZEPPELINOS_ADMIN_SLOT = "0x10d6a54a4754c8869d6886b5f5d7fbfa5b4522237ea5c60d11bc4e7a1ff9390b"
+
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 # EIP-1167 Minimal Proxy bytecode patterns
@@ -307,14 +314,19 @@ class ContractResolver:
                 )
 
         try:
-            # Fetch EIP-1967 and EIP-1822 slots in parallel
+            # Fetch EIP-1967, EIP-1822, and ZeppelinOS slots in parallel
             impl_task = web3.eth.get_storage_at(
                 address, EIP1967_IMPL_SLOT, block_identifier=block_id
             )
             uups_task = web3.eth.get_storage_at(
                 address, EIP1822_SLOT, block_identifier=block_id
             )
-            impl_value, uups_value = await asyncio.gather(impl_task, uups_task)
+            zos_task = web3.eth.get_storage_at(
+                address, ZEPPELINOS_IMPL_SLOT, block_identifier=block_id
+            )
+            impl_value, uups_value, zos_value = await asyncio.gather(
+                impl_task, uups_task, zos_task
+            )
 
             impl_address = self._extract_address(bytes(impl_value))
 
@@ -341,6 +353,24 @@ class ContractResolver:
                     proxy_type="eip1822",
                     implementation_address=uups_address,
                     admin_address=None,
+                )
+
+            # Check ZeppelinOS (pre-EIP-1967, used by USDC and other older proxies)
+            zos_address = self._extract_address(bytes(zos_value))
+
+            if zos_address and zos_address != ZERO_ADDRESS:
+                # ZeppelinOS found, fetch admin slot
+                zos_admin_value = await web3.eth.get_storage_at(
+                    address, ZEPPELINOS_ADMIN_SLOT, block_identifier=block_id
+                )
+                zos_admin_address = self._extract_address(bytes(zos_admin_value))
+
+                return ProxyInfo(
+                    proxy_type="zeppelinos",
+                    implementation_address=zos_address,
+                    admin_address=(
+                        zos_admin_address if zos_admin_address != ZERO_ADDRESS else None
+                    ),
                 )
 
         except Exception as e:

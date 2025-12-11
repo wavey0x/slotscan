@@ -177,6 +177,7 @@ async def get_layout(
                 "eip1167": "EIP-1167 Minimal Proxy",
                 "eip1967": "EIP-1967 Transparent Proxy",
                 "eip1822": "EIP-1822 UUPS Proxy",
+                "zeppelinos": "ZeppelinOS Proxy",
             }.get(metadata.proxy_type, f"{metadata.proxy_type} Proxy")
 
             raise HTTPException(
