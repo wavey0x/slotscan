@@ -1,6 +1,7 @@
 """Storage API routes."""
 
 import json
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -23,8 +24,14 @@ from app.utils.type_labels import normalize_contract_label
 router = APIRouter(prefix="/api/slotscan/storage", tags=["storage"])
 
 
-def _get_type_label(variable, layout: StorageLayout | None) -> str | None:
-    """Get display type label for a variable, normalizing contract types to address."""
+def _get_type_label(
+    variable, layout: StorageLayout | None, variable_path: str | None = None
+) -> str | None:
+    """Get display type label for a variable, normalizing contract types to address.
+
+    For array element lookups (variable_path like "arr[0]"), returns the element type
+    instead of the array type.
+    """
     if not variable:
         return None
 
@@ -36,6 +43,16 @@ def _get_type_label(variable, layout: StorageLayout | None) -> str | None:
         var_type = layout.get_type(variable.type_id)
         if var_type:
             kind = var_type.kind
+
+            # Check if this is an array element lookup
+            if variable_path and var_type.array_length and var_type.element_type:
+                # Check if path indicates an element (e.g., "arr[0]" not just "arr")
+                if re.search(r'\[\d+\]$', variable_path):
+                    # It's an array element lookup - use element type
+                    element_type = layout.get_type(var_type.element_type)
+                    if element_type:
+                        label = element_type.label
+                        kind = element_type.kind
 
     return normalize_contract_label(label, kind)
 
@@ -161,7 +178,7 @@ async def get_storage(
                 value_decoded=s.decoded_value.decoded if s.decoded_value else None,
                 variable_name=s.variable.name if s.variable else None,
                 variable_path=s.variable_path,
-                type_label=_get_type_label(s.variable, layout),
+                type_label=_get_type_label(s.variable, layout, s.variable_path),
             )
             for s in snapshot.slots
         ],
@@ -268,5 +285,5 @@ async def get_slot(
         value_decoded=result.decoded_value.decoded if result.decoded_value else None,
         variable_name=result.variable.name if result.variable else None,
         variable_path=result.variable_path,
-        type_label=_get_type_label(result.variable, layout),
+        type_label=_get_type_label(result.variable, layout, result.variable_path),
     )

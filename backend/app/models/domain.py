@@ -89,7 +89,18 @@ class StorageLayout:
                     return var
                 continue
 
-            span_slots = max(1, (var.size + 31) // 32 if var.size else 1)
+            # Calculate span - for static arrays, use array_length * element_slots
+            # Skip Vyper String[N] types which have array_length but aren't real arrays
+            is_vyper_string = var_type.element_type and var_type.element_type.lower() in ("string", "bytes")
+            if var_type.array_length and var_type.element_type and not is_vyper_string:
+                element_type = self.get_type(var_type.element_type)
+                element_slots = 1
+                if element_type and element_type.num_bytes:
+                    element_slots = max(1, (element_type.num_bytes + 31) // 32)
+                span_slots = var_type.array_length * element_slots
+            else:
+                span_slots = max(1, (var.size + 31) // 32 if var.size else 1)
+
             if var.slot <= slot < var.slot + span_slots:
                 return var
         return None
@@ -125,6 +136,10 @@ class StorageLayout:
         """
         var_type = self.get_type(var.type_id)
         if not var_type or var_type.encoding != "inplace" or not var_type.array_length:
+            return None
+
+        # Skip Vyper String[N] types which have array_length but aren't real arrays
+        if var_type.element_type and var_type.element_type.lower() in ("string", "bytes"):
             return None
 
         # Calculate element size in slots

@@ -237,7 +237,12 @@ class TypeDecoder:
             return self._decode_uint(data)
 
         # Contract type (stored as address)
+        # Check kind, or detect common contract/interface patterns by label
         if type_info.kind == "contract":
+            return self._decode_address(data)
+
+        # Interface types like ERC20, IERC20, ERC721 are stored as addresses
+        if label.startswith("erc") or label.startswith("ierc"):
             return self._decode_address(data)
 
         # Check if this is an array type - array base slots store length, not struct data

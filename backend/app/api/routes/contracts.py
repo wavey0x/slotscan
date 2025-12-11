@@ -16,6 +16,7 @@ from app.models.domain import StorageLayout
 from app.models.errors import NotAContractError, RPCError, UnsupportedCompilerVersionError
 from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
+from app.utils.type_labels import normalize_contract_label
 
 router = APIRouter(prefix="/api/slotscan/contracts", tags=["contracts"])
 
@@ -204,6 +205,12 @@ async def get_layout(
                 },
             )
 
+    def _get_type_label(v):
+        """Get normalized type label for a variable."""
+        var_type = layout.get_type(v.type_id)
+        kind = var_type.kind if var_type else None
+        return normalize_contract_label(v.label, kind)
+
     return StorageLayoutResponse(
         contract_name=layout.contract_name,
         variables=[
@@ -213,14 +220,14 @@ async def get_layout(
                 offset=v.offset,
                 size=v.size,
                 type_id=v.type_id,
-                type_label=v.label,
+                type_label=_get_type_label(v),
             )
             for v in layout.variables
         ],
         types={
             tid: StorageTypeResponse(
                 id=t.id,
-                label=t.label,
+                label=normalize_contract_label(t.label, t.kind),
                 kind=t.kind,
                 encoding=t.encoding,
                 num_bytes=t.num_bytes,

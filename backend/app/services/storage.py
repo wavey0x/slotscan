@@ -293,6 +293,9 @@ class StorageReader:
                 # For mappings, decode using the value type
                 if var_type and var_type.encoding == "mapping" and var_type.value_type:
                     decode_type = layout.get_type(var_type.value_type)
+                # For static arrays, decode using the element type
+                elif var_type and var_type.array_length and var_type.element_type:
+                    decode_type = layout.get_type(var_type.element_type)
 
                 if decode_type:
                     try:
@@ -309,6 +312,9 @@ class StorageReader:
                     if isinstance(extra, str) and len(extra) == 42:
                         key_display = f"{extra[:6]}...{extra[-4:]}"
                     variable_path = f"{variable.name}[{key_display}]"
+                elif var_type and var_type.array_length and isinstance(extra, int):
+                    # Static array - extra is the slot offset (which equals array index for single-slot elements)
+                    variable_path = f"{variable.name}[{extra}]"
                 else:
                     variable_path = variable.name
 
@@ -391,16 +397,32 @@ class StorageReader:
         variable_path = None
 
         if layout:
-            variable = layout.get_variable_by_slot(slot)
+            variable = layout.get_variable_for_slot(slot)
             if variable:
                 var_type = layout.get_type(variable.type_id)
                 if var_type:
-                    try:
-                        raw_bytes = bytes.fromhex(raw_value[2:])
-                        decoded = self.decoder.decode(raw_bytes, var_type, variable.offset)
-                    except Exception:
-                        pass
-                variable_path = variable.name
+                    decode_type = var_type
+                    array_index = None
+
+                    # For static arrays, use element type and calculate index
+                    if var_type.array_length and var_type.element_type:
+                        decode_type = layout.get_type(var_type.element_type)
+                        array_index = layout.get_static_array_index(variable, slot)
+
+                    if decode_type:
+                        try:
+                            raw_bytes = bytes.fromhex(raw_value[2:])
+                            decoded = self.decoder.decode(raw_bytes, decode_type, variable.offset)
+                        except Exception:
+                            pass
+
+                    # Build variable path with array index if applicable
+                    if array_index is not None:
+                        variable_path = f"{variable.name}[{array_index}]"
+                    else:
+                        variable_path = variable.name
+                else:
+                    variable_path = variable.name
         elif use_heuristic_unverified:
             try:
                 raw_bytes = bytes.fromhex(raw_value[2:])
