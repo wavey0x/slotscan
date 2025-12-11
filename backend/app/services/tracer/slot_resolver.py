@@ -215,7 +215,7 @@ class SlotResolver:
                 }
 
         # Check if base_slot is an intermediate hash (nested mapping)
-        base_slot_normalized = self._normalize_slot(base_slot_hex)
+        base_slot_normalized = self._normalize_slot(hex(base_slot_int))
         logger.debug(f"  Checking if base_slot is intermediate hash: {base_slot_normalized[:18]}... in_lookup={base_slot_normalized in preimage_lookup}")
         if base_slot_normalized in preimage_lookup:
             outer_preimage = preimage_lookup[base_slot_normalized]
