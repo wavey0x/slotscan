@@ -280,6 +280,18 @@ class TypeDecoder:
             result = self.decode_dynamic_bytes_slot(padded, "bytes")
             return result.decoded
 
+        # User-defined value types (UDVTs) - kind="value" with inplace encoding
+        # These are custom type aliases like "type Shares is uint112" or "type MyAddr is address"
+        if type_info.kind == "value" and type_info.encoding == "inplace":
+            # 20-byte values might be address type aliases - use address heuristic
+            if type_info.num_bytes == 20:
+                # Pad to 32 bytes and check if looks like address
+                padded = data.rjust(32, b"\x00")
+                if self._looks_like_address(padded):
+                    return self._decode_address(data)
+            # Otherwise decode as unsigned integer (most common case)
+            return self._decode_uint(data)
+
         # Default to hex
         return "0x" + data.hex()
 
