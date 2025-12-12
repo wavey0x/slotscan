@@ -34,6 +34,13 @@ ZEPPELINOS_IMPL_SLOT = "0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee
 # ZeppelinOS Admin Slot - keccak256("org.zeppelinos.proxy.admin")
 ZEPPELINOS_ADMIN_SLOT = "0x10d6a54a4754c8869d6886b5f5d7fbfa5b4522237ea5c60d11bc4e7a1ff9390b"
 
+# EIP-1967 Beacon Slot - keccak256("eip1967.proxy.beacon") - 1
+# Used by Euler EVK, OpenZeppelin BeaconProxy, and other upgradeable contracts
+EIP1967_BEACON_SLOT = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50"
+
+# Standard beacon implementation() function selector
+BEACON_IMPL_SELECTOR = "0x5c60da1b"
+
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 # EIP-1167 Minimal Proxy bytecode patterns
@@ -314,7 +321,7 @@ class ContractResolver:
                 )
 
         try:
-            # Fetch EIP-1967, EIP-1822, and ZeppelinOS slots in parallel
+            # Fetch EIP-1967, EIP-1822, ZeppelinOS, and Beacon slots in parallel
             impl_task = web3.eth.get_storage_at(
                 address, EIP1967_IMPL_SLOT, block_identifier=block_id
             )
@@ -324,8 +331,11 @@ class ContractResolver:
             zos_task = web3.eth.get_storage_at(
                 address, ZEPPELINOS_IMPL_SLOT, block_identifier=block_id
             )
-            impl_value, uups_value, zos_value = await asyncio.gather(
-                impl_task, uups_task, zos_task
+            beacon_task = web3.eth.get_storage_at(
+                address, EIP1967_BEACON_SLOT, block_identifier=block_id
+            )
+            impl_value, uups_value, zos_value, beacon_value = await asyncio.gather(
+                impl_task, uups_task, zos_task, beacon_task
             )
 
             impl_address = self._extract_address(bytes(impl_value))
@@ -372,6 +382,27 @@ class ContractResolver:
                         zos_admin_address if zos_admin_address != ZERO_ADDRESS else None
                     ),
                 )
+
+            # Check EIP-1967 Beacon Proxy (used by Euler EVK, OpenZeppelin BeaconProxy)
+            beacon_address = self._extract_address(bytes(beacon_value))
+
+            if beacon_address and beacon_address != ZERO_ADDRESS:
+                # Beacon found, call implementation() on the beacon to get actual impl
+                try:
+                    impl_result = await web3.eth.call(
+                        {"to": beacon_address, "data": BEACON_IMPL_SELECTOR},
+                        block_identifier=block_id,
+                    )
+                    beacon_impl_address = self._extract_address(bytes(impl_result))
+
+                    if beacon_impl_address and beacon_impl_address != ZERO_ADDRESS:
+                        return ProxyInfo(
+                            proxy_type="beacon",
+                            implementation_address=beacon_impl_address,
+                            admin_address=None,  # Beacon proxies don't have admin in proxy
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to get implementation from beacon {beacon_address}: {e}")
 
         except Exception as e:
             logger.warning(f"Proxy detection failed for {address}: {e}")
