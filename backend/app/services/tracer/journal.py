@@ -7,6 +7,7 @@ from enum import Enum
 import logging
 
 from app.services.layout_index import StorageNamespace
+from app.utils.addresses import normalize_evm_address
 
 
 ZERO_WORD = "0x" + "0" * 64
@@ -107,7 +108,7 @@ class StorageJournalBuilder:
         events: list[StorageWriteEvent] = []
 
         for raw in sorted(writes, key=lambda item: item.get("index", 0)):
-            address = (raw.get("address") or "").lower()
+            address = normalize_evm_address(raw.get("address")) or ""
             if not address:
                 # Address-less writes cannot be safely assigned to a contract.
                 continue
@@ -158,7 +159,7 @@ class StorageJournalBuilder:
 
             event = StorageWriteEvent(
                 address=address,
-                code_address=(raw.get("code_address") or None),
+                code_address=normalize_evm_address(raw.get("code_address")),
                 slot=slot,
                 value=value,
                 value_before=value_before,
@@ -300,7 +301,7 @@ class StorageJournalBuilder:
 
         addresses = set(pre_by_address) | set(post_by_address)
         for raw_address in addresses:
-            address = raw_address.lower()
+            address = normalize_evm_address(raw_address) or raw_address.lower()
             pre_storage = pre_by_address.get(raw_address, {}).get("storage", {})
             post_storage = post_by_address.get(raw_address, {}).get("storage", {})
             raw_slots = set(pre_storage) | set(post_storage)

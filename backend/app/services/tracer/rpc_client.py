@@ -1,11 +1,13 @@
 """RPC client for trace operations."""
 
 import logging
+import re
 
 from web3 import Web3
 
 from app.models.errors import RPCError, TraceNotAvailableError, TransactionNotFoundError
 from app.services.web3_provider import Web3Provider
+from app.utils.addresses import normalize_evm_address
 
 logger = logging.getLogger(__name__)
 
@@ -317,25 +319,21 @@ class TraceRPCClient:
             write["value"] = self._normalize_value(write.get("value", "0x0"))
             if write.get("old_value") is not None:
                 write["old_value"] = self._normalize_value(write["old_value"])
-            if write.get("address"):
-                write["address"] = "0x" + write["address"].removeprefix("0x")[-40:].lower()
-            if write.get("code_address"):
-                write["code_address"] = (
-                    "0x" + write["code_address"].removeprefix("0x")[-40:].lower()
-                )
+            write["address"] = normalize_evm_address(write.get("address"))
+            write["code_address"] = normalize_evm_address(write.get("code_address"))
 
         step_count = int(result.get("stepCount") or 0)
         sha3s = result.get("sha3s") or []
         for operation in sha3s:
-            preimage = operation.get("preimage")
+            preimage = self._normalize_preimage(operation.get("preimage"))
             if not preimage:
-                continue
-            try:
-                operation["hash"] = Web3.keccak(
-                    bytes.fromhex(preimage.removeprefix("0x"))
-                ).hex()
-            except ValueError:
+                operation["preimage"] = None
                 operation["hash"] = None
+                continue
+            operation["preimage"] = preimage
+            operation["hash"] = Web3.keccak(
+                bytes.fromhex(preimage.removeprefix("0x"))
+            ).hex()
         logger.info(
             "Compact storage trace: steps=%s, writes=%s, sha3s=%s, last=%s@%s",
             step_count,
@@ -366,8 +364,8 @@ class TraceRPCClient:
                     if struct_logs[j].get("depth", 1) == depth:
                         stack = struct_logs[j].get("stack", [])
                         if stack:
-                            created_addr = "0x" + stack[-1][-40:].lower()
-                            if created_addr != "0x" + "0" * 40:
+                            created_addr = normalize_evm_address(stack[-1])
+                            if created_addr and created_addr != "0x" + "0" * 40:
                                 create_info[i] = {
                                     "start_step": i,
                                     "end_step": j,
@@ -385,7 +383,9 @@ class TraceRPCClient:
 
         call_stack: list[tuple[str, str]] = []
         if tx_to_address:
-            call_stack.append((tx_to_address.lower(), tx_to_address.lower()))
+            normalized_to = normalize_evm_address(tx_to_address)
+            if normalized_to:
+                call_stack.append((normalized_to, normalized_to))
 
         active_creates: list[dict] = []
 
@@ -420,8 +420,9 @@ class TraceRPCClient:
                     addr_hex = stack[-2]
                     if addr_hex:
                         try:
-                            addr_clean = "0x" + addr_hex[-40:].lower()
-                            call_stack.append((addr_clean, addr_clean))
+                            addr_clean = normalize_evm_address(addr_hex)
+                            if addr_clean:
+                                call_stack.append((addr_clean, addr_clean))
                         except Exception:
                             pass
 
@@ -430,9 +431,10 @@ class TraceRPCClient:
                     addr_hex = stack[-2]
                     if addr_hex:
                         try:
-                            code_addr = "0x" + addr_hex[-40:].lower()
+                            code_addr = normalize_evm_address(addr_hex)
                             current_storage = call_stack[-1][0] if call_stack else ""
-                            call_stack.append((current_storage, code_addr))
+                            if code_addr:
+                                call_stack.append((current_storage, code_addr))
                         except Exception:
                             pass
 
@@ -560,7 +562,12 @@ class TraceRPCClient:
             return None
 
         try:
-            full_memory = "".join(memory)
+            full_memory = "".join(
+                word.removeprefix("0x").removeprefix("0X")
+                for word in memory
+            )
+            if not re.fullmatch(r"[0-9a-fA-F]*", full_memory):
+                return None
             start_nibble = offset * 2
             end_nibble = (offset + size) * 2
 
@@ -612,9 +619,9 @@ class TraceRPCClient:
 
             sha3_list = []
             for op in sha3_ops:
-                preimage = op.get("preimage", "")
+                preimage = self._normalize_preimage(op.get("preimage"))
                 if preimage:
-                    preimage_bytes = bytes.fromhex(preimage[2:] if preimage.startswith("0x") else preimage)
+                    preimage_bytes = bytes.fromhex(preimage.removeprefix("0x"))
                     hash_value = Web3.keccak(preimage_bytes).hex()
                     sha3_list.append({
                         "preimage": preimage,
@@ -627,6 +634,15 @@ class TraceRPCClient:
         except Exception as e:
             logger.warning(f"Custom SHA3 tracer error: {e}")
             return []
+
+    @staticmethod
+    def _normalize_preimage(preimage: str | None) -> str | None:
+        if not preimage:
+            return None
+        clean = re.sub(r"0x", "", preimage, flags=re.IGNORECASE)
+        if len(clean) % 2 or not re.fullmatch(r"[0-9a-fA-F]+", clean):
+            return None
+        return "0x" + clean.lower()
 
     def _normalize_slot(self, slot: str) -> str:
         """Normalize slot to 66-char hex (0x + 64 chars)."""

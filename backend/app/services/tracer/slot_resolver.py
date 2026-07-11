@@ -264,24 +264,28 @@ class SlotPathResolver:
                     "remaining_mapping_type": remaining_mapping_type,
                 }
 
-        # Check if base_slot is an intermediate hash (nested mapping)
-        base_slot_normalized = self._normalize_slot(hex(base_slot_int))
-        logger.debug(f"  Checking if base_slot is intermediate hash: {base_slot_normalized[:18]}... in_lookup={base_slot_normalized in preimage_lookup}")
-        if base_slot_normalized in preimage_lookup:
+        # Check both proven nested-mapping encodings. Solidity hashes
+        # ``key || previous_hash`` while Vyper hashes
+        # ``previous_hash || key``.
+        for intermediate_slot, nested_key_hex in (
+            (second_int, first_32),
+            (first_int, second_32),
+        ):
+            base_slot_normalized = self._normalize_slot(hex(intermediate_slot))
+            if base_slot_normalized not in preimage_lookup:
+                continue
             outer_preimage = preimage_lookup[base_slot_normalized]
-            logger.debug(f"  Recursing with outer preimage: {outer_preimage[:40]}...")
             outer_match = self.try_match_slot_from_preimage(
                 base_slot_normalized, outer_preimage, layout, preimage_lookup,
                 depth=depth + 1, visited=visited
             )
-            logger.debug(f"  Recursion result: outer_match={outer_match is not None}, outer_var={outer_match.get('variable').name if outer_match and outer_match.get('variable') else None}")
             if outer_match:
                 outer_key = outer_match.get("key", "?")
                 outer_variable = outer_match.get("variable")
                 outer_var_type = layout.get_type(outer_variable.type_id) if outer_variable else None
                 current_mapping_type = outer_match.get("remaining_mapping_type")
                 decoded_key = self.decode_mapping_key(
-                    key_hex,
+                    nested_key_hex,
                     current_mapping_type.key_type if current_mapping_type else None,
                 )
 

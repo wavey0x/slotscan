@@ -174,8 +174,47 @@ class StorageJournalTests(unittest.TestCase):
         self.assertEqual(history.final_value, ZERO_WORD)
         self.assertTrue(journal.capabilities.transient_storage)
 
+    def test_cached_trace_addresses_are_left_padded_to_twenty_bytes(self):
+        unpadded_yfi = "0xbc529c00c6401aef6d220be8c6ea1667f6ad93e"
+        canonical_yfi = "0x0bc529c00c6401aef6d220be8c6ea1667f6ad93e"
+        raw_write = write(
+            6,
+            1,
+            old_value=word(5),
+            address=unpadded_yfi,
+            code_address=unpadded_yfi,
+        )
+
+        journal = self.builder.build(
+            [raw_write],
+            {
+                "pre": {canonical_yfi: {"storage": {SLOT: word(5)}}},
+                "post": {canonical_yfi: {"storage": {SLOT: word(6)}}},
+            },
+            root_succeeded=True,
+        )
+
+        self.assertEqual(journal.events[0].address, canonical_yfi)
+        self.assertEqual(journal.events[0].code_address, canonical_yfi)
+
 
 class FrameOutcomeTests(unittest.TestCase):
+    def test_rpc_trace_normalizes_segmented_preimages_and_memory_words(self):
+        client = TraceRPCClient(object())
+
+        self.assertEqual(
+            client._normalize_preimage("0x1122" + "0x3344"),
+            "0x11223344",
+        )
+        self.assertEqual(
+            client._extract_memory_slice(
+                ["0x" + "11" * 32, "0x" + "22" * 32],
+                31,
+                2,
+            ),
+            "0x1122",
+        )
+
     def test_parent_revert_marks_descendant_writes_reverted(self):
         logs = [
             {"depth": 1, "op": "CALL"},

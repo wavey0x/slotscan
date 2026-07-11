@@ -29,11 +29,16 @@ class PreimageResolver:
         preimage_lookup: dict[str, str] = {}
 
         for op in sha3_trace:
-            hash_value = op.get("hash")
             preimage = op.get("preimage")
-            if hash_value and preimage:
-                normalized_hash = self._normalize_slot(hash_value)
-                preimage_lookup[normalized_hash] = preimage
+            if not preimage:
+                continue
+            clean = re.sub(r"0x", "", preimage, flags=re.IGNORECASE)
+            if len(clean) % 2 or not re.fullmatch(r"[0-9a-fA-F]+", clean):
+                continue
+            canonical_preimage = "0x" + clean.lower()
+            hash_value = Web3.keccak(bytes.fromhex(clean)).hex()
+            normalized_hash = self._normalize_slot(hash_value)
+            preimage_lookup[normalized_hash] = canonical_preimage
 
         logger.info(f"Built preimage lookup: {len(preimage_lookup)} entries from {len(sha3_trace)} SHA3 ops")
         return preimage_lookup

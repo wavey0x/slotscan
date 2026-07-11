@@ -9,10 +9,22 @@ from app.config import Settings
 from app.services.decoder import TypeDecoder
 from app.services.tracer.tracer import TransactionTracer
 from app.services.tracer.slot_resolver import SlotResolver
+from app.services.tracer.preimage_resolver import PreimageResolver
 from app.utils.slots import compute_mapping_slot, encode_mapping_key
 
 
 class MappingSlotTests(unittest.TestCase):
+    def test_segmented_sha3_memory_words_build_canonical_preimage_lookup(self):
+        preimage = encode(["address", "uint256"], ["0x" + "11" * 20, 7])
+        segmented = "0x" + preimage[:32].hex() + "0x" + preimage[32:].hex()
+        expected_hash = "0x" + Web3.keccak(preimage).hex()
+
+        lookup = PreimageResolver().build_preimage_lookup(
+            [{"preimage": segmented, "hash": None}]
+        )
+
+        self.assertEqual(lookup[expected_hash], "0x" + preimage.hex())
+
     def test_dynamic_bytes_uses_unpadded_contents(self):
         slot_word = encode(["uint256"], [7])
         expected = int.from_bytes(Web3.keccak(b"abc" + slot_word), "big")
@@ -153,6 +165,59 @@ class MappingSlotTests(unittest.TestCase):
         )
 
         self.assertEqual(match["path"], f"configs[{outer_key}][{inner_key}]")
+
+    def test_nested_vyper_mapping_uses_hash_before_key(self):
+        value_type = StorageType("uint256", "uint256", "value", "inplace", 32)
+        inner_type = StorageType(
+            "HashMap[address, uint256]",
+            "HashMap[address, uint256]",
+            "mapping",
+            "mapping",
+            32,
+            key_type="address",
+            value_type=value_type.id,
+        )
+        outer_type = StorageType(
+            "HashMap[address, HashMap[address, uint256]]",
+            "HashMap[address, HashMap[address, uint256]]",
+            "mapping",
+            "mapping",
+            32,
+            key_type="address",
+            value_type=inner_type.id,
+        )
+        variable = StorageVariable(
+            "allowance", 18, 0, 32, outer_type.id, outer_type.label
+        )
+        layout = StorageLayout(
+            "Vault",
+            [variable],
+            {
+                value_type.id: value_type,
+                inner_type.id: inner_type,
+                outer_type.id: outer_type,
+            },
+        )
+        owner = "0x" + "11" * 20
+        spender = "0x" + "22" * 20
+        outer_preimage = encode(["uint256", "address"], [18, owner])
+        outer_hash = Web3.keccak(outer_preimage)
+        outer_hash_hex = "0x" + outer_hash.hex()
+        inner_preimage = encode(["bytes32", "address"], [outer_hash, spender])
+        inner_hash = "0x" + Web3.keccak(inner_preimage).hex()
+        lookup = {
+            outer_hash_hex: "0x" + outer_preimage.hex(),
+            inner_hash: "0x" + inner_preimage.hex(),
+        }
+
+        match = SlotResolver().try_match_slot_from_preimage(
+            inner_hash,
+            lookup[inner_hash],
+            layout,
+            lookup,
+        )
+
+        self.assertEqual(match["path"], f"allowance[{owner}][{spender}]")
 
     def test_struct_offset_search_does_not_scan_every_observed_preimage(self):
         value_type = StorageType("t_uint256", "uint256", "value", "inplace", 32)
