@@ -153,8 +153,8 @@ class TransactionHistoryService:
             )
             candidates = [
                 direct_metadata.get(address.lower()),
-                metadata,
                 *(direct_metadata.get(target) for target in code_addresses),
+                metadata,
             ]
             display_name = self._preferred_name(candidates)
             return ContractHistoryProjection(
