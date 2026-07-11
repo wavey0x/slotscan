@@ -151,18 +151,30 @@ class TransactionHistoryService:
                 sources_by_code_address=sources_by_code_address,
                 journal=journal,
             )
+            code_layout_names = [
+                layouts_by_code_address[target].contract_name
+                for target in code_addresses
+                if target in layouts_by_code_address
+            ]
+            matching_proxy_name = (
+                metadata.name
+                if metadata
+                and metadata.name
+                and any(
+                    self._names_match(metadata.name, layout_name)
+                    for layout_name in code_layout_names
+                )
+                else None
+            )
             display_names = [
                 (
                     direct_metadata[address.lower()].name
                     if address.lower() in direct_metadata
+                    and not (metadata and metadata.is_proxy)
                     else None
                 ),
-                *(
-                    layouts_by_code_address[target].contract_name
-                    if target in layouts_by_code_address
-                    else None
-                    for target in code_addresses
-                ),
+                matching_proxy_name,
+                *code_layout_names,
                 *(
                     direct_metadata[target].name
                     if target in direct_metadata
@@ -241,6 +253,15 @@ class TransactionHistoryService:
             (name for name in candidates if name and name.lower() not in generic),
             next((name for name in candidates if name), None),
         )
+
+    @staticmethod
+    def _names_match(left: str, right: str) -> bool:
+        def normalize(value: str) -> str:
+            return "".join(
+                character.lower() for character in value if character.isalnum()
+            )
+
+        return normalize(left) == normalize(right)
 
     @staticmethod
     def _combine_layouts(layouts: list[StorageLayout]) -> StorageLayout | None:

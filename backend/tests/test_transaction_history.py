@@ -252,6 +252,12 @@ class TransactionOwnerTests(TestCase):
             ),
             "WithdrawalQueueERC721",
         )
+        self.assertTrue(
+            TransactionHistoryService._names_match("Yearn V3 Vault", "YearnV3Vault")
+        )
+        self.assertFalse(
+            TransactionHistoryService._names_match("VaultHub", "WithdrawalQueueERC721")
+        )
 
 
 class PrestateRecoveryTests(TestCase):
