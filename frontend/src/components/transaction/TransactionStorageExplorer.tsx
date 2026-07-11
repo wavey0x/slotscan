@@ -53,27 +53,84 @@ function eventValue(event: StorageChangeResponse, side: 'before' | 'after') {
     : formatDecodedValue(pair.value_decoded);
 }
 
-function ContractIndex({ contracts }: { contracts: ContractHistoryResponse[] }) {
-  if (contracts.length < 4) return null;
+function ContractSection({
+  contract,
+  chain,
+  forceOpen,
+  executionOrderAvailable,
+  isComplete,
+}: {
+  contract: ContractHistoryResponse;
+  chain: string;
+  forceOpen: boolean;
+  executionOrderAvailable: boolean;
+  isComplete: boolean;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const expanded = isOpen || forceOpen;
+
   return (
-    <nav className="sticky top-0 z-10 mb-6 border border-gray-300 bg-white/95 backdrop-blur" aria-label="Storage owners">
-      <div className="flex gap-1 overflow-x-auto p-2">
-        {contracts.map((contract) => (
-          <a
-            key={contract.storage_address}
-            href={`#owner-${contract.storage_address.slice(2)}`}
-            className="min-w-40 border border-transparent px-2 py-1.5 hover:border-gray-300"
+    <section id={`owner-${contract.storage_address.slice(2)}`} className="scroll-mt-16 border-b border-gray-300">
+      <div className="flex items-center hover:bg-gray-50">
+        <button
+          type="button"
+          data-testid="contract-toggle"
+          aria-expanded={expanded}
+          onClick={() => setIsOpen((open) => !open)}
+          className="flex min-w-0 flex-1 items-center gap-2 py-2 text-left"
+        >
+          <span
+            aria-hidden="true"
+            className={cn('text-[10px] text-gray-400 transition-transform', expanded && 'rotate-90')}
           >
-            <div className="truncate text-xs font-medium text-gray-900">
-              {contract.name || truncateAddress(contract.storage_address)}
-            </div>
-            <div className="mt-0.5 text-[10px] text-gray-500">
-              {contract.counts.sstore_events} writes · {contract.counts.slots_written} slots
-            </div>
-          </a>
-        ))}
+            ▶
+          </span>
+          <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2">
+            <h2 className="font-medium text-gray-900">
+              {contract.name || 'Unresolved contract'}
+            </h2>
+            <span className="font-mono text-xs text-gray-500">
+              {truncateAddress(contract.storage_address)}
+            </span>
+          </span>
+          <span className="shrink-0 text-[10px] text-gray-500">
+            {contract.counts.sstore_events} {contract.counts.sstore_events === 1 ? 'write' : 'writes'} · {contract.counts.slots_written} {contract.counts.slots_written === 1 ? 'slot' : 'slots'}
+            {contract.counts.reverted_writes > 0 && (
+              <> · {contract.counts.reverted_writes} reverted {contract.counts.reverted_writes === 1 ? 'write' : 'writes'}</>
+            )}
+            {!contract.layout_available && <> · raw slots</>}
+          </span>
+        </button>
+        <span className="ml-2 shrink-0">
+          <EtherscanLink
+            href={getAddressExplorerUrl(chain, contract.storage_address)}
+            title="View contract"
+          />
+        </span>
       </div>
-    </nav>
+
+      {expanded && (
+        <div className="pb-3 pl-5">
+          {contract.implementation_addresses.length > 0 && (
+            <div className="mb-1 text-[10px] text-gray-500">
+              written via {contract.implementation_addresses.map(truncateAddress).join(', ')}
+            </div>
+          )}
+          {contract.errors.map((message) => (
+            <div key={message} className="mb-1 text-[10px] text-amber-600">
+              {message}; showing raw history
+            </div>
+          ))}
+          <SlotHistoryTable
+            chainId={chain}
+            slots={contract.slots}
+            showHex={false}
+            executionOrderAvailable={executionOrderAvailable}
+            isComplete={isComplete}
+          />
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -292,29 +349,19 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
       </div>
 
       {view === 'grouped' ? (
-        <>
-          <ContractIndex contracts={filteredContracts} />
-          <div className="space-y-10">
-            {filteredContracts.map((contract) => (
-              <section key={contract.storage_address} id={`owner-${contract.storage_address.slice(2)}`} className="scroll-mt-16">
-                <header className="mb-3 border-b border-gray-300 pb-2">
-                  <div className="flex flex-wrap items-baseline gap-2">
-                    <h2 className="font-medium text-gray-900">{contract.name || 'Unresolved contract'}</h2>
-                    <a href={getAddressExplorerUrl(chain, contract.storage_address)} target="_blank" rel="noopener noreferrer" className="font-mono text-xs text-gray-500 hover:underline">{truncateAddress(contract.storage_address)}</a>
-                  </div>
-                  <div className="mt-1 text-[10px] text-gray-500">
-                    {contract.counts.sstore_events} writes · {contract.counts.slots_written} slots
-                    {!contract.layout_available && <span className="text-gray-400"> · raw slots</span>}
-                  </div>
-                  {contract.implementation_addresses.length > 0 && <div className="mt-1 text-[10px] text-gray-500">written via {contract.implementation_addresses.map(truncateAddress).join(', ')}</div>}
-                  {contract.errors.map((message) => <div key={message} className="mt-1 text-[10px] text-amber-600">{message}; showing raw history</div>)}
-                </header>
-                <SlotHistoryTable chainId={chain} slots={contract.slots} showHex={false} executionOrderAvailable={data.capabilities.execution_order_available} isComplete={data.is_complete} />
-              </section>
-            ))}
-            {filteredContracts.length === 0 && <div className="border border-gray-300 p-8 text-center text-gray-500">No writes match the search</div>}
-          </div>
-        </>
+        <div className="border-t border-gray-300">
+          {filteredContracts.map((contract) => (
+            <ContractSection
+              key={contract.storage_address}
+              contract={contract}
+              chain={chain}
+              forceOpen={Boolean(search.trim())}
+              executionOrderAvailable={data.capabilities.execution_order_available}
+              isComplete={data.is_complete}
+            />
+          ))}
+          {filteredContracts.length === 0 && <div className="border border-gray-300 p-8 text-center text-gray-500">No writes match the search</div>}
+        </div>
       ) : (
         <Timeline entries={timeline} chain={chain} showContract={!singleContract} />
       )}

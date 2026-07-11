@@ -33,6 +33,7 @@ test('all writes remain visible without interpretive classification controls', a
   }
 
   await page.getByRole('button', { name: 'Grouped' }).click();
+  await page.getByTestId('contract-toggle').click();
   await page.getByRole('button', { name: 'Expand write history' }).click();
   await expect(page.getByText('1/2')).toBeVisible();
   await expect(page.getByText('2/2')).toBeVisible();
@@ -56,6 +57,11 @@ test('verified sources recover proxy, namespace, legacy, and Vyper variable name
   await page.goto(`/1/tx/${SOURCE_LAYOUT_TX}`);
 
   await expect(page.getByText('74 writes · 51 slots')).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Storage owners' })).toHaveCount(0);
+  await expect(page.getByTestId('contract-toggle')).toHaveCount(13);
+  for (const toggle of await page.getByTestId('contract-toggle').all()) {
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  }
   await expect(page.getByRole('heading', { name: 'GnosisSafe' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'YearnV3Vault' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Vat' })).toBeVisible();
@@ -63,6 +69,7 @@ test('verified sources recover proxy, namespace, legacy, and Vyper variable name
 
   const search = page.getByPlaceholder('Search contract, address, slot, or variable');
   await search.fill('nonreentrant.lock');
+  await expect(page.getByTestId('contract-toggle')).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByText('nonreentrant.lock', { exact: true })).toBeVisible();
 
   await search.fill('current_debt');

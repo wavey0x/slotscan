@@ -581,10 +581,10 @@ export function SlotRow({
       {/* PACKED FIELDS: Struct header row (if has struct definition) */}
       {showPackedAsTree && slot.struct_definition?.name && (
         <tr className={cn('hover:bg-gray-50/50', expanded && 'bg-gray-50/30', slotBorderClass)}>
-          <td className={cn('px-1 py-0.5 w-5 align-top', isFirst && 'pt-2')}>
+          <td className={cn('px-1 py-0.5 w-5 align-top', isFirst && 'pt-1')}>
             {canExpand ? expandButton : <span className="w-4 h-4 inline-block" />}
           </td>
-          <td className={cn('px-1 py-0.5 align-top', isFirst && 'pt-2')} colSpan={2}>
+          <td className={cn('px-1 py-0.5 align-top', isFirst && 'pt-1')} colSpan={2}>
             <HoverCard content={variableHoverContent} delay={200} maxWidth="max-w-sm">
               <span className="text-xs font-mono leading-tight no-underline decoration-transparent">
                 <span className="text-gray-400">{slot.struct_definition.name}</span>{' '}
@@ -593,7 +593,7 @@ export function SlotRow({
             </HoverCard>
             {revertedNotice && <div>{revertedNotice}</div>}
           </td>
-          <td className={cn('px-1 py-0.5 w-8 align-top', isFirst && 'pt-2')}>
+          <td className={cn('px-1 py-0.5 w-8 align-top', isFirst && 'pt-1')}>
             <HoverCard content={<div className="font-mono text-xs text-gray-100 break-all">{slot.slot}</div>} position="top">
               <HoverCell
                 display={slotNumber}
@@ -604,7 +604,7 @@ export function SlotRow({
             </HoverCard>
           </td>
           {showStep && (
-            <td className={cn('px-1 py-0.5 text-right w-8 align-top', isFirst && 'pt-2')}>
+            <td className={cn('px-1 py-0.5 text-right w-8 align-top', isFirst && 'pt-1')}>
               {firstStep !== null && firstStep !== undefined && (
                 <HoverCard content={<div className="font-mono text-[10px] text-gray-100">Step: {firstStep}</div>} position="top">
                   <span className="text-[10px] text-gray-400 font-mono cursor-default">
@@ -639,11 +639,11 @@ export function SlotRow({
       {/* NON-PACKED, SINGLE PACKED FIELD, or HEX MODE: Single row */}
       {(!showPackedAsTree || showHex) && (
         <tr className={cn('hover:bg-gray-50/50', expanded && 'bg-gray-50/30', slotBorderClass)}>
-          <td className={cn('px-1 py-0.5 w-5 align-top', isFirst && 'pt-2')}>
+          <td className={cn('px-1 py-0.5 w-5 align-top', isFirst && 'pt-1')}>
             {canExpand ? expandButton : <span className="w-4 h-4 inline-block" />}
           </td>
 
-          <td className={cn('px-1 py-0.5 align-top w-48 whitespace-normal', isFirst && 'pt-2')}>
+          <td className={cn('px-1 py-0.5 align-top w-48 whitespace-normal', isFirst && 'pt-1')}>
             <HoverCard content={variableHoverContent} delay={200} maxWidth="max-w-sm">
               <span className="space-y-0 break-words block no-underline decoration-transparent">
                 {/* Struct type + variable name */}
@@ -692,7 +692,7 @@ export function SlotRow({
             {revertedNotice && <div>{revertedNotice}</div>}
           </td>
 
-          <td className={cn('px-1 py-0.5 align-top', isFirst && 'pt-2')}>
+          <td className={cn('px-1 py-0.5 align-top', isFirst && 'pt-1')}>
             {(() => {
               // Use packed field values if single packed field without struct
               const beforeDecoded = singlePackedField ? singlePackedField.before.value_decoded : slot.before.value_decoded;
@@ -726,7 +726,7 @@ export function SlotRow({
             })()}
           </td>
 
-          <td className={cn('px-1 py-0.5 w-8 align-top', isFirst && 'pt-2')}>
+          <td className={cn('px-1 py-0.5 w-8 align-top', isFirst && 'pt-1')}>
             <HoverCard content={<div className="font-mono text-xs text-gray-100 break-all">{slot.slot}</div>} position="top">
               <HoverCell
                 display={slotNumber}
@@ -738,7 +738,7 @@ export function SlotRow({
           </td>
 
           {showStep && (
-            <td className={cn('px-1 py-0.5 text-right w-8 align-top', isFirst && 'pt-2')}>
+            <td className={cn('px-1 py-0.5 text-right w-8 align-top', isFirst && 'pt-1')}>
               {firstStep !== null && firstStep !== undefined && (
                 <HoverCard content={<div className="font-mono text-[10px] text-gray-100">Step: {firstStep}</div>} position="top">
                   <span className="text-[10px] text-gray-400 font-mono cursor-default">
