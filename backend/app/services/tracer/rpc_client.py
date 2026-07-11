@@ -30,11 +30,17 @@ class TraceRPCClient:
             raise TransactionNotFoundError(tx_hash)
         return receipt
 
-    async def execute_prestate_trace(self, chain_id: int, tx_hash: str) -> dict:
+    async def execute_prestate_trace(
+        self,
+        chain_id: int,
+        tx_hash: str,
+        *,
+        diff_mode: bool = True,
+    ) -> dict:
         """Execute debug_traceTransaction with prestateTracer."""
         tracer_config = {
             "tracer": "prestateTracer",
-            "tracerConfig": {"diffMode": True},
+            "tracerConfig": {"diffMode": diff_mode},
         }
 
         try:
@@ -93,6 +99,10 @@ class TraceRPCClient:
 
         Returns (sstores, sha3s) where sha3s contains preimage data.
         """
+        compact = await self._execute_compact_storage_trace(chain_id, tx_hash)
+        if compact is not None:
+            return compact
+
         include_memory = True
         sha3_from_tracer = []
 
@@ -155,6 +165,186 @@ class TraceRPCClient:
             logger.info(f"structLogs parsed: sstores={len(sstores)}, sha3s={len(sha3s)}")
 
         return sstores, sha3s, len(struct_logs)
+
+    async def _execute_compact_storage_trace(
+        self,
+        chain_id: int,
+        tx_hash: str,
+    ) -> tuple[list[dict], list[dict], int] | None:
+        """Run a compact node-side forensic tracer before raw struct logs.
+
+        Full opcode traces can exceed provider response limits. This tracer
+        returns only SSTORE/TSTORE and SHA3 evidence while retaining storage/
+        code attribution and frame outcomes. Pre-write values are recovered by
+        the extractor's full-prestate replay.
+        """
+        tracer = r"""
+        {
+          writes: [], sha3s: [], steps: 0, lastOp: null, lastDepth: null,
+          frames: {}, frameStack: [], pendingCalls: {}, nextFrameId: 1,
+          ensureRoot: function(log) {
+            if (this.frameStack.length === 0) {
+              var address = toHex(log.contract.getAddress());
+              this.frames[0] = {id: 0, parent: null, depth: log.getDepth(), storage: address, code: address, failed: false};
+              this.frameStack.push(0);
+            }
+          },
+          syncFrame: function(log) {
+            var depth = log.getDepth();
+            while (this.frameStack.length > 1 && this.currentFrame().depth > depth) {
+              this.frameStack.pop();
+            }
+            while (this.currentFrame().depth < depth) {
+              var parent = this.currentFrame();
+              var pending = this.pendingCalls[depth];
+              var address = toHex(log.contract.getAddress());
+              var frameId = this.nextFrameId++;
+              this.frames[frameId] = {
+                id: frameId,
+                parent: parent.id,
+                depth: parent.depth + 1,
+                storage: address,
+                code: pending && pending.code ? pending.code : address,
+                failed: false
+              };
+              this.frameStack.push(frameId);
+              delete this.pendingCalls[depth];
+            }
+            if (this.currentFrame().depth === depth) {
+              delete this.pendingCalls[depth + 1];
+            }
+          },
+          currentFrame: function() {
+            return this.frames[this.frameStack[this.frameStack.length - 1]];
+          },
+          step: function(log, db) {
+            this.lastOp = log.op.toString();
+            this.lastDepth = log.getDepth();
+            this.ensureRoot(log);
+            this.syncFrame(log);
+            var frame = this.currentFrame();
+            var op = log.op.toString();
+
+            if (op === 'SSTORE' || op === 'TSTORE') {
+              var slotValue = log.stack.peek(0);
+              var value = log.stack.peek(1);
+              var oldValue = null;
+              this.writes.push({
+                address: frame.storage,
+                code_address: frame.code,
+                pc: log.getPC(),
+                slot: '0x' + slotValue.toString(16),
+                value: '0x' + value.toString(16),
+                old_value: oldValue,
+                opcode: op,
+                namespace: op === 'SSTORE' ? 'persistent' : 'transient',
+                depth: log.getDepth(),
+                index: this.steps,
+                frame_id: frame.id
+              });
+            } else if (op === 'SHA3' || op === 'KECCAK256') {
+              var offset = parseInt(log.stack.peek(0).toString());
+              var size = parseInt(log.stack.peek(1).toString());
+              if (size >= 32 && size <= 256) {
+                this.sha3s.push({
+                  address: frame.storage,
+                  preimage: toHex(log.memory.slice(offset, offset + size)),
+                  size: size,
+                  depth: log.getDepth()
+                });
+              }
+            }
+            if (op === 'CALL' || op === 'STATICCALL' || op === 'DELEGATECALL' || op === 'CALLCODE') {
+              this.pendingCalls[log.getDepth() + 1] = {
+                type: op,
+                code: '0x' + log.stack.peek(1).toString(16)
+              };
+            } else if (op === 'CREATE' || op === 'CREATE2') {
+              this.pendingCalls[log.getDepth() + 1] = {type: op, code: null};
+            }
+            if (log.getError()) frame.failed = true;
+            this.steps += 1;
+          },
+          fault: function(log, db) {
+            this.ensureRoot(log);
+            this.currentFrame().failed = true;
+          },
+          result: function(ctx, db) {
+            if (ctx.error && this.frames[0]) this.frames[0].failed = true;
+            for (var i = 0; i < this.writes.length; i++) {
+              var write = this.writes[i];
+              var current = write.frame_id;
+              var failed = [];
+              while (current !== null && current !== undefined) {
+                var frame = this.frames[current];
+                if (frame.failed) failed.push(current);
+                current = frame.parent;
+              }
+              var ownFrame = this.frames[write.frame_id];
+              write.frame_parent_id = ownFrame.parent;
+              write.frame_failed = ownFrame.failed;
+              write.frame_reverted = failed.length > 0;
+              write.rollback_frame_id = failed.length > 0 ? failed[0] : null;
+              write.rollback_parent_id = failed.length > 1 ? failed[1] : null;
+            }
+            return {writes: this.writes, sha3s: this.sha3s, stepCount: this.steps, lastOp: this.lastOp, lastDepth: this.lastDepth};
+          }
+        }
+        """
+        try:
+            response = await self.web3_provider.make_request(
+                chain_id,
+                "debug_traceTransaction",
+                [tx_hash, {"tracer": tracer}],
+            )
+        except Exception as exc:
+            logger.info("Compact storage tracer unavailable: %s", exc)
+            return None
+
+        if "error" in response:
+            logger.info(
+                "Compact storage tracer rejected: %s",
+                response["error"],
+            )
+            return None
+        result = response.get("result")
+        if not isinstance(result, dict) or "writes" not in result:
+            return None
+
+        writes = result.get("writes") or []
+        for write in writes:
+            write["slot"] = self._normalize_slot(write.get("slot", "0x0"))
+            write["value"] = self._normalize_value(write.get("value", "0x0"))
+            if write.get("old_value") is not None:
+                write["old_value"] = self._normalize_value(write["old_value"])
+            if write.get("address"):
+                write["address"] = "0x" + write["address"].removeprefix("0x")[-40:].lower()
+            if write.get("code_address"):
+                write["code_address"] = (
+                    "0x" + write["code_address"].removeprefix("0x")[-40:].lower()
+                )
+
+        step_count = int(result.get("stepCount") or 0)
+        sha3s = result.get("sha3s") or []
+        for operation in sha3s:
+            preimage = operation.get("preimage")
+            if not preimage:
+                continue
+            try:
+                operation["hash"] = Web3.keccak(
+                    bytes.fromhex(preimage.removeprefix("0x"))
+                ).hex()
+            except ValueError:
+                operation["hash"] = None
+        logger.info(
+            "Compact storage trace: steps=%s, writes=%s, sha3s=%s, last=%s@%s",
+            step_count,
+            len(writes),
+            len(sha3s),
+            result.get("lastOp"),
+            result.get("lastDepth"),
+        )
+        return writes, sha3s, step_count
 
     def _parse_structlogs(
         self,
@@ -247,22 +437,23 @@ class TraceRPCClient:
                             pass
 
             current_storage_address = call_stack[-1][0] if call_stack else ""
+            current_code_address = call_stack[-1][1] if call_stack else ""
 
             if op in ("SSTORE", "TSTORE"):
                 if len(stack) >= 2:
                     slot = stack[-1]
                     value = stack[-2]
                     normalized_slot = self._normalize_slot(slot)
-                    old_value = self._storage_value_before_write(
-                        log.get("storage", {}),
-                        normalized_slot,
-                    )
                     sstores.append({
                         "address": current_storage_address,
+                        "code_address": current_code_address,
                         "pc": pc,
                         "slot": normalized_slot,
                         "value": self._normalize_value(value),
-                        "old_value": old_value,
+                        # Geth/Reth storage snapshots on the SSTORE structLog
+                        # can represent post-op state. Initial values are
+                        # recovered from prestateTracer and then replayed.
+                        "old_value": None,
                         "opcode": op,
                         "namespace": "persistent" if op == "SSTORE" else "transient",
                         "depth": depth,
@@ -288,23 +479,6 @@ class TraceRPCClient:
 
         self._annotate_frame_outcomes(struct_logs, sstores)
         return sstores, sha3s
-
-    def _storage_value_before_write(
-        self, storage: dict | None, normalized_slot: str
-    ) -> str | None:
-        """Read the pre-op word from a structLog storage snapshot, if present."""
-        if not storage:
-            return None
-        target = int(normalized_slot, 16)
-        for raw_slot, raw_value in storage.items():
-            try:
-                slot_value = int(raw_slot, 16) if isinstance(raw_slot, str) else int(raw_slot)
-            except (TypeError, ValueError):
-                continue
-            if slot_value == target:
-                return self._normalize_value(raw_value)
-        # Geth omits zero-valued entries from this snapshot.
-        return "0x" + "0" * 64
 
     def _annotate_frame_outcomes(
         self, struct_logs: list[dict], writes: list[dict]
@@ -356,10 +530,29 @@ class TraceRPCClient:
                 current = frame["parent"]
             return False
 
+        def rollback_context(frame_id: int) -> tuple[int | None, int | None]:
+            failed_ancestors = []
+            current: int | None = frame_id
+            while current is not None:
+                frame = frames[current]
+                if frame["failed"]:
+                    failed_ancestors.append(current)
+                current = frame["parent"]
+            rollback_id = failed_ancestors[0] if failed_ancestors else None
+            rollback_parent = (
+                failed_ancestors[1] if len(failed_ancestors) > 1 else None
+            )
+            return rollback_id, rollback_parent
+
         for write in writes:
             frame_id = step_frames.get(write.get("index", -1), 0)
+            rollback_id, rollback_parent = rollback_context(frame_id)
             write["frame_id"] = frame_id
+            write["frame_parent_id"] = frames[frame_id]["parent"]
+            write["frame_failed"] = frames[frame_id]["failed"]
             write["frame_reverted"] = frame_reverted(frame_id)
+            write["rollback_frame_id"] = rollback_id
+            write["rollback_parent_id"] = rollback_parent
 
     def _extract_memory_slice(self, memory: list[str], offset: int, size: int) -> str | None:
         """Extract a slice from EVM memory."""

@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 class SlotPathResolver:
     """Resolves storage slots to layout variables."""
 
+    def __init__(self) -> None:
+        self._struct_offsets_by_layout: dict[int, tuple[int, ...]] = {}
+
     def get_final_mapping_value_type(
         self,
         var_type: StorageType,
@@ -342,14 +345,34 @@ class SlotPathResolver:
         depth: int = 0,
         visited: set[str] | None = None,
     ):
-        """Yield only offsets proven by actual struct-member layout entries."""
-        for potential_base_hex, base_preimage in preimage_lookup.items():
-            try:
-                potential_base = int(potential_base_hex, 16)
-            except (TypeError, ValueError):
+        """Yield only offsets proven by actual struct-member layout entries.
+
+        Derive candidate base hashes from compiler-declared member offsets. The
+        previous implementation recursively tested every observed SHA3 preimage,
+        which became exponential on hash-heavy transactions.
+        """
+        cache_key = id(layout)
+        offsets = self._struct_offsets_by_layout.get(cache_key)
+        if offsets is None:
+            offsets = tuple(
+                sorted(
+                    {
+                        member.slot
+                        for storage_type in layout.types.values()
+                        for member in (storage_type.members or ())
+                        if member.slot > 0
+                    }
+                )
+            )
+            self._struct_offsets_by_layout[cache_key] = offsets
+
+        for offset in offsets:
+            potential_base = target_slot - offset
+            if potential_base < 0:
                 continue
-            offset = target_slot - potential_base
-            if offset <= 0:
+            potential_base_hex = self._normalize_slot(potential_base)
+            base_preimage = preimage_lookup.get(potential_base_hex)
+            if base_preimage is None:
                 continue
             base_match = self.try_match_slot_from_preimage(
                 potential_base_hex,

@@ -69,6 +69,67 @@ class MappingSlotTests(unittest.TestCase):
         self.assertEqual(match["path"], "names[alice]")
         self.assertEqual(match["key_type"], "t_string_storage")
 
+    def test_struct_offset_search_does_not_scan_every_observed_preimage(self):
+        value_type = StorageType("t_uint256", "uint256", "value", "inplace", 32)
+        struct_type = StorageType(
+            "t_struct_Record",
+            "struct Record",
+            "struct",
+            "inplace",
+            96,
+            members=[
+                StorageVariable("first", 0, 0, 32, value_type.id, value_type.label),
+                StorageVariable("target", 2, 0, 32, value_type.id, value_type.label),
+            ],
+        )
+        mapping_type = StorageType(
+            "t_mapping_address_record",
+            "mapping(address => Record)",
+            "mapping",
+            "mapping",
+            32,
+            key_type="t_address",
+            value_type=struct_type.id,
+        )
+        variable = StorageVariable(
+            "records", 4, 0, 32, mapping_type.id, mapping_type.label
+        )
+        layout = StorageLayout(
+            "Records",
+            [variable],
+            {
+                value_type.id: value_type,
+                struct_type.id: struct_type,
+                mapping_type.id: mapping_type,
+            },
+        )
+        key = bytes.fromhex("11" * 20).rjust(32, b"\x00")
+        preimage = key + encode(["uint256"], [4])
+        base_hash = int.from_bytes(Web3.keccak(preimage), "big")
+        lookup = {
+            f"0x{base_hash:064x}": "0x" + preimage.hex(),
+            **{
+                f"0x{i + 1000:064x}": "0x" + bytes(64).hex()
+                for i in range(500)
+            },
+        }
+
+        class CountingResolver(SlotResolver):
+            calls = 0
+
+            def try_match_slot_from_preimage(self, *args, **kwargs):
+                self.calls += 1
+                return super().try_match_slot_from_preimage(*args, **kwargs)
+
+        resolver = CountingResolver()
+        matches = list(
+            resolver.find_struct_offset_matches(base_hash + 2, layout, lookup)
+        )
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0][0], 2)
+        self.assertLessEqual(resolver.calls, 2)
+
 
 class PackedArrayLayoutTests(unittest.TestCase):
     def setUp(self):

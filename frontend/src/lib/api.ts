@@ -5,6 +5,7 @@ import type {
   StorageLayoutResponse,
   StorageSnapshotResponse,
   TransactionDiffResponse,
+  TransactionStorageHistoryResponse,
 } from './types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/slotscan';
@@ -103,6 +104,16 @@ export async function fetchTxDiff(
   txHash: string
 ): Promise<TransactionDiffResponse> {
   return fetchAPI(`${API_BASE}/tx/${chainId}/${address}/${txHash}`);
+}
+
+export async function fetchTransactionStorageHistory(
+  chainId: string,
+  txHash: string,
+  includeGlobalOrder = true
+): Promise<TransactionStorageHistoryResponse> {
+  const params = new URLSearchParams();
+  params.set('include_global_order', String(includeGlobalOrder));
+  return fetchAPI(`${API_BASE}/tx/${chainId}/${txHash}?${params}`);
 }
 
 export async function fetchSlotValue(

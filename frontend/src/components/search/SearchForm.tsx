@@ -15,13 +15,19 @@ export function SearchForm() {
     e.preventDefault();
     setError("");
 
-    if (!isAddress(address)) {
-      setError("Invalid contract address");
+    const value = address.trim();
+    if (/^0x[a-fA-F0-9]{64}$/.test(value)) {
+      router.push(`/1/tx/${value}`);
       return;
     }
 
-    saveRecentSearch({ chain: "1", address });
-    router.push(`/1/${address}`);
+    if (!isAddress(value)) {
+      setError("Enter a contract address or transaction hash");
+      return;
+    }
+
+    saveRecentSearch({ chain: "1", address: value });
+    router.push(`/1/${value}`);
   };
 
   return (
@@ -29,14 +35,14 @@ export function SearchForm() {
       <Input
         value={address}
         onChange={(e) => setAddress(e.target.value)}
-        placeholder="Contract Address (0x...)"
+        placeholder="Contract address or transaction hash (0x...)"
         className="font-mono"
       />
 
       {error && <p className="text-red text-sm">{error}</p>}
 
       <Button type="submit" variant="secondary" className="w-full">
-        View Storage
+        Analyze Storage
       </Button>
     </form>
   );

@@ -67,61 +67,13 @@ class TransactionAnalysisService:
         Uses debug_traceTransaction with prestateTracer.
         Caches raw trace data (after RPC, before decoding) for fast repeated access.
         """
-        contract_address = Web3.to_checksum_address(contract_address)
-
-        cached_trace = None
-        if self.trace_cache_repo:
-            cached_trace = await self.trace_cache_repo.get(chain_id, tx_hash)
-
-        if cached_trace:
-            logger.info(f"Trace cache HIT for {tx_hash[:10]}... - skipping RPC calls")
-
-            raw_changes, cached_journal, had_unknown_sstores = self._build_changes_from_sstore_trace(
-                cached_trace.write_events,
-                cached_trace.prestate_diff,
-                contract_address,
-                root_succeeded=cached_trace.root_succeeded,
-                evm_step_count=cached_trace.trace_step_count,
-            )
-            preimage_lookup = cached_trace.preimage_lookup
-            block_number = cached_trace.block_number
-            execution_order_available = cached_journal.capabilities.execution_order
-
-            is_complete = (
-                len(raw_changes) <= self.settings.max_sstore_ops
-                and not had_unknown_sstores
-            )
-            if len(raw_changes) > self.settings.max_sstore_ops:
-                raw_changes = raw_changes[: self.settings.max_sstore_ops]
-
-            decoded_changes = self._decode_changes(raw_changes, layout, preimage_lookup)
-            self._apply_journal_metadata(decoded_changes, cached_journal, contract_address)
-
-            return TransactionDiff(
-                chain_id=chain_id,
-                contract_address=contract_address,
-                tx_hash=tx_hash,
-                block_number=block_number,
-                changes=decoded_changes,
-                is_complete=is_complete,
-                layout=layout,
-                trace_unavailable=False,
-                execution_order_available=execution_order_available,
-                frame_outcomes_available=cached_journal.capabilities.frame_outcomes,
-                write_old_values_available=cached_journal.capabilities.write_old_values,
-                final_state_values_available=cached_journal.capabilities.final_state_values,
-                trace_step_count=cached_trace.trace_step_count,
-            )
-
-        logger.info(f"Trace cache MISS for {tx_hash[:10]}... - executing RPC calls")
-
         try:
-            evidence = await self.trace_extractor.extract(chain_id, tx_hash)
+            artifact = await self.load_trace_artifact(chain_id, tx_hash)
         except TraceNotAvailableError:
             receipt = await self.rpc_client.get_receipt(chain_id, tx_hash)
             return TransactionDiff(
                 chain_id=chain_id,
-                contract_address=contract_address,
+                contract_address=Web3.to_checksum_address(contract_address),
                 tx_hash=tx_hash,
                 block_number=receipt["blockNumber"],
                 changes=[],
@@ -129,97 +81,198 @@ class TransactionAnalysisService:
                 layout=layout,
                 trace_unavailable=True,
             )
+        return self.project_trace_artifact(
+            artifact,
+            contract_address,
+            layout=layout,
+            sources=sources,
+        )
 
-        trace_result = evidence.prestate_diff
+    async def load_trace_artifact(
+        self,
+        chain_id: int,
+        tx_hash: str,
+    ) -> TransactionTraceArtifactData:
+        """Load or extract the one contract-agnostic artifact for a transaction."""
+        if self.trace_cache_repo:
+            cached = await self.trace_cache_repo.get(chain_id, tx_hash)
+            if cached:
+                return cached
+
+        logger.info("Trace artifact MISS for %s - executing RPC calls", tx_hash[:10])
+        evidence = await self.trace_extractor.extract(chain_id, tx_hash)
         receipt = evidence.receipt
-        sstore_trace = evidence.writes
-        sha3_trace = evidence.sha3_operations
-        evm_step_count = evidence.evm_step_count
-        block_number = receipt["blockNumber"]
-        prestate_changes = self._extract_contract_changes(trace_result, contract_address)
+        root_succeeded = self._quantity(receipt.get("status", 1)) == 1
+        journal = self.journal_builder.build(
+            evidence.writes,
+            evidence.prestate_diff,
+            root_succeeded=root_succeeded,
+            evm_step_count=evidence.evm_step_count or None,
+        )
+        write_history_complete = evidence.evm_step_count > 0
+        capabilities = {
+            **asdict(journal.capabilities),
+            "write_history_complete": write_history_complete,
+            "address_attribution_complete": all(
+                bool(write.get("address")) for write in evidence.writes
+            ),
+            "code_attribution_complete": all(
+                bool(write.get("code_address")) for write in evidence.writes
+            ),
+        }
+        artifact = TransactionTraceArtifactData(
+            chain_id=chain_id,
+            tx_hash=tx_hash.lower(),
+            block_number=self._quantity(receipt["blockNumber"]),
+            root_succeeded=root_succeeded,
+            transaction_from=self._optional_address(receipt.get("from")),
+            transaction_to=self._optional_address(receipt.get("to")),
+            created_contract=self._optional_address(receipt.get("contractAddress")),
+            write_events=evidence.writes,
+            prestate_diff=evidence.prestate_diff,
+            preimage_lookup=self.preimage_resolver.build_preimage_lookup(
+                evidence.sha3_operations
+            ),
+            capabilities=capabilities,
+            trace_step_count=evidence.evm_step_count or None,
+        )
 
-        preimage_lookup = self.preimage_resolver.build_preimage_lookup(sha3_trace)
-
-        if sources and layout:
-            constant_lookup = self.preimage_resolver.build_constant_preimage_lookup(sources, layout)
-            if constant_lookup:
-                for slot_hash, preimage in constant_lookup.items():
-                    if slot_hash not in preimage_lookup:
-                        preimage_lookup[slot_hash] = preimage
-
-        execution_order_available = False
-        trace_step_count = 0
-        journal: StorageJournal | None = None
-        had_unknown_sstores = False
-        if evm_step_count:
-            raw_changes, journal, had_unknown_sstores = self._build_changes_from_sstore_trace(
-                sstore_trace,
-                trace_result,
-                contract_address,
-                root_succeeded=int(receipt.get("status", 1)) == 1,
-                evm_step_count=evm_step_count,
-            )
-            execution_order_available = True
-            trace_step_count = evm_step_count
-        else:
-            raw_changes = [
-                (self._normalize_slot(slot), old, new, None, i)
-                for i, (slot, old, new) in enumerate(prestate_changes)
-            ]
-            execution_order_available = False
-
-        if self.trace_cache_repo and journal:
+        # A failed struct-log trace returns an incomplete, useful net-state
+        # projection, but is not cached so a later request can retry tracing.
+        if self.trace_cache_repo and write_history_complete:
             try:
-                await self.trace_cache_repo.save(
-                    TransactionTraceArtifactData(
-                        chain_id=chain_id,
-                        tx_hash=tx_hash,
-                        block_number=block_number,
-                        root_succeeded=journal.root_succeeded,
-                        write_events=sstore_trace,
-                        prestate_diff=trace_result,
-                        preimage_lookup=preimage_lookup,
-                        capabilities=asdict(journal.capabilities),
-                        trace_step_count=trace_step_count or None,
+                await self.trace_cache_repo.save(artifact)
+            except Exception as exc:
+                logger.warning("Failed to save trace artifact: %s", exc)
+        return artifact
+
+    def build_journal(self, artifact: TransactionTraceArtifactData) -> StorageJournal:
+        return self.journal_builder.build(
+            artifact.write_events,
+            artifact.prestate_diff,
+            root_succeeded=artifact.root_succeeded,
+            evm_step_count=artifact.trace_step_count,
+        )
+
+    def persistent_storage_owners(
+        self,
+        artifact: TransactionTraceArtifactData,
+        journal: StorageJournal | None = None,
+    ) -> tuple[str, ...]:
+        """Enumerate storage owners from writes, including rolled-back/no-op writes."""
+        journal = journal or self.build_journal(artifact)
+        first_step: dict[str, int] = {}
+        for event in journal.events:
+            if event.namespace != StorageNamespace.PERSISTENT:
+                continue
+            first_step.setdefault(event.address, event.step)
+
+        if not first_step and not artifact.capabilities.get(
+            "write_history_complete", False
+        ):
+            # Degraded fallback: net-diff owners are useful but explicitly do
+            # not prove complete execution-time write history.
+            for state_side in ("pre", "post"):
+                for address, state in artifact.prestate_diff.get(state_side, {}).items():
+                    if state.get("storage"):
+                        first_step.setdefault(address.lower(), 2**63 - 1)
+
+        return tuple(sorted(first_step, key=lambda address: (first_step[address], address)))
+
+    def project_trace_artifact(
+        self,
+        artifact: TransactionTraceArtifactData,
+        contract_address: str,
+        *,
+        layout: Optional[StorageLayout] = None,
+        sources: Optional[dict[str, str]] = None,
+        journal: StorageJournal | None = None,
+    ) -> TransactionDiff:
+        """Decode one storage-owner projection without issuing another trace."""
+        contract_address = Web3.to_checksum_address(contract_address)
+        journal = journal or self.build_journal(artifact)
+        raw_changes: list[tuple[str, str | None, str, int | None, int]] = []
+        had_unknown_evidence = any(
+            not write.get("address") for write in artifact.write_events
+        )
+
+        for history in journal.for_contract(
+            contract_address,
+            StorageNamespace.PERSISTENT,
+        ):
+            for event in history.writes:
+                had_unknown_evidence |= event.value_before is None
+                raw_changes.append(
+                    (
+                        event.slot,
+                        event.value_before,
+                        event.value_after,
+                        event.pc,
+                        event.step,
                     )
                 )
-            except Exception as e:
-                logger.warning(f"Failed to save trace artifact: {e}")
 
-        is_complete = (
-            len(raw_changes) <= self.settings.max_sstore_ops
-            and not had_unknown_sstores
+        write_history_complete = artifact.capabilities.get(
+            "write_history_complete", bool(artifact.trace_step_count)
         )
-        if not is_complete:
+        if not write_history_complete:
+            raw_changes = [
+                (self._normalize_slot(slot), old, new, None, index)
+                for index, (slot, old, new) in enumerate(
+                    self._extract_contract_changes(
+                        artifact.prestate_diff,
+                        contract_address,
+                    )
+                )
+            ]
+
+        raw_changes.sort(key=lambda change: change[4])
+        is_complete = (
+            write_history_complete
+            and len(raw_changes) <= self.settings.max_sstore_ops
+            and not had_unknown_evidence
+        )
+        if len(raw_changes) > self.settings.max_sstore_ops:
             raw_changes = raw_changes[: self.settings.max_sstore_ops]
 
-        decoded_changes = self._decode_changes(raw_changes, layout, preimage_lookup)
-        if journal:
-            self._apply_journal_metadata(decoded_changes, journal, contract_address)
+        preimage_lookup = dict(artifact.preimage_lookup)
+        if sources and layout:
+            constants = self.preimage_resolver.build_constant_preimage_lookup(
+                sources,
+                layout,
+            )
+            for slot_hash, preimage in constants.items():
+                preimage_lookup.setdefault(slot_hash, preimage)
 
-        diff = TransactionDiff(
-            chain_id=chain_id,
+        decoded_changes = self._decode_changes(
+            raw_changes,
+            layout,
+            preimage_lookup,
+        )
+        self._apply_journal_metadata(decoded_changes, journal, contract_address)
+        return TransactionDiff(
+            chain_id=artifact.chain_id,
             contract_address=contract_address,
-            tx_hash=tx_hash,
-            block_number=block_number,
+            tx_hash=artifact.tx_hash,
+            block_number=artifact.block_number,
             changes=decoded_changes,
             is_complete=is_complete,
             layout=layout,
             trace_unavailable=False,
-            execution_order_available=execution_order_available,
-            frame_outcomes_available=(
-                journal.capabilities.frame_outcomes if journal else False
-            ),
-            write_old_values_available=(
-                journal.capabilities.write_old_values if journal else False
-            ),
-            final_state_values_available=(
-                journal.capabilities.final_state_values if journal else False
-            ),
-            trace_step_count=trace_step_count or None,
+            execution_order_available=journal.capabilities.execution_order,
+            frame_outcomes_available=journal.capabilities.frame_outcomes,
+            write_old_values_available=journal.capabilities.write_old_values,
+            final_state_values_available=journal.capabilities.final_state_values,
+            trace_step_count=artifact.trace_step_count,
         )
 
-        return diff
+    @staticmethod
+    def _quantity(value: int | str) -> int:
+        return int(value, 16) if isinstance(value, str) else int(value)
+
+    @staticmethod
+    def _optional_address(value) -> str | None:
+        return str(value).lower() if value else None
 
     async def get_transaction_block(self, chain_id: int, tx_hash: str) -> int:
         """Get the block number a transaction was included in."""
@@ -302,6 +355,9 @@ class TransactionAnalysisService:
                 change.effect = event.effect.value
                 change.frame_id = event.frame_id
                 change.depth = event.depth
+                change.code_address = event.code_address
+                change.changed_value = event.changed_value
+                change.frame_outcome = event.frame_outcome
                 change.opcode = event.opcode
                 change.namespace = event.namespace.value
 

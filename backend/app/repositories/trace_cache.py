@@ -12,7 +12,7 @@ from app.models.database import TransactionTraceArtifact
 
 
 logger = logging.getLogger(__name__)
-TRACE_SCHEMA_VERSION = 2
+TRACE_SCHEMA_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,9 @@ class TransactionTraceArtifactData:
     prestate_diff: dict
     preimage_lookup: dict[str, str]
     capabilities: dict
+    transaction_from: str | None = None
+    transaction_to: str | None = None
+    created_contract: str | None = None
     trace_step_count: int | None = None
     trace_schema_version: int = TRACE_SCHEMA_VERSION
 
@@ -63,6 +66,9 @@ class TraceCacheRepository:
             tx_hash=row.tx_hash,
             block_number=row.block_number,
             root_succeeded=row.root_succeeded,
+            transaction_from=row.transaction_from,
+            transaction_to=row.transaction_to,
+            created_contract=row.created_contract,
             write_events=row.write_events,
             prestate_diff=row.prestate_diff,
             preimage_lookup=row.preimage_lookup,
@@ -79,6 +85,9 @@ class TraceCacheRepository:
             "trace_schema_version": data.trace_schema_version,
             "block_number": data.block_number,
             "root_succeeded": data.root_succeeded,
+            "transaction_from": data.transaction_from,
+            "transaction_to": data.transaction_to,
+            "created_contract": data.created_contract,
             "write_events": data.write_events,
             "prestate_diff": data.prestate_diff,
             "preimage_lookup": data.preimage_lookup,

@@ -69,6 +69,42 @@ class StorageJournalTests(unittest.TestCase):
         self.assertEqual(history.writes[1].effect, WriteEffect.APPLIED)
         self.assertEqual(history.final_value, word(6))
 
+    def test_reverted_frame_replays_its_own_intermediate_values(self):
+        writes = [
+            write(
+                9,
+                10,
+                depth=2,
+                frame_id=1,
+                frame_reverted=True,
+                rollback_frame_id=1,
+            ),
+            write(
+                10,
+                11,
+                depth=2,
+                frame_id=1,
+                frame_reverted=True,
+                rollback_frame_id=1,
+            ),
+            write(6, 20),
+        ]
+        prestate = {
+            "pre": {ADDRESS: {"storage": {SLOT: word(5)}}},
+            "post": {ADDRESS: {"storage": {SLOT: word(6)}}},
+        }
+
+        history = self.builder.build(writes, prestate, root_succeeded=True).histories[0]
+
+        self.assertEqual(
+            [event.value_before for event in history.writes],
+            [word(5), word(9), word(5)],
+        )
+        self.assertEqual(
+            [event.frame_outcome for event in history.writes],
+            ["reverted", "reverted", "applied"],
+        )
+
     def test_root_failure_reverts_every_write(self):
         history = self.builder.build(
             [write(9, 1, old_value=word(5))],
@@ -107,6 +143,21 @@ class StorageJournalTests(unittest.TestCase):
         self.assertEqual(len(changes), 1)
         self.assertIsNone(changes[0][1])
         self.assertTrue(had_unknown)
+
+    def test_final_state_mismatch_downgrades_replay_capabilities(self):
+        journal = self.builder.build(
+            [write(6, 1, old_value=word(5))],
+            {
+                "pre": {ADDRESS: {"storage": {SLOT: word(5)}}},
+                "post": {ADDRESS: {"storage": {SLOT: word(7)}}},
+            },
+            root_succeeded=True,
+        )
+
+        self.assertFalse(journal.capabilities.state_reconciliation)
+        self.assertFalse(journal.capabilities.frame_outcomes)
+        self.assertFalse(journal.capabilities.write_old_values)
+        self.assertFalse(journal.capabilities.final_state_values)
 
     def test_transient_slot_zero_is_separate_and_clears_after_transaction(self):
         transient = write(

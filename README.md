@@ -8,6 +8,13 @@ Ethereum smart contract storage analyzer. View storage layouts, decode values, a
 - **Frontend** (`/frontend`): Next.js UI for browsing storage and diffs.
 - **PostgreSQL**: Caches contract metadata and results.
 
+Transaction-wide history is available at
+`GET /api/slotscan/tx/{chain_id}/{tx_hash}`. Add
+`?include_global_order=true` for execution-ordered event references. The API
+groups every persistent write owner and retains restored, no-op, and reverted
+slot histories. Storage layouts are fetched from Sourcify when available;
+missing layouts degrade to raw slots without request-time compilation.
+
 ## Quick Start
 
 ### 1. Database (skip if you have postgres running)

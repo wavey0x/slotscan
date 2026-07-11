@@ -40,6 +40,8 @@ Thumbs.db
 htmlcov/
 .pytest_cache/
 .nyc_output/
+playwright-report/
+test-results/
 
 # Database
 *.db

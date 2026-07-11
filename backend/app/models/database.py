@@ -57,6 +57,9 @@ class TransactionTraceArtifact(Base):
     trace_schema_version = Column(Integer, nullable=False)
     block_number = Column(BigInteger, nullable=False)
     root_succeeded = Column(Boolean, nullable=False)
+    transaction_from = Column(String(42))
+    transaction_to = Column(String(42))
+    created_contract = Column(String(42))
 
     write_events = Column(JSONB, nullable=False)
     prestate_diff = Column(JSONB, nullable=False)

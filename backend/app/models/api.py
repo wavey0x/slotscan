@@ -109,6 +109,10 @@ class StorageChangeResponse(BaseModel):
     pc: Optional[int] = None  # Program counter of the SSTORE operation
     step: Optional[int] = None  # Sequence number in overall transaction execution
     effect: str = "applied"
+    storage_address: Optional[str] = None
+    code_address: Optional[str] = None
+    changed_value: Optional[bool] = None
+    frame_outcome: str = "applied"
     frame_id: Optional[int] = None
     depth: Optional[int] = None
     opcode: str = "SSTORE"
@@ -161,9 +165,14 @@ class SlotChangeResponse(BaseModel):
     confidence: str = "unknown"
     namespace: str = "persistent"
     net_changed: Optional[bool] = None
+    classification: str = "unknown"
+    first_write_step: Optional[int] = None
+    last_write_step: Optional[int] = None
+    event_count: int = 0
     state_values_known: bool = True
     variable_name: Optional[str] = None
     variable_path: Optional[str] = None
+    resolved_paths: list[str] = Field(default_factory=list)
     type_label: Optional[str] = None
 
     # Unified mapping params (replaces separate key/type arrays)
@@ -208,6 +217,91 @@ class TransactionDiffResponse(BaseModel):
     write_old_values_available: bool = False
     final_state_values_available: bool = False
     trace_step_count: Optional[int] = None
+
+
+class TransactionCapabilitiesResponse(BaseModel):
+    """Trace-wide evidence guarantees for transaction history."""
+
+    write_history_complete: bool
+    values_complete: bool
+    rollback_classification_complete: bool
+    execution_order_available: bool
+    final_state_values_available: bool
+    state_reconciliation_complete: bool
+    address_attribution_complete: bool
+    code_attribution_complete: bool
+
+
+class TransactionSummaryResponse(BaseModel):
+    storage_owners: int
+    slots_written: int
+    sstore_events: int
+    net_changed_slots: int
+    restored_slots: int
+    reverted_only_slots: int
+    noop_only_slots: int
+    reverted_writes: int
+    noop_writes: int
+    resolved_slots: int
+
+
+class ContractHistoryCountsResponse(BaseModel):
+    slots_written: int
+    sstore_events: int
+    net_changed_slots: int
+    restored_slots: int
+    reverted_only_slots: int
+    noop_only_slots: int
+    reverted_writes: int
+    noop_writes: int
+
+
+class ContractResolutionResponse(BaseModel):
+    resolved: int
+    total: int
+
+
+class ContractHistoryResponse(BaseModel):
+    storage_address: str
+    name: Optional[str] = None
+    is_proxy: bool = False
+    is_verified: bool = False
+    implementation_addresses: list[str] = Field(default_factory=list)
+    code_addresses: list[str] = Field(default_factory=list)
+    first_write_step: Optional[int] = None
+    last_write_step: Optional[int] = None
+    layout_available: bool = False
+    resolution: ContractResolutionResponse
+    counts: ContractHistoryCountsResponse
+    errors: list[str] = Field(default_factory=list)
+    slots: list[SlotChangeResponse] = Field(default_factory=list)
+
+
+class GlobalStorageEventReferenceResponse(BaseModel):
+    """Reference into contracts[].slots[].changes without duplicating events."""
+
+    ordinal: int
+    step: Optional[int] = None
+    storage_address: str
+    slot: str
+    event_index: int
+
+
+class TransactionStorageHistoryResponse(BaseModel):
+    chain_id: int
+    tx_hash: str
+    block_number: int
+    status: str
+    from_address: Optional[str] = None
+    to_address: Optional[str] = None
+    created_contract: Optional[str] = None
+    analysis_version: int = 5
+    capabilities: TransactionCapabilitiesResponse
+    summary: TransactionSummaryResponse
+    contracts: list[ContractHistoryResponse] = Field(default_factory=list)
+    global_order: Optional[list[GlobalStorageEventReferenceResponse]] = None
+    is_complete: bool
+    trace_unavailable: bool = False
 
 
 class ErrorResponse(BaseModel):

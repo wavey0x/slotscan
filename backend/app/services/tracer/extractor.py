@@ -1,8 +1,13 @@
 """Transaction-level RPC evidence extraction, independent of decoding/layouts."""
 
 from dataclasses import dataclass
+import logging
 
 from app.services.tracer.rpc_client import TraceRPCClient
+
+
+logger = logging.getLogger(__name__)
+ZERO_WORD = "0x" + "0" * 64
 
 
 @dataclass(frozen=True)
@@ -37,6 +42,28 @@ class TransactionTraceExtractor:
                 tx_to_address,
             )
         )
+        self._normalize_diff(prestate_diff)
+        missing = self._missing_initial_values(writes, prestate_diff)
+        if missing:
+            try:
+                full_prestate = await self.rpc_client.execute_prestate_trace(
+                    chain_id,
+                    tx_hash,
+                    diff_mode=False,
+                )
+                self._merge_observed_prestate(
+                    prestate_diff,
+                    full_prestate,
+                    missing,
+                )
+            except Exception as exc:
+                # Preserve raw events with nullable before-values. A failed
+                # enrichment trace must not erase the write inventory.
+                logger.warning(
+                    "Could not recover %s observed prestate values: %s",
+                    len(missing),
+                    exc,
+                )
         return TransactionTraceEvidence(
             receipt=receipt,
             prestate_diff=prestate_diff,
@@ -44,3 +71,72 @@ class TransactionTraceExtractor:
             sha3_operations=sha3_operations,
             evm_step_count=evm_step_count,
         )
+
+    @staticmethod
+    def _word(value: str | int) -> str:
+        if isinstance(value, int):
+            return f"0x{value:064x}"
+        return "0x" + value.removeprefix("0x").lower().zfill(64)
+
+    @classmethod
+    def _normalize_diff(cls, diff: dict) -> None:
+        for side in ("pre", "post"):
+            normalized_accounts = {}
+            for address, state in diff.get(side, {}).items():
+                normalized = dict(state)
+                normalized["storage"] = {
+                    cls._word(slot): cls._word(value)
+                    for slot, value in state.get("storage", {}).items()
+                }
+                normalized_accounts[address.lower()] = normalized
+            diff[side] = normalized_accounts
+
+    @classmethod
+    def _missing_initial_values(
+        cls,
+        writes: list[dict],
+        diff: dict,
+    ) -> set[tuple[str, str]]:
+        pre = diff.get("pre", {})
+        missing = set()
+        first_event_old_values: dict[tuple[str, str], str | None] = {}
+        for write in writes:
+            if write.get("namespace", "persistent") != "persistent":
+                continue
+            address = (write.get("address") or "").lower()
+            if not address:
+                continue
+            slot = cls._word(write.get("slot", "0x0"))
+            key = (address, slot)
+            first_event_old_values.setdefault(key, write.get("old_value"))
+            if (
+                slot not in pre.get(address, {}).get("storage", {})
+                and first_event_old_values[key] is None
+            ):
+                missing.add((address, slot))
+        return missing
+
+    @classmethod
+    def _merge_observed_prestate(
+        cls,
+        diff: dict,
+        full_prestate: dict,
+        missing: set[tuple[str, str]],
+    ) -> None:
+        accounts = {address.lower(): state for address, state in full_prestate.items()}
+        pre = diff.setdefault("pre", {})
+        post = diff.setdefault("post", {})
+        for address, slot in missing:
+            full_storage = accounts.get(address, {}).get("storage", {})
+            normalized_storage = {
+                cls._word(raw_slot): cls._word(value)
+                for raw_slot, value in full_storage.items()
+            }
+            initial = normalized_storage.get(slot, ZERO_WORD)
+            pre.setdefault(address, {}).setdefault("storage", {})[slot] = initial
+            # Only an omitted post value proves no durable change. A post-only
+            # diff is the normal zero-to-nonzero net-change representation.
+            post.setdefault(address, {}).setdefault("storage", {}).setdefault(
+                slot,
+                initial,
+            )

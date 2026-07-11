@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import logging
 
 from app.services.layout_index import StorageNamespace
 
 
 ZERO_WORD = "0x" + "0" * 64
+logger = logging.getLogger(__name__)
 
 
 class WriteEffect(str, Enum):
@@ -20,6 +22,7 @@ class WriteEffect(str, Enum):
 @dataclass(frozen=True)
 class StorageWriteEvent:
     address: str
+    code_address: str | None
     slot: str
     value: str
     step: int
@@ -29,6 +32,8 @@ class StorageWriteEvent:
     opcode: str
     namespace: StorageNamespace
     value_before: str | None = None
+    changed_value: bool | None = None
+    frame_outcome: str = "applied"
     effect: WriteEffect = WriteEffect.APPLIED
 
     @property
@@ -57,6 +62,7 @@ class TraceCapabilities:
     frame_outcomes: bool
     write_old_values: bool
     final_state_values: bool
+    state_reconciliation: bool
     transient_storage: bool
 
 
@@ -94,6 +100,10 @@ class StorageJournalBuilder:
     ) -> StorageJournal:
         initial_state, final_state, net_changed_keys = self._extract_state(prestate_diff)
         current_state = dict(initial_state)
+        rollback_overlays: dict[
+            int, dict[tuple[str, StorageNamespace, str], str]
+        ] = {}
+        rollback_parents: dict[int, int | None] = {}
         events: list[StorageWriteEvent] = []
 
         for raw in sorted(writes, key=lambda item: item.get("index", 0)):
@@ -108,6 +118,16 @@ class StorageJournalBuilder:
             slot = self._normalize_word(raw.get("slot", "0x0"))
             value = self._normalize_word(raw.get("value", ZERO_WORD))
             key = (address, namespace, slot)
+            reverted = not root_succeeded or bool(raw.get("frame_reverted"))
+            rollback_frame_id = raw.get("rollback_frame_id")
+            if reverted and rollback_frame_id is None:
+                rollback_frame_id = 0
+            if rollback_frame_id is not None:
+                rollback_frame_id = int(rollback_frame_id)
+                rollback_parents.setdefault(
+                    rollback_frame_id,
+                    raw.get("rollback_parent_id"),
+                )
 
             if namespace == StorageNamespace.TRANSIENT:
                 current_state.setdefault(key, ZERO_WORD)
@@ -118,18 +138,27 @@ class StorageJournalBuilder:
                 current_state.setdefault(key, value_before)
                 initial_state.setdefault(key, value_before)
             else:
-                value_before = current_state.get(key)
+                value_before = self._effective_value(
+                    key,
+                    current_state,
+                    rollback_overlays,
+                    rollback_parents,
+                    rollback_frame_id if reverted else None,
+                )
 
-            reverted = not root_succeeded or bool(raw.get("frame_reverted"))
+            changed_value = (
+                value_before != value if value_before is not None else None
+            )
             if reverted:
                 effect = WriteEffect.REVERTED
-            elif value_before is not None and value_before == value:
+            elif changed_value is False:
                 effect = WriteEffect.NOOP
             else:
                 effect = WriteEffect.APPLIED
 
             event = StorageWriteEvent(
                 address=address,
+                code_address=(raw.get("code_address") or None),
                 slot=slot,
                 value=value,
                 value_before=value_before,
@@ -139,11 +168,15 @@ class StorageJournalBuilder:
                 frame_id=int(raw.get("frame_id", 0)),
                 opcode=opcode,
                 namespace=namespace,
+                changed_value=changed_value,
+                frame_outcome="reverted" if reverted else "applied",
                 effect=effect,
             )
             events.append(event)
 
-            if effect != WriteEffect.REVERTED:
+            if effect == WriteEffect.REVERTED and rollback_frame_id is not None:
+                rollback_overlays.setdefault(rollback_frame_id, {})[key] = value
+            else:
                 current_state[key] = value
 
         grouped: dict[
@@ -192,15 +225,37 @@ class StorageJournalBuilder:
         histories.sort(key=lambda item: item.writes[0].step if item.writes else 0)
         all_old_values_known = all(event.value_before is not None for event in events)
         all_final_values_known = all(history.final_value is not None for history in histories)
+        mismatches = [
+            history
+            for history in histories
+            if history.namespace == StorageNamespace.PERSISTENT
+            and current_state.get(
+                (history.address, history.namespace, history.slot),
+                history.initial_value,
+            )
+            != history.final_value
+        ]
+        state_reconciliation = all_final_values_known and not mismatches
+        if mismatches:
+            logger.warning(
+                "Storage journal final-state reconciliation failed for %s slots",
+                len(mismatches),
+            )
 
         return StorageJournal(
             events=tuple(events),
             histories=tuple(histories),
             capabilities=TraceCapabilities(
                 execution_order=bool(evm_step_count),
-                frame_outcomes=all("frame_reverted" in write for write in writes),
-                write_old_values=all_old_values_known,
-                final_state_values=all_final_values_known,
+                frame_outcomes=(
+                    all("frame_reverted" in write for write in writes)
+                    and state_reconciliation
+                ),
+                write_old_values=all_old_values_known and state_reconciliation,
+                final_state_values=(
+                    all_final_values_known and state_reconciliation
+                ),
+                state_reconciliation=state_reconciliation,
                 transient_storage=any(
                     event.namespace == StorageNamespace.TRANSIENT for event in events
                 ),
@@ -208,6 +263,27 @@ class StorageJournalBuilder:
             root_succeeded=root_succeeded,
             evm_step_count=evm_step_count,
         )
+
+    @staticmethod
+    def _effective_value(
+        key: tuple[str, StorageNamespace, str],
+        current_state: dict[tuple[str, StorageNamespace, str], str],
+        rollback_overlays: dict[
+            int, dict[tuple[str, StorageNamespace, str], str]
+        ],
+        rollback_parents: dict[int, int | None],
+        rollback_frame_id: int | None,
+    ) -> str | None:
+        current = rollback_frame_id
+        seen: set[int] = set()
+        while current is not None and current not in seen:
+            seen.add(current)
+            overlay = rollback_overlays.get(current, {})
+            if key in overlay:
+                return overlay[key]
+            parent = rollback_parents.get(current)
+            current = int(parent) if parent is not None else None
+        return current_state.get(key)
 
     def _extract_state(
         self, prestate_diff: dict

@@ -79,6 +79,10 @@ export interface StorageChangeResponse {
   pc: number | null;
   step: number | null; // Sequence number in overall transaction execution
   effect: 'applied' | 'noop' | 'reverted';
+  storage_address: string | null;
+  code_address: string | null;
+  changed_value: boolean | null;
+  frame_outcome: 'applied' | 'reverted';
   frame_id: number | null;
   depth: number | null;
   opcode: 'SSTORE' | 'TSTORE';
@@ -126,9 +130,14 @@ export interface SlotChangeResponse {
   confidence: 'exact' | 'inferred' | 'unknown';
   namespace: 'persistent' | 'transient';
   net_changed: boolean | null;
+  classification: 'net_changed' | 'restored' | 'reverted_only' | 'noop_only' | 'unchanged' | 'unknown';
+  first_write_step: number | null;
+  last_write_step: number | null;
+  event_count: number;
   state_values_known: boolean;
   variable_name: string | null;
   variable_path: string | null;
+  resolved_paths: string[];
   type_label: string | null;
   // Unified mapping params
   params: MappingParamResponse[] | null;  // Mapping parameters with types and values
@@ -166,6 +175,82 @@ export interface TransactionDiffResponse {
   write_old_values_available: boolean;
   final_state_values_available: boolean;
   trace_step_count: number | null;
+}
+
+export interface TransactionCapabilitiesResponse {
+  write_history_complete: boolean;
+  values_complete: boolean;
+  rollback_classification_complete: boolean;
+  execution_order_available: boolean;
+  final_state_values_available: boolean;
+  state_reconciliation_complete: boolean;
+  address_attribution_complete: boolean;
+  code_attribution_complete: boolean;
+}
+
+export interface TransactionSummaryResponse {
+  storage_owners: number;
+  slots_written: number;
+  sstore_events: number;
+  net_changed_slots: number;
+  restored_slots: number;
+  reverted_only_slots: number;
+  noop_only_slots: number;
+  reverted_writes: number;
+  noop_writes: number;
+  resolved_slots: number;
+}
+
+export interface ContractHistoryCountsResponse {
+  slots_written: number;
+  sstore_events: number;
+  net_changed_slots: number;
+  restored_slots: number;
+  reverted_only_slots: number;
+  noop_only_slots: number;
+  reverted_writes: number;
+  noop_writes: number;
+}
+
+export interface ContractHistoryResponse {
+  storage_address: string;
+  name: string | null;
+  is_proxy: boolean;
+  is_verified: boolean;
+  implementation_addresses: string[];
+  code_addresses: string[];
+  first_write_step: number | null;
+  last_write_step: number | null;
+  layout_available: boolean;
+  resolution: { resolved: number; total: number };
+  counts: ContractHistoryCountsResponse;
+  errors: string[];
+  slots: SlotChangeResponse[];
+}
+
+export interface GlobalStorageEventReferenceResponse {
+  ordinal: number;
+  step: number | null;
+  storage_address: string;
+  slot: string;
+  event_index: number;
+}
+
+export interface TransactionStorageHistoryResponse {
+  chain_id: number;
+  tx_hash: string;
+  block_number: number;
+  status: 'success' | 'reverted';
+  from_address: string | null;
+  to_address: string | null;
+  created_contract: string | null;
+  analysis_version: number;
+  capabilities: TransactionCapabilitiesResponse;
+  summary: TransactionSummaryResponse;
+  contracts: ContractHistoryResponse[];
+  global_order: GlobalStorageEventReferenceResponse[] | null;
+  is_complete: boolean;
+  trace_unavailable: boolean;
 }
 
 export interface ErrorResponse {

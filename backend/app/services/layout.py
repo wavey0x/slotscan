@@ -287,6 +287,10 @@ class LayoutParser:
             process.kill()
             await process.wait()
             raise
+        except asyncio.CancelledError:
+            process.kill()
+            await process.wait()
+            raise
         if process.returncode != 0:
             raise CompilationError(
                 "Solidity compiler process failed: "
@@ -761,6 +765,10 @@ class LayoutParser:
                 process.kill()
                 await process.wait()
                 raise CompilationError("Vyper compilation timed out") from exc
+            except asyncio.CancelledError:
+                process.kill()
+                await process.wait()
+                raise
             if process.returncode != 0:
                 raise CompilationError(
                     "Vyper compilation failed: "

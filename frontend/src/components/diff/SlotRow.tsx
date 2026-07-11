@@ -459,6 +459,26 @@ export function SlotRow({
 
   const hasStructInfo = !!slot.struct_definition;
   const showTypeLabel = slot.type_label && !hasStructInfo && !hasPacked;
+  const classificationLabel: Record<SlotChangeResponse['classification'], string> = {
+    net_changed: 'net',
+    restored: 'restored',
+    reverted_only: 'reverted',
+    noop_only: 'no-op',
+    unchanged: 'unchanged',
+    unknown: 'unknown',
+  };
+  const classificationBadge = (
+    <span className={cn(
+      'inline-block mt-0.5 text-[9px] uppercase tracking-wide',
+      slot.classification === 'restored' && 'text-blue-600',
+      slot.classification === 'reverted_only' && 'text-amber-600',
+      slot.classification === 'noop_only' && 'text-gray-400',
+      slot.classification === 'net_changed' && 'text-emerald-700',
+      (slot.classification === 'unknown' || slot.classification === 'unchanged') && 'text-gray-500'
+    )}>
+      {classificationLabel[slot.classification]} · {slot.event_count} {slot.event_count === 1 ? 'write' : 'writes'}
+    </span>
+  );
 
   // HoverCard content for variable info
   const variableHoverContent = (
@@ -564,6 +584,7 @@ export function SlotRow({
   const expandButton = (
     <button
       onClick={() => setExpanded(!expanded)}
+      aria-label={expanded ? 'Collapse write history' : 'Expand write history'}
       className="w-4 h-4 flex items-center justify-center text-gray-400 hover:text-gray-700 text-xs font-mono leading-none"
     >
       {expanded ? '−' : '+'}
@@ -585,6 +606,7 @@ export function SlotRow({
                 <span className="text-gray-900 font-medium">{slot.variable_name}</span>
               </span>
             </HoverCard>
+            <div>{classificationBadge}</div>
           </td>
           <td className={cn('px-1 py-0.5 w-8 align-top', isFirst && 'pt-2')}>
             <HoverCard content={<div className="font-mono text-xs text-gray-100 break-all">{slot.slot}</div>} position="top">
@@ -682,6 +704,7 @@ export function SlotRow({
                 ) : null}
               </span>
             </HoverCard>
+            <div>{classificationBadge}</div>
           </td>
 
           <td className={cn('px-1 py-0.5 align-top', isFirst && 'pt-2')}>

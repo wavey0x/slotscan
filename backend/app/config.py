@@ -38,7 +38,14 @@ class Settings(BaseSettings):
     max_slots_per_contract: int = Field(default=10000, alias="MAX_SLOTS_PER_CONTRACT")
     max_sstore_ops: int = Field(default=10000, alias="MAX_SSTORE_OPS")
     request_timeout_seconds: int = Field(default=45, alias="REQUEST_TIMEOUT_SECONDS")
-
+    max_parallel_contract_resolutions: int = Field(
+        default=8,
+        alias="MAX_PARALLEL_CONTRACT_RESOLUTIONS",
+    )
+    contract_resolution_timeout_seconds: int = Field(
+        default=6,
+        alias="CONTRACT_RESOLUTION_TIMEOUT_SECONDS",
+    )
     # Compiler isolation
     allow_compiler_install: bool = Field(default=False, alias="ALLOW_COMPILER_INSTALL")
     max_installed_compilers: int = Field(default=64, alias="MAX_INSTALLED_COMPILERS")

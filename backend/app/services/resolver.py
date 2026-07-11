@@ -10,7 +10,7 @@ from web3 import Web3
 
 from app.config import Settings
 from app.models.domain import ContractMetadata, ProxyInfo, StorageLayout, VerificationResult
-from app.models.errors import NotAContractError, RPCError, UnsupportedCompilerVersionError
+from app.models.errors import NotAContractError, RPCError
 from app.repositories.contracts import ContractRepository
 from app.services.layout import LayoutParser
 from app.services.namespace_storage import NamespaceStorageParser
@@ -81,6 +81,7 @@ class ContractResolver:
         chain_id: int,
         address: str,
         block_number: Optional[int] = None,
+        sourcify_layout_only: bool = False,
     ) -> ContractMetadata:
         """
         Resolve full contract metadata.
@@ -88,7 +89,7 @@ class ContractResolver:
         1. Check cache first
         2. Verify it's a contract
         3. Detect proxy pattern
-        4. Fetch verification from Sourcify/Etherscan
+        4. Fetch verification from Sourcify (and optionally Etherscan sources)
         5. Cache and return result
         """
         address = Web3.to_checksum_address(address)
@@ -143,7 +144,10 @@ class ContractResolver:
         verification = None
         language = "Solidity"
         if not parsed_layout:
-            verification = await self._fetch_verification(chain_id, verify_address)
+            if sourcify_layout_only:
+                verification = await self._try_sourcify(chain_id, verify_address)
+            else:
+                verification = await self._fetch_verification(chain_id, verify_address)
             if verification:
                 language = getattr(verification, "language", None) or "Solidity"
 
@@ -180,78 +184,8 @@ class ContractResolver:
             except Exception as e:
                 logger.warning(f"Failed to parse layout from verification: {e}")
                 parsed_layout = None
-        # If no layout from verification but sources available, compile
-        if not parsed_layout and verification and verification.sources and verification.compiler_version:
-            logger.info(f"Compiling {language} layout for {verification.name} with {len(verification.sources)} source files")
-            try:
-                if self.compiler_artifact_repo:
-                    if language == "Vyper":
-                        standard_input = {
-                            "language": "Vyper",
-                            "sources": {
-                                filename: {"content": content}
-                                for filename, content in verification.sources.items()
-                            },
-                            "settings": {"outputSelection": ["layout"]},
-                        }
-                        pipeline = "vvm-layout"
-                    else:
-                        standard_input = self.layout_parser.build_solidity_standard_input(
-                            verification.sources,
-                            verification.compiler_settings,
-                            verification.compiler_settings,
-                        )
-                        pipeline = "solc-standard-json"
-                    fingerprint = self.layout_parser.artifact_fingerprint(
-                        language=language,
-                        compiler_version=verification.compiler_version,
-                        pipeline=pipeline,
-                        standard_input=standard_input,
-                    )
-                    compiler_artifact = await self.compiler_artifact_repo.get(fingerprint)
-
-                if compiler_artifact and language == "Vyper":
-                    parsed_layout = self.layout_parser._normalize_vyper_layout(
-                        compiler_artifact.compiler_output["storageLayout"],
-                        verification.name or "",
-                    )
-                elif compiler_artifact:
-                    parsed_layout = self.layout_parser.parse_from_solc_output(
-                        verification.name or "",
-                        compiler_artifact.compiler_output,
-                        self._get_compilation_target(verification),
-                    )
-                if language == "Vyper":
-                    # Compile Vyper to get storage layout
-                    if parsed_layout is None:
-                        parsed_layout, compiler_artifact = await self.layout_parser.parse_vyper_with_artifact(
-                            contract_name=verification.name or "",
-                            sources=verification.sources,
-                            compiler_version=verification.compiler_version,
-                        )
-                elif parsed_layout is None:
-                    # Solidity compilation
-                    parsed_layout, compiler_artifact = await self.layout_parser.parse_with_artifact(
-                        contract_name=verification.name or "",
-                        sources=verification.sources,
-                        compiler_version=verification.compiler_version,
-                        compiler_settings=verification.compiler_settings,
-                        metadata_settings=verification.compiler_settings,
-                        contract_fqname=self._get_compilation_target(verification),
-                    )
-                if self.compiler_artifact_repo and compiler_artifact:
-                    await self.compiler_artifact_repo.save(compiler_artifact)
-                logger.info(f"Layout compiled: {len(parsed_layout.variables) if parsed_layout else 0} variables")
-            except UnsupportedCompilerVersionError as e:
-                # Log the compiler version issue and continue without layout
-                logger.info(f"Layout unavailable for {address}: {e}")
-                parsed_layout = None
-            except Exception as e:
-                logger.warning(f"Failed to compile layout: {e}", exc_info=True)
-                parsed_layout = None
-
         # Check for namespaced storage (ERC-7201 pattern)
-        # If the compiled layout has very few variables but sources are available,
+        # If the resolved layout has very few variables but sources are available,
         # the contract might be using namespaced storage
         if (parsed_layout and
             len(parsed_layout.variables) < 10 and
@@ -317,8 +251,8 @@ class ContractResolver:
 
         await self._hydrate_compiler_inputs(result)
 
-        # Cache result only if verified AND has storage layout
-        # (compilation may fail temporarily, we'll retry next request)
+        # Cache only verified layouts. Missing Sourcify layouts remain raw and
+        # can be retried later without pinning an incomplete resolution.
         if (
             self.contract_repo
             and block_number is None
@@ -543,18 +477,6 @@ class ContractResolver:
         except Exception:
             return None
 
-    def _get_compilation_target(self, verification: VerificationResult) -> Optional[str]:
-        """Return fully qualified contract name from metadata compilationTarget if available."""
-        if verification.compilation_target:
-            # Expecting a dict { "path": "Contract" }
-            try:
-                # Take first entry
-                path, name = next(iter(verification.compilation_target.items()))
-                return f"{path}:{name}"
-            except Exception:
-                return None
-        return None
-
     def _merge_layouts(
         self, standard_layout: StorageLayout, namespace_layout: StorageLayout
     ) -> StorageLayout:
@@ -598,98 +520,46 @@ class ContractResolver:
     async def _try_sourcify(
         self, chain_id: int, address: str
     ) -> Optional[VerificationResult]:
-        """Query Sourcify API for verified source."""
-        base_url = "https://sourcify.dev/server"
+        """Fetch Sourcify's compiler-produced layout without local compilation."""
+        url = f"https://sourcify.dev/server/v2/contract/{chain_id}/{address}"
 
         try:
-                # Try full match first
-                url = f"{base_url}/files/{chain_id}/{address}"
-                response = await self.http_client.get(url)
+            response = await self.http_client.get(
+                url,
+                params={"fields": "storageLayout,compilation"},
+            )
+            if response.status_code != 200:
+                return None
 
-                if response.status_code == 200:
-                    data = response.json()
-                    return self._parse_sourcify_response(data, "full")
+            data = response.json()
+            if not isinstance(data, dict):
+                raise ValueError("expected a JSON object")
+            compilation = data.get("compilation") or {}
+            if not isinstance(compilation, dict):
+                raise ValueError("expected compilation metadata to be an object")
+            fully_qualified_name = compilation.get("fullyQualifiedName") or ""
+            compilation_target = None
+            if ":" in fully_qualified_name:
+                source_path, target_name = fully_qualified_name.rsplit(":", 1)
+                compilation_target = {source_path: target_name}
 
-                # Try partial match
-                url = f"{base_url}/files/any/{chain_id}/{address}"
-                response = await self.http_client.get(url)
-
-                if response.status_code == 200:
-                    data = response.json()
-                    return self._parse_sourcify_response(data, "partial")
-
+            return VerificationResult(
+                source="sourcify",
+                match_type=data.get("match") or "unknown",
+                name=compilation.get("name"),
+                compilation_target=compilation_target,
+                compiler_version=compilation.get("compilerVersion"),
+                compiler_settings=compilation.get("compilerSettings"),
+                sources=None,
+                storage_layout=data.get("storageLayout"),
+                language=compilation.get("language") or "Solidity",
+            )
         except httpx.RequestError as e:
             logger.warning(f"Sourcify request failed: {e}")
+        except (TypeError, ValueError) as e:
+            logger.warning(f"Invalid Sourcify response for {address}: {e}")
 
         return None
-
-    def _parse_sourcify_response(
-        self, data: dict | list, match_type: str
-    ) -> VerificationResult:
-        """Parse Sourcify response into VerificationResult."""
-        sources = {}
-        metadata = None
-        storage_layout = None
-
-        # Sourcify API returns either a list of files directly, or a dict with "files" key
-        files = data if isinstance(data, list) else data.get("files", [])
-
-        for file_info in files:
-            name = file_info.get("name", "")
-            path = file_info.get("path", "")
-            content = file_info.get("content", "")
-
-            if name == "metadata.json":
-                try:
-                    metadata = json.loads(content)
-                except json.JSONDecodeError:
-                    pass
-            elif name.endswith("storageLayout.json"):
-                try:
-                    storage_layout = json.loads(content)
-                except json.JSONDecodeError:
-                    pass
-            elif name.endswith(".sol") or name.endswith(".vy"):
-                # Extract original path from Sourcify's path field
-                # Format: contracts/.../sources/node_modules/@openzeppelin/...
-                # We need everything after /sources/
-                if "/sources/" in path:
-                    original_path = path.split("/sources/", 1)[1]
-                else:
-                    original_path = name
-                sources[original_path] = content
-
-        compiler_version = None
-        compiler_settings = None
-        contract_name = None
-        language = "Solidity"  # Default
-
-        if metadata:
-            compiler_version = metadata.get("compiler", {}).get("version")
-            compiler_settings = metadata.get("settings", {})
-            compilation_target = metadata.get("settings", {}).get("compilationTarget", {})
-            target = metadata.get("settings", {}).get("compilationTarget", {})
-            if target:
-                contract_name = list(target.values())[0]
-            # Detect language from metadata (Vyper contracts have "language": "Vyper")
-            language = metadata.get("language", "Solidity")
-
-        # Fallback: detect Vyper from file extensions if metadata doesn't specify
-        if language == "Solidity" and sources:
-            if any(name.endswith(".vy") for name in sources.keys()):
-                language = "Vyper"
-
-        return VerificationResult(
-            source="sourcify",
-            match_type=match_type,
-            name=contract_name,
-            compilation_target=compilation_target if metadata else None,
-            compiler_version=compiler_version,
-            compiler_settings=compiler_settings,
-            sources=sources,
-            storage_layout=storage_layout,
-            language=language,
-        )
 
     async def _try_etherscan(
         self, chain_id: int, address: str

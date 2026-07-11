@@ -16,6 +16,7 @@ from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
 from app.services.storage import StorageReader
 from app.services.tracer import TransactionTracer
+from app.services.transaction_history import TransactionHistoryService
 from app.services.web3_provider import Web3Provider
 
 
@@ -109,4 +110,20 @@ async def get_transaction_tracer(
         settings=settings,
         decoder=decoder,
         trace_cache_repo=trace_cache_repo,
+    )
+
+
+async def get_transaction_history_service(
+    tracer: TransactionTracer = Depends(get_transaction_tracer),
+    web3_provider: Web3Provider = Depends(get_web3_provider),
+    settings: Settings = Depends(get_settings),
+    layout_parser: LayoutParser = Depends(get_layout_parser),
+    http_client: httpx.AsyncClient = Depends(get_verification_http_client),
+) -> TransactionHistoryService:
+    return TransactionHistoryService(
+        tracer=tracer,
+        web3_provider=web3_provider,
+        settings=settings,
+        layout_parser=layout_parser,
+        http_client=http_client,
     )

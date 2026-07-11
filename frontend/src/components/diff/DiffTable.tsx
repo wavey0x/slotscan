@@ -13,18 +13,80 @@ interface DiffTableProps {
   showHex: boolean;
 }
 
-export function DiffTable({ chainId, address, txHash, showHex }: DiffTableProps) {
-  const { data, isLoading, error } = useTxDiff(chainId, address, txHash);
+interface SlotHistoryTableProps {
+  chainId: string;
+  slots: SlotChangeResponse[];
+  showHex: boolean;
+  executionOrderAvailable: boolean;
+  isComplete?: boolean;
+}
 
-  // Sort slots by step (execution order) - must be called before early returns
+export function SlotHistoryTable({
+  chainId,
+  slots,
+  showHex,
+  executionOrderAvailable,
+  isComplete = true,
+}: SlotHistoryTableProps) {
   const sortedSlots = useMemo(() => {
-    if (!data?.slots) return [];
-    return [...data.slots].sort((a: SlotChangeResponse, b: SlotChangeResponse) => {
+    return [...slots].sort((a, b) => {
       const stepA = a.changes.length > 0 ? (a.changes[0].step ?? Infinity) : Infinity;
       const stepB = b.changes.length > 0 ? (b.changes[0].step ?? Infinity) : Infinity;
-      return stepA - stepB;
+      if (stepA !== stepB) return stepA - stepB;
+      return a.slot.localeCompare(b.slot);
     });
-  }, [data?.slots]);
+  }, [slots]);
+
+  if (sortedSlots.length === 0) {
+    return (
+      <div className="text-gray-500 p-8 text-center border border-gray-300">
+        No storage histories match the current filters
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <table className="w-full">
+        <thead>
+          <tr className="border-b border-gray-300">
+            <th className="w-5 px-1 pt-2 pb-1"></th>
+            <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase w-48">Variable</th>
+            <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase">Value</th>
+            <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase w-8">Slot</th>
+            {executionOrderAvailable && (
+              <th className="text-right px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase w-10">
+                Step
+              </th>
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {sortedSlots.map((slot, index) => (
+            <SlotRow
+              key={`${slot.namespace}:${slot.slot}`}
+              slot={slot}
+              showHex={showHex}
+              chainId={chainId}
+              showStep={executionOrderAvailable}
+              isFirst={index === 0}
+              isLast={index === sortedSlots.length - 1}
+            />
+          ))}
+        </tbody>
+      </table>
+
+      {!isComplete && (
+        <div className="mt-2 text-xs text-gray-500">
+          The trace or projection is incomplete; some write history may be absent.
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function DiffTable({ chainId, address, txHash, showHex }: DiffTableProps) {
+  const { data, isLoading, error } = useTxDiff(chainId, address, txHash);
 
   if (isLoading) {
     return (
@@ -70,41 +132,12 @@ export function DiffTable({ chainId, address, txHash, showHex }: DiffTableProps)
   }
 
   return (
-    <div>
-      <table className="w-full">
-        <thead>
-          <tr className="border-b border-gray-300">
-            <th className="w-5 px-1 pt-2 pb-1"></th>
-            <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase w-48">Variable</th>
-            <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase">Value</th>
-            <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase w-8">Slot</th>
-            {data?.execution_order_available && (
-              <th className="text-right px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase w-10">
-                Step
-              </th>
-            )}
-          </tr>
-        </thead>
-        <tbody>
-          {sortedSlots.map((slot, index) => (
-            <SlotRow
-              key={index}
-              slot={slot}
-              showHex={showHex}
-              chainId={chainId}
-              showStep={data?.execution_order_available ?? false}
-              isFirst={index === 0}
-              isLast={index === sortedSlots.length - 1}
-            />
-          ))}
-        </tbody>
-      </table>
-
-      {!data.is_complete && (
-        <div className="mt-2 text-xs text-gray-500">
-          Truncated: showing first {data.slots.length} slots
-        </div>
-      )}
-    </div>
+    <SlotHistoryTable
+      chainId={chainId}
+      slots={data.slots}
+      showHex={showHex}
+      executionOrderAvailable={data.execution_order_available}
+      isComplete={data.is_complete}
+    />
   );
 }

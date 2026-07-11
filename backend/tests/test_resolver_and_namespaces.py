@@ -1,5 +1,6 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from app.config import Settings
 from app.models.domain import VerificationResult
@@ -72,6 +73,100 @@ class _Resolver(ContractResolver):
 
 
 class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sourcify_v2_layout_is_parsed_without_sources_or_compilation(self):
+        response = SimpleNamespace(
+            status_code=200,
+            json=lambda: {
+                "match": "match",
+                "storageLayout": {
+                    "storage": [
+                        {
+                            "astId": 1,
+                            "contract": "C.sol:C",
+                            "label": "owner",
+                            "offset": 0,
+                            "slot": "0",
+                            "type": "t_address",
+                        }
+                    ],
+                    "types": {
+                        "t_address": {
+                            "encoding": "inplace",
+                            "label": "address",
+                            "numberOfBytes": "20",
+                        }
+                    },
+                },
+                "compilation": {
+                    "language": "Solidity",
+                    "compilerVersion": "0.8.26+commit.8a97fa7a",
+                    "compilerSettings": {"optimizer": {"enabled": True}},
+                    "name": "C",
+                    "fullyQualifiedName": "src/C.sol:C",
+                },
+            },
+        )
+        client = SimpleNamespace(get=AsyncMock(return_value=response))
+        resolver = ContractResolver(object(), Settings(), http_client=client)
+
+        result = await resolver._try_sourcify(1, ADDRESS)
+
+        self.assertEqual(result.name, "C")
+        self.assertEqual(result.compilation_target, {"src/C.sol": "C"})
+        self.assertEqual(result.storage_layout["storage"][0]["label"], "owner")
+        self.assertIsNone(result.sources)
+        client.get.assert_awaited_once_with(
+            f"https://sourcify.dev/server/v2/contract/1/{ADDRESS}",
+            params={"fields": "storageLayout,compilation"},
+        )
+
+    async def test_verified_sources_without_layout_are_not_compiled_by_resolver(self):
+        class SourceOnlyResolver(_Resolver):
+            async def _fetch_verification(self, chain_id, address):
+                return VerificationResult(
+                    source="etherscan",
+                    match_type="full",
+                    name="NeedsCompilation",
+                    compiler_version="0.8.30",
+                    sources={"C.sol": "contract NeedsCompilation {}"},
+                    storage_layout=None,
+                )
+
+        parser = SimpleNamespace(
+            parse_from_raw_layout=AsyncMock(side_effect=AssertionError("not expected")),
+            parse_with_artifact=AsyncMock(side_effect=AssertionError("must not compile")),
+            parse_vyper_with_artifact=AsyncMock(
+                side_effect=AssertionError("must not compile")
+            ),
+        )
+        resolver = SourceOnlyResolver(object(), Settings(), layout_parser=parser)
+
+        metadata = await resolver.resolve(1, ADDRESS)
+
+        self.assertTrue(metadata.is_verified)
+        self.assertIsNone(metadata.storage_layout)
+        parser.parse_with_artifact.assert_not_awaited()
+        parser.parse_vyper_with_artifact.assert_not_awaited()
+
+    async def test_sourcify_only_mode_does_not_fall_back_to_source_apis(self):
+        class SourcifyOnlyResolver(_Resolver):
+            async def _try_sourcify(self, chain_id, address):
+                return None
+
+            async def _fetch_verification(self, chain_id, address):
+                raise AssertionError("source fallback must not run")
+
+        resolver = SourcifyOnlyResolver(object(), Settings())
+
+        metadata = await resolver.resolve(
+            1,
+            ADDRESS,
+            sourcify_layout_only=True,
+        )
+
+        self.assertFalse(metadata.is_verified)
+        self.assertIsNone(metadata.storage_layout)
+
     async def test_supplied_storage_layout_does_not_leave_language_unbound(self):
         resolver = _Resolver(object(), Settings())
         resolver.namespace_parser.parse_namespaced_storage = lambda sources: None

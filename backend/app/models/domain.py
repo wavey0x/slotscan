@@ -593,6 +593,9 @@ class StorageChange:
     effect: str = "applied"  # applied | noop | reverted
     frame_id: Optional[int] = None
     depth: Optional[int] = None
+    code_address: Optional[str] = None
+    changed_value: Optional[bool] = None
+    frame_outcome: str = "applied"
     opcode: str = "SSTORE"
     namespace: str = "persistent"
     state_initial_value: Optional[str] = None
@@ -654,6 +657,9 @@ class TransactionDiff:
                     "effect": c.effect,
                     "frame_id": c.frame_id,
                     "depth": c.depth,
+                    "code_address": c.code_address,
+                    "changed_value": c.changed_value,
+                    "frame_outcome": c.frame_outcome,
                     "opcode": c.opcode,
                     "namespace": c.namespace,
                     "state_initial_value": c.state_initial_value,
@@ -700,6 +706,9 @@ class TransactionDiff:
                     effect=c.get("effect", "applied"),
                     frame_id=c.get("frame_id"),
                     depth=c.get("depth"),
+                    code_address=c.get("code_address"),
+                    changed_value=c.get("changed_value"),
+                    frame_outcome=c.get("frame_outcome", "applied"),
                     opcode=c.get("opcode", "SSTORE"),
                     namespace=c.get("namespace", "persistent"),
                     state_initial_value=c.get("state_initial_value"),

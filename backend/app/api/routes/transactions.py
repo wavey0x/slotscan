@@ -6,11 +6,13 @@ from typing import Optional, Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.dependencies import (
-    get_contract_resolver,
-    get_layout_parser,
-    get_transaction_tracer,
+    get_transaction_history_service,
 )
 from app.models.api import (
+    ContractHistoryCountsResponse,
+    ContractHistoryResponse,
+    ContractResolutionResponse,
+    GlobalStorageEventReferenceResponse,
     MappingParamResponse,
     PackedFieldResponse,
     SlotChangeResponse,
@@ -18,6 +20,9 @@ from app.models.api import (
     StructDefinitionResponse,
     StructMemberResponse,
     TransactionDiffResponse,
+    TransactionCapabilitiesResponse,
+    TransactionStorageHistoryResponse,
+    TransactionSummaryResponse,
     ValuePair,
     ValuePairDecoded,
 )
@@ -28,16 +33,13 @@ from app.models.domain import (
     StorageVariable,
 )
 from app.models.errors import (
-    NotAContractError,
     RPCError,
     TraceNotAvailableError,
     TransactionNotFoundError,
 )
 from app.services.decoder import TypeDecoder
-from app.services.layout import LayoutParser
-from app.services.resolver import ContractResolver
 from app.services.layout_index import LayoutIndex
-from app.services.tracer import TransactionTracer
+from app.services.transaction_history import TransactionHistoryService
 from app.utils.type_labels import (
     clean_type_label,
     normalize_contract_label,
@@ -364,12 +366,16 @@ def _get_struct_members_in_slot(
 def _group_changes_by_slot(
     changes: list[StorageChange],
     layout: Optional[StorageLayout] = None,
+    storage_address: Optional[str] = None,
 ) -> list[SlotChangeResponse]:
     """Group storage changes by slot, preserving execution order."""
     if not changes:
         return []
 
     decoder = TypeDecoder()
+    normalized_storage_address = (
+        storage_address.lower() if storage_address else None
+    )
 
     # Group changes by slot
     slot_changes: dict[str, list[StorageChange]] = defaultdict(list)
@@ -387,6 +393,53 @@ def _group_changes_by_slot(
         last = slot_change_list[-1]
         summary_before = first.state_initial_value or first.old_value
         summary_after = last.state_final_value or last.new_value
+
+        # Packed-array decoding can emit several logical paths for one physical
+        # SSTORE. The forensic event inventory must still contain that opcode
+        # exactly once.
+        physical_changes: list[StorageChange] = []
+        seen_steps: set[tuple[int, Optional[int], Optional[int]]] = set()
+        for change in slot_change_list:
+            event_key = (change.change_index, change.pc, change.frame_id)
+            if event_key not in seen_steps:
+                physical_changes.append(change)
+                seen_steps.add(event_key)
+
+        resolved_paths = list(
+            dict.fromkeys(
+                change.variable_path
+                for change in slot_change_list
+                if change.variable_path
+            )
+        )
+
+        net_changed = (
+            summary_before != summary_after if first.state_values_known else None
+        )
+        if net_changed is True:
+            classification = "net_changed"
+        elif physical_changes and all(
+            change.frame_outcome == "reverted" for change in physical_changes
+        ):
+            classification = "reverted_only"
+        elif (
+            first.state_values_known
+            and summary_before == summary_after
+            and any(
+                change.frame_outcome == "applied"
+                and change.changed_value is True
+                for change in physical_changes
+            )
+        ):
+            classification = "restored"
+        elif physical_changes and all(
+            change.changed_value is False for change in physical_changes
+        ):
+            classification = "noop_only"
+        elif first.state_values_known and summary_before == summary_after:
+            classification = "unchanged"
+        else:
+            classification = "unknown"
 
         def decoded_for_value(encoded: Optional[str]):
             if encoded is None:
@@ -420,12 +473,16 @@ def _group_changes_by_slot(
                 pc=c.pc,
                 step=c.change_index,
                 effect=c.effect,
+                storage_address=normalized_storage_address,
+                code_address=c.code_address,
+                changed_value=c.changed_value,
+                frame_outcome=c.frame_outcome,
                 frame_id=c.frame_id,
                 depth=c.depth,
                 opcode=c.opcode,
                 namespace=c.namespace,
             )
-            for c in slot_change_list
+            for c in physical_changes
         ]
 
         # Check for packed storage (multiple variables in one slot)
@@ -682,10 +739,19 @@ def _group_changes_by_slot(
                 provenance=provenance,
                 confidence=confidence,
                 namespace=first.namespace,
-                net_changed=(summary_before != summary_after) if first.state_values_known else None,
+                net_changed=net_changed,
+                classification=classification,
+                first_write_step=(
+                    physical_changes[0].change_index if physical_changes else None
+                ),
+                last_write_step=(
+                    physical_changes[-1].change_index if physical_changes else None
+                ),
+                event_count=len(physical_changes),
                 state_values_known=first.state_values_known,
                 variable_name=first.variable.name if first.variable else None,
                 variable_path=first.variable_path,
+                resolved_paths=resolved_paths,
                 type_label=_normalize_contract_label(
                     first.variable.label if first.variable else None,
                     first_var_type.kind if first_var_type else None
@@ -736,14 +802,261 @@ def _group_changes_by_slot(
 router = APIRouter(prefix="/api/slotscan/tx", tags=["transactions"])
 
 
+def _history_counts(slots: list[SlotChangeResponse]) -> ContractHistoryCountsResponse:
+    events = [event for slot in slots for event in slot.changes]
+    classifications = [slot.classification for slot in slots]
+    return ContractHistoryCountsResponse(
+        slots_written=len(slots),
+        sstore_events=len(events),
+        net_changed_slots=classifications.count("net_changed"),
+        restored_slots=classifications.count("restored"),
+        reverted_only_slots=classifications.count("reverted_only"),
+        noop_only_slots=classifications.count("noop_only"),
+        reverted_writes=sum(
+            event.frame_outcome == "reverted" for event in events
+        ),
+        noop_writes=sum(event.changed_value is False for event in events),
+    )
+
+
+def _empty_transaction_history(
+    *,
+    chain_id: int,
+    tx_hash: str,
+    receipt: dict,
+) -> TransactionStorageHistoryResponse:
+    status_value = receipt.get("status", 1)
+    status_int = int(status_value, 16) if isinstance(status_value, str) else int(status_value)
+    block_value = receipt.get("blockNumber", 0)
+    block_number = int(block_value, 16) if isinstance(block_value, str) else int(block_value)
+    return TransactionStorageHistoryResponse(
+        chain_id=chain_id,
+        tx_hash=tx_hash.lower(),
+        block_number=block_number,
+        status="success" if status_int == 1 else "reverted",
+        from_address=str(receipt.get("from")).lower() if receipt.get("from") else None,
+        to_address=str(receipt.get("to")).lower() if receipt.get("to") else None,
+        created_contract=(
+            str(receipt.get("contractAddress")).lower()
+            if receipt.get("contractAddress")
+            else None
+        ),
+        capabilities=TransactionCapabilitiesResponse(
+            write_history_complete=False,
+            values_complete=False,
+            rollback_classification_complete=False,
+            execution_order_available=False,
+            final_state_values_available=False,
+            state_reconciliation_complete=False,
+            address_attribution_complete=False,
+            code_attribution_complete=False,
+        ),
+        summary=TransactionSummaryResponse(
+            storage_owners=0,
+            slots_written=0,
+            sstore_events=0,
+            net_changed_slots=0,
+            restored_slots=0,
+            reverted_only_slots=0,
+            noop_only_slots=0,
+            reverted_writes=0,
+            noop_writes=0,
+            resolved_slots=0,
+        ),
+        contracts=[],
+        global_order=None,
+        is_complete=False,
+        trace_unavailable=True,
+    )
+
+
+@router.get(
+    "/{chain_id}/{tx_hash}",
+    response_model=TransactionStorageHistoryResponse,
+)
+async def get_transaction_storage_history(
+    chain_id: int,
+    tx_hash: str,
+    include_global_order: bool = False,
+    history_service: TransactionHistoryService = Depends(
+        get_transaction_history_service
+    ),
+):
+    """Analyze persistent writes across every storage owner in a transaction."""
+    if not re.fullmatch(r"0x[a-fA-F0-9]{64}", tx_hash):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid transaction hash", "code": "INVALID_TX_HASH"},
+        )
+
+    try:
+        analysis = await history_service.analyze(chain_id, tx_hash)
+    except TransactionNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "Transaction not found", "code": "TX_NOT_FOUND"},
+        )
+    except TraceNotAvailableError:
+        receipt = await history_service.tracer.rpc_client.get_receipt(
+            chain_id,
+            tx_hash,
+        )
+        return _empty_transaction_history(
+            chain_id=chain_id,
+            tx_hash=tx_hash,
+            receipt=receipt,
+        )
+    except RPCError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": str(exc), "code": "RPC_ERROR"},
+        )
+
+    artifact = analysis.artifact
+    journal = analysis.journal
+    contract_responses: list[ContractHistoryResponse] = []
+
+    for projection in analysis.contracts:
+        metadata = projection.metadata
+        slots = _group_changes_by_slot(
+            projection.diff.changes,
+            projection.diff.layout,
+            storage_address=projection.storage_address,
+        )
+        counts = _history_counts(slots)
+        resolved = sum(
+            bool(slot.variable_path or slot.variable_name) for slot in slots
+        )
+        steps = [
+            event.step
+            for slot in slots
+            for event in slot.changes
+            if event.step is not None
+        ]
+        implementations = []
+        if metadata and metadata.implementation_address:
+            implementations.append(metadata.implementation_address)
+        implementations.extend(
+            address
+            for address in projection.code_addresses
+            if address.lower() != projection.storage_address.lower()
+        )
+        contract_responses.append(
+            ContractHistoryResponse(
+                storage_address=projection.storage_address,
+                name=metadata.name if metadata else None,
+                is_proxy=metadata.is_proxy if metadata else False,
+                is_verified=metadata.is_verified if metadata else False,
+                implementation_addresses=list(dict.fromkeys(implementations)),
+                code_addresses=list(projection.code_addresses),
+                first_write_step=min(steps) if steps else None,
+                last_write_step=max(steps) if steps else None,
+                layout_available=projection.diff.layout is not None,
+                resolution=ContractResolutionResponse(
+                    resolved=resolved,
+                    total=len(slots),
+                ),
+                counts=counts,
+                errors=list(projection.errors),
+                slots=slots,
+            )
+        )
+
+    all_slots = [slot for contract in contract_responses for slot in contract.slots]
+    all_events = [event for slot in all_slots for event in slot.changes]
+    classifications = [slot.classification for slot in all_slots]
+    capabilities = artifact.capabilities
+    persistent_event_count = sum(
+        event.namespace.value == "persistent" for event in journal.events
+    )
+    response_complete = (
+        capabilities.get("write_history_complete", False)
+        and capabilities.get("address_attribution_complete", False)
+        and persistent_event_count <= history_service.settings.max_sstore_ops
+    )
+
+    global_order = None
+    if include_global_order and journal.capabilities.execution_order:
+        references: list[GlobalStorageEventReferenceResponse] = []
+        ordinal = 0
+        for contract in contract_responses:
+            for slot in contract.slots:
+                for event_index, event in enumerate(slot.changes):
+                    references.append(
+                        GlobalStorageEventReferenceResponse(
+                            ordinal=ordinal,
+                            step=event.step,
+                            storage_address=contract.storage_address,
+                            slot=slot.slot,
+                            event_index=event_index,
+                        )
+                    )
+                    ordinal += 1
+        references.sort(
+            key=lambda item: (
+                item.step if item.step is not None else 2**63 - 1,
+                item.ordinal,
+            )
+        )
+        global_order = references
+
+    return TransactionStorageHistoryResponse(
+        chain_id=artifact.chain_id,
+        tx_hash=artifact.tx_hash,
+        block_number=artifact.block_number,
+        status="success" if artifact.root_succeeded else "reverted",
+        from_address=artifact.transaction_from,
+        to_address=artifact.transaction_to,
+        created_contract=artifact.created_contract,
+        capabilities=TransactionCapabilitiesResponse(
+            write_history_complete=capabilities.get(
+                "write_history_complete", False
+            ),
+            values_complete=journal.capabilities.write_old_values,
+            rollback_classification_complete=journal.capabilities.frame_outcomes,
+            execution_order_available=journal.capabilities.execution_order,
+            final_state_values_available=journal.capabilities.final_state_values,
+            state_reconciliation_complete=(
+                journal.capabilities.state_reconciliation
+            ),
+            address_attribution_complete=capabilities.get(
+                "address_attribution_complete", False
+            ),
+            code_attribution_complete=capabilities.get(
+                "code_attribution_complete", False
+            ),
+        ),
+        summary=TransactionSummaryResponse(
+            storage_owners=len(contract_responses),
+            slots_written=len(all_slots),
+            sstore_events=len(all_events),
+            net_changed_slots=classifications.count("net_changed"),
+            restored_slots=classifications.count("restored"),
+            reverted_only_slots=classifications.count("reverted_only"),
+            noop_only_slots=classifications.count("noop_only"),
+            reverted_writes=sum(
+                event.frame_outcome == "reverted" for event in all_events
+            ),
+            noop_writes=sum(event.changed_value is False for event in all_events),
+            resolved_slots=sum(
+                contract.resolution.resolved for contract in contract_responses
+            ),
+        ),
+        contracts=contract_responses,
+        global_order=global_order,
+        is_complete=response_complete,
+        trace_unavailable=False,
+    )
+
+
 @router.get("/{chain_id}/{address}/{tx_hash}", response_model=TransactionDiffResponse)
 async def get_tx_diff(
     chain_id: int,
     address: str,
     tx_hash: str,
-    resolver: ContractResolver = Depends(get_contract_resolver),
-    layout_parser: LayoutParser = Depends(get_layout_parser),
-    tracer: TransactionTracer = Depends(get_transaction_tracer),
+    history_service: TransactionHistoryService = Depends(
+        get_transaction_history_service
+    ),
 ):
     """
     Get storage changes for a contract in a transaction.
@@ -752,64 +1065,25 @@ async def get_tx_diff(
     with before/after values decoded if contract is verified.
     """
     # Validate tx_hash format
-    if not tx_hash.startswith("0x") or len(tx_hash) != 66:
+    if not re.fullmatch(r"0x[a-fA-F0-9]{64}", tx_hash):
         raise HTTPException(
             status_code=400,
             detail={"error": "Invalid transaction hash", "code": "INVALID_TX_HASH"},
         )
+    if not re.fullmatch(r"0x[a-fA-F0-9]{40}", address):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid contract address", "code": "INVALID_ADDRESS"},
+        )
+    normalized_address = address.lower()
 
-    # Resolve the layout against chain state at the transaction's block. This
-    # prevents a later proxy upgrade from changing historical decoding.
+    # Compatibility projection: use the exact transaction-wide analysis path
+    # and select only the requested storage owner.
     try:
-        tx_block = await tracer.get_transaction_block(chain_id, tx_hash)
-        metadata = await resolver.resolve(chain_id, address, block_number=tx_block)
-    except TransactionNotFoundError:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "Transaction not found", "code": "TX_NOT_FOUND"},
-        )
-    except NotAContractError:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "Not a contract", "code": "NOT_CONTRACT"},
-        )
-    except RPCError as e:
-        raise HTTPException(
-            status_code=502,
-            detail={"error": str(e), "code": "RPC_ERROR"},
-        )
-
-    # Get layout
-    layout = metadata.storage_layout
-    if layout and isinstance(layout, dict):
-        try:
-            layout = StorageLayout.from_dict(layout)
-        except Exception:
-            layout = None
-
-    if not layout and metadata.is_verified and metadata.sources and metadata.name:
-        try:
-            layout = await layout_parser.parse(
-                contract_name=metadata.name,
-                sources=metadata.sources,
-                compiler_version=metadata.compiler_version or "0.8.19",
-                compiler_settings=metadata.compiler_settings,
-                metadata_settings=metadata.compiler_settings,
-            )
-            metadata.storage_layout = layout
-            # Historical address/layout associations must not be written to the
-            # unversioned latest-address cache.
-        except Exception:
-            layout = None
-
-    # Trace transaction
-    try:
-        diff = await tracer.trace_transaction(
-            chain_id=chain_id,
-            contract_address=address,
-            tx_hash=tx_hash,
-            layout=layout,
-            sources=metadata.sources,  # Pass sources for compile-time constant resolution
+        analysis = await history_service.analyze(
+            chain_id,
+            tx_hash,
+            storage_addresses=(normalized_address,),
         )
     except TransactionNotFoundError:
         raise HTTPException(
@@ -817,15 +1091,24 @@ async def get_tx_diff(
             detail={"error": "Transaction not found", "code": "TX_NOT_FOUND"},
         )
     except TraceNotAvailableError:
-        # Return degraded response with warning
+        receipt = await history_service.tracer.rpc_client.get_receipt(
+            chain_id,
+            tx_hash,
+        )
+        block_value = receipt.get("blockNumber", 0)
+        block_number = (
+            int(block_value, 16)
+            if isinstance(block_value, str)
+            else int(block_value)
+        )
         return TransactionDiffResponse(
             chain_id=chain_id,
-            address=address,
-            tx_hash=tx_hash,
-            block_number=0,
+            address=normalized_address,
+            tx_hash=tx_hash.lower(),
+            block_number=block_number,
             slots=[],
             is_complete=False,
-            is_verified=layout is not None,
+            is_verified=False,
             trace_unavailable=True,
             execution_order_available=False,
         )
@@ -835,8 +1118,22 @@ async def get_tx_diff(
             detail={"error": str(e), "code": "RPC_ERROR"},
         )
 
-    # Group changes by slot
-    grouped_slots = _group_changes_by_slot(diff.changes, layout)
+    projection = analysis.contracts[0]
+    metadata = projection.metadata
+    diff = projection.diff
+    if not diff.changes and any(
+        error.startswith("NotAContractError:") for error in projection.errors
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "Not a contract", "code": "NOT_CONTRACT"},
+        )
+
+    grouped_slots = _group_changes_by_slot(
+        diff.changes,
+        diff.layout,
+        storage_address=projection.storage_address,
+    )
 
     return TransactionDiffResponse(
         chain_id=diff.chain_id,
@@ -845,10 +1142,10 @@ async def get_tx_diff(
         block_number=diff.block_number,
         slots=grouped_slots,
         is_complete=diff.is_complete,
-        is_verified=layout is not None,
+        is_verified=metadata.is_verified if metadata else False,
         trace_unavailable=diff.trace_unavailable,
-        contract_name=metadata.name,
-        layout_available=layout is not None,
+        contract_name=metadata.name if metadata else None,
+        layout_available=diff.layout is not None,
         execution_order_available=diff.execution_order_available,
         frame_outcomes_available=diff.frame_outcomes_available,
         write_old_values_available=diff.write_old_values_available,
