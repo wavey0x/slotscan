@@ -92,8 +92,9 @@ test('verified sources recover proxy, namespace, legacy, and Vyper variable name
   expect(beforeBox).not.toBeNull();
   expect(afterBox).not.toBeNull();
   expect(arrowBox).not.toBeNull();
-  expect(Math.abs((beforeBox!.x + beforeBox!.width) - (afterBox!.x + afterBox!.width))).toBeLessThan(1);
+  expect(Math.abs(beforeBox!.x - afterBox!.x)).toBeLessThan(1);
   expect(Math.abs(beforeBox!.y - arrowBox!.y)).toBeLessThan(1);
+  expect(arrowBox!.x).toBeGreaterThanOrEqual(beforeBox!.x + beforeBox!.width);
   expect(afterBox!.y).toBeGreaterThan(beforeBox!.y);
 
   await search.fill('current_debt');

@@ -7,7 +7,6 @@ import { ContractNav, TabType } from '@/components/layout/ContractNav';
 import { LayoutTable } from '@/components/layout/LayoutTable';
 import { DiffTable } from '@/components/diff/DiffTable';
 import { CopyButton } from '@/components/ui/CopyButton';
-import { EtherscanLink } from '@/components/ui/EtherscanLink';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Loading } from '@/components/ui/Loading';
@@ -144,10 +143,16 @@ function LayoutView({
               <dt className="text-gray-500">Block:</dt>
               <dd>
                 <span className="group inline-flex items-center gap-2 -ml-2 px-2 transition border border-transparent hover:border-dashed hover:border-gray-400">
-                  <span className="font-mono text-gray-900">{storage.block_number.toLocaleString()}</span>
+                  <a
+                    href={getBlockExplorerUrl(chain, storage.block_number)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono text-gray-900 hover:underline"
+                  >
+                    {storage.block_number.toLocaleString()}
+                  </a>
                   <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
                     <CopyButton value={String(storage.block_number)} />
-                    <EtherscanLink href={getBlockExplorerUrl(chain, storage.block_number)} title="View block on Etherscan" />
                   </span>
                 </span>
               </dd>
@@ -285,10 +290,17 @@ function TransactionDiffView({
           <dt className="text-gray-500">Txn Hash:</dt>
           <dd>
             <span className="group inline-flex items-center gap-2 -ml-2 px-2 transition border border-transparent hover:border-dashed hover:border-gray-400">
-              <span className="font-mono text-gray-900">{truncateHash(txHash, 10)}</span>
+              <a
+                href={getTxExplorerUrl(chain, txHash)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono text-gray-900 hover:underline"
+                title={txHash}
+              >
+                {truncateHash(txHash, 10)}
+              </a>
               <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
                 <CopyButton value={txHash} />
-                <EtherscanLink href={getTxExplorerUrl(chain, txHash)} title="View transaction on Etherscan" />
               </span>
             </span>
           </dd>
@@ -297,11 +309,17 @@ function TransactionDiffView({
               <dt className="text-gray-500">Block:</dt>
               <dd>
                 <span className="group inline-flex items-center gap-2 -ml-2 px-2 transition border border-transparent hover:border-dashed hover:border-gray-400">
-                  <span className="font-mono text-gray-900">{diffData.block_number.toLocaleString()}</span>
-                  <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
-                    <CopyButton value={String(diffData.block_number)} />
-                    <EtherscanLink href={getBlockExplorerUrl(chain, diffData.block_number)} title="View block on Etherscan" />
-                  </span>
+                    <a
+                      href={getBlockExplorerUrl(chain, diffData.block_number)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-mono text-gray-900 hover:underline"
+                    >
+                      {diffData.block_number.toLocaleString()}
+                    </a>
+                    <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                      <CopyButton value={String(diffData.block_number)} />
+                    </span>
                 </span>
               </dd>
               <dt className="text-gray-500">Slots:</dt>

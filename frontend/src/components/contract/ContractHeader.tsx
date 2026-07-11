@@ -45,33 +45,6 @@ function CheckIcon({ className }: { className?: string }) {
   );
 }
 
-function EtherscanIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 14 14"
-      fill="none"
-      className={className}
-    >
-      {/* Circle background */}
-      <circle cx="7" cy="7" r="6.5" fill="#666666" />
-      {/* Swoosh/arc at bottom */}
-      <path
-        d="M12.5 9.5C11 12 9 13 7 13C4.5 13 2.5 11.5 1.5 9.5"
-        stroke="#999999"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        fill="none"
-      />
-      {/* Three bars (chart) */}
-      <rect x="3.5" y="5.5" width="1.5" height="5" rx="0.5" fill="white" />
-      <rect x="6.25" y="3.5" width="1.5" height="7" rx="0.5" fill="white" />
-      <rect x="9" y="4.5" width="1.5" height="6" rx="0.5" fill="white" />
-    </svg>
-  );
-}
-
 export function ContractHeader({ chainId, address }: ContractHeaderProps) {
   const { data, isLoading, error } = useContract(chainId, address);
   const [copied, setCopied] = useState(false);
@@ -127,7 +100,14 @@ export function ContractHeader({ chainId, address }: ContractHeaderProps) {
       </div>
 
       <div className="group inline-flex items-center gap-2 text-sm text-gray-700 relative px-2 py-1 rounded-md transition border border-transparent hover:border-dashed hover:border-gray-400">
-        <span className="font-mono text-gray-900">{address}</span>
+        <a
+          href={etherscanUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-mono text-gray-900 hover:underline"
+        >
+          {address}
+        </a>
         <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
             onClick={copyAddress}
@@ -140,15 +120,6 @@ export function ContractHeader({ chainId, address }: ContractHeaderProps) {
               <CopyIcon />
             )}
           </button>
-          <a
-            href={etherscanUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="p-1 hover:text-gray-900 transition-colors"
-            title="View on Etherscan"
-          >
-            <EtherscanIcon />
-          </a>
         </div>
       </div>
 

@@ -3,7 +3,6 @@
 import { ReactNode } from 'react';
 import { cn, isAddress, isTxHash } from '@/lib/utils';
 import { CopyButton } from './CopyButton';
-import { EtherscanLink } from './EtherscanLink';
 import { Tooltip } from './Tooltip';
 
 interface HoverCellProps {
@@ -58,7 +57,7 @@ export function HoverCell({
   forceActions = false,
 }: HoverCellProps) {
   const etherscanUrl = chainId ? getEtherscanUrl(chainId, value) : null;
-  const showActions = forceActions || display !== value || etherscanUrl;
+  const showActions = forceActions || display !== value;
 
   const tooltipContent = tooltip || (
     <span className="font-mono break-all max-w-xs">{value}</span>
@@ -72,15 +71,23 @@ export function HoverCell({
           className
         )}
       >
-        <span className={cn('inline-block max-w-full truncate align-bottom font-mono', colorClass)}>
-          {display}
-        </span>
+        {etherscanUrl ? (
+          <a
+            href={etherscanUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={cn('inline-block max-w-full truncate align-bottom font-mono hover:underline', colorClass)}
+          >
+            {display}
+          </a>
+        ) : (
+          <span className={cn('inline-block max-w-full truncate align-bottom font-mono', colorClass)}>
+            {display}
+          </span>
+        )}
         {showActions && (
           <span className="absolute left-full top-1/2 -translate-y-1/2 ml-0.5 opacity-0 group-hover/cell:opacity-100 flex items-center gap-0.5 bg-white/90 transition-opacity z-10">
             <CopyButton value={value} />
-            {etherscanUrl && (
-              <EtherscanLink href={etherscanUrl} />
-            )}
           </span>
         )}
       </span>

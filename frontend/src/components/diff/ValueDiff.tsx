@@ -10,10 +10,8 @@ interface ValueDiffProps {
 }
 
 /**
- * A two-line value diff with one shared value column.
- *
- * The before and after values share a right edge. The arrow occupies a
- * separate cell on the first row, so it never changes the value alignment.
+ * A compact two-line value diff with a shared left edge.
+ * The arrow follows the old value without shifting the new value below it.
  */
 export function ValueDiff({
   before,
@@ -26,26 +24,28 @@ export function ValueDiff({
     <span
       data-testid="value-diff"
       className={cn(
-        'inline-grid max-w-full grid-cols-[minmax(0,max-content)_0.75rem] grid-rows-2 gap-x-1 font-mono text-xs leading-tight',
+        'inline-flex max-w-full flex-col items-start font-mono text-xs leading-tight',
         className
       )}
     >
-      <span
-        data-testid="value-before"
-        className={cn('min-w-0 justify-self-end overflow-hidden text-right', beforeClassName)}
-      >
-        {before}
-      </span>
-      <span
-        data-testid="value-arrow"
-        aria-hidden="true"
-        className="col-start-2 row-start-1 text-gray-400"
-      >
-        →
+      <span className="flex max-w-full min-w-0 items-start gap-1">
+        <span
+          data-testid="value-before"
+          className={cn('min-w-0 overflow-hidden text-left', beforeClassName)}
+        >
+          {before}
+        </span>
+        <span
+          data-testid="value-arrow"
+          aria-hidden="true"
+          className="shrink-0 text-gray-400"
+        >
+          →
+        </span>
       </span>
       <span
         data-testid="value-after"
-        className={cn('col-start-1 row-start-2 min-w-0 justify-self-end overflow-hidden text-right', afterClassName)}
+        className={cn('max-w-full min-w-0 overflow-hidden text-left', afterClassName)}
       >
         {after}
       </span>

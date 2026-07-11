@@ -4,7 +4,6 @@ import { useMemo, useState } from 'react';
 import { SlotHistoryTable } from '@/components/diff/DiffTable';
 import { ValueDiff } from '@/components/diff/ValueDiff';
 import { CopyButton } from '@/components/ui/CopyButton';
-import { EtherscanLink } from '@/components/ui/EtherscanLink';
 import { Input } from '@/components/ui/Input';
 import { Loading } from '@/components/ui/Loading';
 import { getAddressExplorerUrl, getBlockExplorerUrl, getTxExplorerUrl } from '@/lib/constants';
@@ -72,7 +71,7 @@ function ContractSection({
 
   return (
     <section id={`owner-${contract.storage_address.slice(2)}`} className="scroll-mt-16 border-b border-gray-300">
-      <div className="grid grid-cols-[minmax(0,1fr)_auto_1.5rem] items-center gap-x-3 py-1.5 hover:bg-gray-50">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-1.5 hover:bg-gray-50">
         <div className="grid min-w-0 grid-cols-[1rem_minmax(0,1fr)] grid-rows-[auto_auto] items-center gap-x-1">
           <button
             type="button"
@@ -96,7 +95,14 @@ function ContractSection({
             className="col-start-2 row-start-2 flex min-w-0 items-center text-[10px] font-mono text-gray-500"
             title={contract.storage_address}
           >
-            <span className="truncate">{truncateAddress(contract.storage_address)}</span>
+            <a
+              href={getAddressExplorerUrl(chain, contract.storage_address)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="truncate hover:underline"
+            >
+              {truncateAddress(contract.storage_address)}
+            </a>
             <CopyButton value={contract.storage_address} className="-my-1 p-1" />
           </span>
         </div>
@@ -114,19 +120,26 @@ function ContractSection({
             </span>
           )}
         </span>
-        <span className="shrink-0">
-          <EtherscanLink
-            href={getAddressExplorerUrl(chain, contract.storage_address)}
-            title="View contract"
-          />
-        </span>
       </div>
 
       {expanded && (
         <div className="pb-3 pl-5">
           {contract.implementation_addresses.length > 0 && (
             <div className="mb-1 text-[10px] text-gray-500">
-              written via {contract.implementation_addresses.map(truncateAddress).join(', ')}
+              written via {contract.implementation_addresses.map((address, index) => (
+                <span key={address}>
+                  {index > 0 && ', '}
+                  <a
+                    href={getAddressExplorerUrl(chain, address)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="hover:underline"
+                    title={address}
+                  >
+                    {truncateAddress(address)}
+                  </a>
+                </span>
+              ))}
             </div>
           )}
           {contract.errors.map((message) => (
@@ -307,16 +320,29 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
           <div className="min-w-0">
             <dt className="text-[9px] uppercase tracking-wide text-gray-400">Transaction</dt>
             <dd className="mt-0.5 flex min-w-0 items-center gap-0.5 text-xs font-mono text-gray-900">
-              <span className="truncate" title={data.tx_hash}>{truncateHash(data.tx_hash, 10)}</span>
+              <a
+                href={getTxExplorerUrl(chain, data.tx_hash)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="truncate hover:underline"
+                title={data.tx_hash}
+              >
+                {truncateHash(data.tx_hash, 10)}
+              </a>
               <CopyButton value={data.tx_hash} />
-              <EtherscanLink href={getTxExplorerUrl(chain, data.tx_hash)} title="View transaction" />
             </dd>
           </div>
           <div>
             <dt className="text-[9px] uppercase tracking-wide text-gray-400">Block</dt>
             <dd className="mt-0.5 flex items-center gap-0.5 text-xs font-mono text-gray-900">
-              <span>{data.block_number.toLocaleString()}</span>
-              <EtherscanLink href={getBlockExplorerUrl(chain, data.block_number)} title="View block" />
+              <a
+                href={getBlockExplorerUrl(chain, data.block_number)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:underline"
+              >
+                {data.block_number.toLocaleString()}
+              </a>
             </dd>
           </div>
           <div className="min-w-0">
@@ -390,10 +416,9 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
 
       {view === 'grouped' ? (
         <div className="border-t border-gray-300">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto_1.5rem] gap-x-3 border-b border-gray-200 px-0 py-1 text-[9px] font-medium uppercase tracking-wide text-gray-400">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 border-b border-gray-200 px-0 py-1 text-[9px] font-medium uppercase tracking-wide text-gray-400">
             <span className="pl-5">Contract</span>
             <span className="text-right">Activity</span>
-            <span aria-hidden="true" />
           </div>
           {filteredContracts.map((contract) => (
             <ContractSection

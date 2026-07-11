@@ -1,7 +1,6 @@
 'use client';
 
 import { CopyButton } from '@/components/ui/CopyButton';
-import { EtherscanLink } from '@/components/ui/EtherscanLink';
 import { truncateAddress } from '@/lib/utils';
 import { getAddressExplorerUrl } from '@/lib/constants';
 import { cn } from '@/lib/utils';
@@ -35,12 +34,16 @@ export function ContractNav({
       {/* Contract info - centered */}
       <div className="flex items-center justify-center py-3">
         <span className="group inline-flex items-center gap-2">
-          <span className="font-mono text-gray-900">
+          <a
+            href={getAddressExplorerUrl(chain, address)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-mono text-gray-900 hover:underline"
+          >
             {contractName ? `${contractName} (${abbreviatedAddress})` : abbreviatedAddress}
-          </span>
+          </a>
           <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
             <CopyButton value={address} />
-            <EtherscanLink href={getAddressExplorerUrl(chain, address)} />
           </span>
         </span>
       </div>
