@@ -51,3 +51,4 @@ test-results/
 *.log
 logs/
 .claude
+AGENTS.md
