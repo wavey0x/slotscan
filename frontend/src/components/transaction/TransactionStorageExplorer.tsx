@@ -293,61 +293,72 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
 
   return (
     <div>
-      <header className="mb-7">
-        <div className="mb-2 flex flex-wrap items-center gap-2">
+      <header className="mb-5">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
           <h1 className="text-lg font-medium text-gray-900">Transaction storage history</h1>
           <span className={cn(
-            'text-[10px] uppercase tracking-wide',
+            'text-[9px] uppercase tracking-wide',
             data.status === 'success' ? 'text-gray-500' : 'text-amber-600'
           )}>
             {data.status}
           </span>
         </div>
-        <div className="flex flex-wrap items-center gap-1 text-sm font-mono">
-          <span>{truncateHash(data.tx_hash, 12)}</span>
-          <CopyButton value={data.tx_hash} />
-          <EtherscanLink href={getTxExplorerUrl(chain, data.tx_hash)} title="View transaction" />
-          <span className="mx-1 text-gray-300">·</span>
-          <span className="text-gray-500">Block</span>
-          <span>{data.block_number.toLocaleString()}</span>
-          <EtherscanLink href={getBlockExplorerUrl(chain, data.block_number)} title="View block" />
-        </div>
-        {(fromAddress || toAddress) && (
-          <div className="mt-1 flex items-center gap-2 text-sm font-mono text-gray-500">
-            {fromAddress && (
-              <a href={getAddressExplorerUrl(chain, fromAddress)} target="_blank" rel="noopener noreferrer" className="hover:underline">
-                {truncateAddress(fromAddress)}
-              </a>
-            )}
-            {fromAddress && toAddress && <span>→</span>}
-            {toAddress && (
-              <a href={getAddressExplorerUrl(chain, toAddress)} target="_blank" rel="noopener noreferrer" className="hover:underline">
-                {truncateAddress(toAddress)}
-              </a>
-            )}
+        <dl className="grid grid-cols-1 gap-x-5 gap-y-2 border-y border-gray-300 py-2.5 sm:grid-cols-2 md:grid-cols-[minmax(13rem,1.5fr)_minmax(7rem,.65fr)_minmax(7rem,.8fr)_minmax(7rem,.8fr)]">
+          <div className="min-w-0">
+            <dt className="text-[9px] uppercase tracking-wide text-gray-400">Transaction</dt>
+            <dd className="mt-0.5 flex min-w-0 items-center gap-0.5 text-xs font-mono text-gray-900">
+              <span className="truncate" title={data.tx_hash}>{truncateHash(data.tx_hash, 10)}</span>
+              <CopyButton value={data.tx_hash} />
+              <EtherscanLink href={getTxExplorerUrl(chain, data.tx_hash)} title="View transaction" />
+            </dd>
           </div>
-        )}
-      </header>
+          <div>
+            <dt className="text-[9px] uppercase tracking-wide text-gray-400">Block</dt>
+            <dd className="mt-0.5 flex items-center gap-0.5 text-xs font-mono text-gray-900">
+              <span>{data.block_number.toLocaleString()}</span>
+              <EtherscanLink href={getBlockExplorerUrl(chain, data.block_number)} title="View block" />
+            </dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="text-[9px] uppercase tracking-wide text-gray-400">From</dt>
+            <dd className="mt-0.5 truncate text-xs font-mono text-gray-700">
+              {fromAddress ? (
+                <a href={getAddressExplorerUrl(chain, fromAddress)} target="_blank" rel="noopener noreferrer" className="hover:underline" title={fromAddress}>
+                  {truncateAddress(fromAddress)}
+                </a>
+              ) : '—'}
+            </dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="text-[9px] uppercase tracking-wide text-gray-400">To</dt>
+            <dd className="mt-0.5 truncate text-xs font-mono text-gray-700">
+              {toAddress ? (
+                <a href={getAddressExplorerUrl(chain, toAddress)} target="_blank" rel="noopener noreferrer" className="hover:underline" title={toAddress}>
+                  {truncateAddress(toAddress)}
+                </a>
+              ) : '—'}
+            </dd>
+          </div>
+        </dl>
 
-      <div className="mb-5 flex flex-wrap items-baseline gap-2 text-sm">
-        {singleContract ? (
-          <a
-            href={getAddressExplorerUrl(chain, singleContract.storage_address)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-medium text-gray-900 hover:underline"
-          >
-            {singleContract.name || truncateAddress(singleContract.storage_address)}
-          </a>
-        ) : (
-          <span className="font-medium text-gray-900">{data.summary.storage_owners} contracts</span>
-        )}
-        <span className="text-gray-300">·</span>
-        <span className="text-gray-500">{data.summary.sstore_events} writes · {data.summary.slots_written} slots</span>
-        {singleContract && !singleContract.layout_available && (
-          <span className="text-gray-400">· raw slots</span>
-        )}
-      </div>
+        <dl className="mt-3 flex flex-wrap items-center gap-x-7 gap-y-1">
+          <div data-testid="summary-contracts" className="flex items-baseline gap-1.5">
+            <dt className="text-[9px] uppercase tracking-wide text-gray-400">Contracts</dt>
+            <dd className="text-sm font-medium text-gray-900">{data.summary.storage_owners}</dd>
+          </div>
+          <div data-testid="summary-writes" className="flex items-baseline gap-1.5">
+            <dt className="text-[9px] uppercase tracking-wide text-gray-400">Writes</dt>
+            <dd className="text-sm text-gray-700">{data.summary.sstore_events}</dd>
+          </div>
+          <div data-testid="summary-slots" className="flex items-baseline gap-1.5">
+            <dt className="text-[9px] uppercase tracking-wide text-gray-400">Slots</dt>
+            <dd className="text-sm text-gray-700">{data.summary.slots_written}</dd>
+          </div>
+          {singleContract && !singleContract.layout_available && (
+            <span className="text-[9px] uppercase tracking-wide text-gray-400">Raw slots</span>
+          )}
+        </dl>
+      </header>
 
       {warnings.length > 0 && <div className="mb-5 border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">{warnings.join(' ')}</div>}
 

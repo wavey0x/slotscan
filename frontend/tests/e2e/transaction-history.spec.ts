@@ -14,7 +14,11 @@ test('home search accepts a transaction hash and opens transaction-wide history'
   await expect(page).toHaveURL(`/1/tx/${SIMPLE_TX}`);
   await expect(page.getByRole('heading', { name: 'Transaction storage history' })).toBeVisible();
   await expect(page.getByText('TetherToken')).toBeVisible();
-  await expect(page.getByText('2 writes · 2 slots')).toBeVisible();
+  await expect(page.getByTestId('summary-writes').getByText('2', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('summary-slots').getByText('2', { exact: true })).toBeVisible();
+  for (const label of ['Transaction', 'Block', 'From', 'To']) {
+    await expect(page.getByText(label, { exact: true }).first()).toBeVisible();
+  }
   await expect(page.getByRole('button', { name: 'Timeline' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('checkbox')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Net effects' })).toHaveCount(0);
@@ -27,7 +31,8 @@ test('all writes remain visible without interpretive classification controls', a
 
   await expect(page.getByRole('heading', { name: 'Transaction storage history' })).toBeVisible();
   await expect(page.getByText('Chromia', { exact: true })).toHaveCount(1);
-  await expect(page.getByText('5 writes · 4 slots')).toBeVisible();
+  await expect(page.getByTestId('summary-writes').getByText('5', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('summary-slots').getByText('4', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Timeline' })).toHaveAttribute('aria-pressed', 'true');
   for (const step of ['719', '777', '920', '1432', '1496']) {
     await expect(page.getByText(step, { exact: true })).toBeVisible();
@@ -57,7 +62,8 @@ test('reverted child writes remain grouped and in the global timeline', async ({
 test('verified sources recover proxy, namespace, legacy, and Vyper variable names', async ({ page }) => {
   await page.goto(`/1/tx/${SOURCE_LAYOUT_TX}`);
 
-  await expect(page.getByText('74 writes · 51 slots')).toBeVisible();
+  await expect(page.getByTestId('summary-writes').getByText('74', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('summary-slots').getByText('51', { exact: true })).toBeVisible();
   await expect(page.getByRole('navigation', { name: 'Storage owners' })).toHaveCount(0);
   await expect(page.getByTestId('contract-toggle')).toHaveCount(13);
   for (const toggle of await page.getByTestId('contract-toggle').all()) {
