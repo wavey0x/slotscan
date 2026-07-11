@@ -106,7 +106,12 @@ class SlotPathResolver:
         if not preimage or not layout:
             return None
 
-        preimage_clean = preimage[2:] if preimage.startswith("0x") else preimage
+        # Some RPC clients/cache rows preserve a ``0x`` prefix on each memory
+        # fragment before concatenating SHA3 input. Normalize those separators
+        # back into one canonical byte string before interpreting word offsets.
+        preimage_clean = re.sub(r"0x", "", preimage, flags=re.IGNORECASE)
+        if len(preimage_clean) % 2 or not re.fullmatch(r"[0-9a-fA-F]+", preimage_clean):
+            return None
 
         # Handle 32-byte preimage: keccak256(single_slot) for dynamic arrays
         if len(preimage_clean) == 64:
@@ -127,6 +132,21 @@ class SlotPathResolver:
 
                     if var_type and var_type.encoding == "mapping" and var_type.value_type:
                         value_type = layout.get_type(var_type.value_type)
+                        value_path = mapping_match.get("path")
+                        if value_type and value_type.kind == "struct" and value_type.members:
+                            array_member = next(
+                                (
+                                    member
+                                    for member in value_type.members
+                                    if member.slot == 0
+                                    and (member_type := layout.get_type(member.type_id))
+                                    and member_type.encoding == "dynamic_array"
+                                ),
+                                None,
+                            )
+                            if array_member:
+                                value_type = layout.get_type(array_member.type_id)
+                                value_path = f"{value_path}.{array_member.name}"
                         is_value_array = (
                             value_type and (
                                 value_type.encoding == "dynamic_array" or
@@ -141,7 +161,7 @@ class SlotPathResolver:
                                 "variable": variable,
                                 "base_slot": mapping_match.get("base_slot"),
                                 "key": mapping_match.get("key", "?"),
-                                "path": mapping_match.get("path"),
+                                "path": value_path,
                                 "encoding": "mapping_to_array",
                                 "key_type": var_type.key_type if var_type else None,
                                 "value_type": var_type.value_type if var_type else None,
@@ -190,6 +210,13 @@ class SlotPathResolver:
             variable = layout.get_mapping_by_base_slot(base_slot_int)
             if variable:
                 logger.debug(f"  Vyper-style preimage: slot={base_slot_int}, key={key_hex[:18]}...")
+            else:
+                # Neither word is a direct base slot. Nested Solidity mappings
+                # use the second word as an intermediate hash; do not leave the
+                # failed Vyper candidate selected or the recursive lookup below
+                # will inspect the mapping key instead of that hash.
+                base_slot_int = second_int
+                key_hex = first_32
 
         logger.debug(f"  Parsing preimage: key_hex={key_hex[:18]}..., base_slot_int={base_slot_int}")
 
@@ -538,6 +565,17 @@ class SlotPathResolver:
                 continue
 
             offset_from_start = slot_int - data_start
+            array_type = layout.get_type(var.type_id)
+            # Vyper DynArray declarations carry a compile-time maximum. Respect
+            # that bound so an unrelated high hashed slot cannot be presented
+            # as a fantastically large array index. Solidity dynamic arrays do
+            # not expose a bound and retain the existing unbounded behavior.
+            if (
+                array_type
+                and array_type.array_length is not None
+                and offset_from_start >= packing.slot_count(array_type.array_length)
+            ):
+                continue
 
             if packing.is_packed:
                 return {

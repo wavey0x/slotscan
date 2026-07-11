@@ -69,6 +69,91 @@ class MappingSlotTests(unittest.TestCase):
         self.assertEqual(match["path"], "names[alice]")
         self.assertEqual(match["key_type"], "t_string_storage")
 
+    def test_segmented_rpc_preimage_prefixes_are_normalized(self):
+        value_type = StorageType("t_uint256", "uint256", "value", "inplace", 32)
+        mapping_type = StorageType(
+            "t_mapping_string_uint",
+            "mapping(string => uint256)",
+            "mapping",
+            "mapping",
+            32,
+            key_type="t_string_storage",
+            value_type=value_type.id,
+        )
+        variable = StorageVariable(
+            "names", 4, 0, 32, mapping_type.id, mapping_type.label
+        )
+        layout = StorageLayout(
+            "Strings",
+            [variable],
+            {value_type.id: value_type, mapping_type.id: mapping_type},
+        )
+        preimage = b"alice" + encode(["uint256"], [4])
+        segmented_preimage = "0x" + preimage[:5].hex() + "0x" + preimage[5:].hex()
+        slot = Web3.keccak(preimage).hex()
+
+        match = SlotResolver().try_match_slot_from_preimage(
+            slot,
+            segmented_preimage,
+            layout,
+            {},
+        )
+
+        self.assertEqual(match["path"], "names[alice]")
+
+    def test_nested_solidity_mapping_keeps_intermediate_hash_candidate(self):
+        value_type = StorageType("t_uint256", "uint256", "value", "inplace", 32)
+        inner_type = StorageType(
+            "t_mapping_address_uint",
+            "mapping(address => uint256)",
+            "mapping",
+            "mapping",
+            32,
+            key_type="t_address",
+            value_type=value_type.id,
+        )
+        outer_type = StorageType(
+            "t_mapping_address_mapping",
+            "mapping(address => mapping(address => uint256))",
+            "mapping",
+            "mapping",
+            32,
+            key_type="t_address",
+            value_type=inner_type.id,
+        )
+        variable = StorageVariable(
+            "configs", 8, 0, 32, outer_type.id, outer_type.label
+        )
+        layout = StorageLayout(
+            "Nested",
+            [variable],
+            {
+                value_type.id: value_type,
+                inner_type.id: inner_type,
+                outer_type.id: outer_type,
+            },
+        )
+        outer_key = "0x" + "11" * 20
+        inner_key = "0x" + "22" * 20
+        outer_preimage = encode(["address", "uint256"], [outer_key, 8])
+        outer_hash = Web3.keccak(outer_preimage)
+        outer_hash_hex = "0x" + outer_hash.hex()
+        inner_preimage = encode(["address", "bytes32"], [inner_key, outer_hash])
+        inner_hash = "0x" + Web3.keccak(inner_preimage).hex()
+        lookup = {
+            outer_hash_hex: "0x" + outer_preimage.hex(),
+            inner_hash: "0x" + inner_preimage.hex(),
+        }
+
+        match = SlotResolver().try_match_slot_from_preimage(
+            inner_hash,
+            lookup[inner_hash],
+            layout,
+            lookup,
+        )
+
+        self.assertEqual(match["path"], f"configs[{outer_key}][{inner_key}]")
+
     def test_struct_offset_search_does_not_scan_every_observed_preimage(self):
         value_type = StorageType("t_uint256", "uint256", "value", "inplace", 32)
         struct_type = StorageType(
@@ -181,6 +266,40 @@ class PackedArrayLayoutTests(unittest.TestCase):
     def test_dynamic_array_location_uses_same_packing(self):
         packing = array_packing(self.element)
         self.assertEqual((packing.location(100, 9).slot, packing.location(100, 9).byte_offset), (101, 4))
+
+    def test_bounded_vyper_dynamic_array_does_not_claim_unrelated_high_slot(self):
+        dynamic_array = StorageType(
+            id="DynArray[uint32, 10]",
+            label="DynArray[uint32, 10]",
+            kind="array",
+            encoding="dynamic_array",
+            num_bytes=96,
+            element_type="t_uint32",
+            array_length=10,
+        )
+        variable = StorageVariable(
+            name="values",
+            slot=3,
+            offset=0,
+            size=96,
+            type_id=dynamic_array.id,
+            label=dynamic_array.label,
+        )
+        layout = StorageLayout(
+            contract_name="BoundedDynamic",
+            variables=[variable],
+            types={self.element.id: self.element, dynamic_array.id: dynamic_array},
+        )
+        resolver = SlotResolver()
+        index = resolver.build_dynamic_array_index(layout)
+        data_start = next(iter(index))
+
+        self.assertIsNotNone(
+            resolver.try_match_dynamic_array_slot(data_start + 1, layout, index)
+        )
+        self.assertIsNone(
+            resolver.try_match_dynamic_array_slot(data_start + 2, layout, index)
+        )
 
     def test_dynamic_array_diff_resolves_changed_packed_element(self):
         dynamic_array = StorageType(

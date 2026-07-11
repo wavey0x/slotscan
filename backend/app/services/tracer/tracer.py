@@ -186,12 +186,15 @@ class TransactionAnalysisService:
         *,
         layout: Optional[StorageLayout] = None,
         sources: Optional[dict[str, str]] = None,
+        layouts_by_code_address: Optional[dict[str, StorageLayout]] = None,
+        sources_by_code_address: Optional[dict[str, dict[str, str]]] = None,
         journal: StorageJournal | None = None,
     ) -> TransactionDiff:
         """Decode one storage-owner projection without issuing another trace."""
         contract_address = Web3.to_checksum_address(contract_address)
         journal = journal or self.build_journal(artifact)
         raw_changes: list[tuple[str, str | None, str, int | None, int]] = []
+        code_address_by_step: dict[int, str | None] = {}
         had_unknown_evidence = any(
             not write.get("address") for write in artifact.write_events
         )
@@ -210,6 +213,9 @@ class TransactionAnalysisService:
                         event.pc,
                         event.step,
                     )
+                )
+                code_address_by_step[event.step] = (
+                    event.code_address.lower() if event.code_address else None
                 )
 
         write_history_complete = artifact.capabilities.get(
@@ -236,19 +242,48 @@ class TransactionAnalysisService:
             raw_changes = raw_changes[: self.settings.max_sstore_ops]
 
         preimage_lookup = dict(artifact.preimage_lookup)
-        if sources and layout:
-            constants = self.preimage_resolver.build_constant_preimage_lookup(
-                sources,
+        layouts_by_code_address = {
+            address.lower(): code_layout
+            for address, code_layout in (layouts_by_code_address or {}).items()
+        }
+        sources_by_code_address = {
+            address.lower(): code_sources
+            for address, code_sources in (sources_by_code_address or {}).items()
+        }
+        if layouts_by_code_address and write_history_complete:
+            grouped_changes: dict[str | None, list[tuple[str, str | None, str, int | None, int]]] = {}
+            for raw_change in raw_changes:
+                code_address = code_address_by_step.get(raw_change[4])
+                grouped_changes.setdefault(code_address, []).append(raw_change)
+            decoded_changes = []
+            for code_address, code_changes in grouped_changes.items():
+                code_layout = layouts_by_code_address.get(code_address or "") or layout
+                code_sources = sources_by_code_address.get(code_address or "") or sources
+                code_preimages = dict(preimage_lookup)
+                if code_sources and code_layout:
+                    constants = self.preimage_resolver.build_constant_preimage_lookup(
+                        code_sources,
+                        code_layout,
+                    )
+                    for slot_hash, preimage in constants.items():
+                        code_preimages.setdefault(slot_hash, preimage)
+                decoded_changes.extend(
+                    self._decode_changes(code_changes, code_layout, code_preimages)
+                )
+            decoded_changes.sort(key=lambda change: change.change_index)
+        else:
+            if sources and layout:
+                constants = self.preimage_resolver.build_constant_preimage_lookup(
+                    sources,
+                    layout,
+                )
+                for slot_hash, preimage in constants.items():
+                    preimage_lookup.setdefault(slot_hash, preimage)
+            decoded_changes = self._decode_changes(
+                raw_changes,
                 layout,
+                preimage_lookup,
             )
-            for slot_hash, preimage in constants.items():
-                preimage_lookup.setdefault(slot_hash, preimage)
-
-        decoded_changes = self._decode_changes(
-            raw_changes,
-            layout,
-            preimage_lookup,
-        )
         self._apply_journal_metadata(decoded_changes, journal, contract_address)
         return TransactionDiff(
             chain_id=artifact.chain_id,

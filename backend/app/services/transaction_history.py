@@ -24,6 +24,8 @@ class ContractHistoryProjection:
     metadata: ContractMetadata | None
     diff: TransactionDiff
     code_addresses: tuple[str, ...]
+    display_name: str | None
+    layouts_by_code_address: dict[str, StorageLayout]
     errors: tuple[str, ...]
 
 
@@ -80,36 +82,88 @@ class TransactionHistoryService:
         async def project(address: str) -> ContractHistoryProjection:
             metadata: ContractMetadata | None = None
             errors: list[str] = []
-            try:
-                async with semaphore:
-                    metadata = await asyncio.wait_for(
-                        self._resolve_metadata(
-                            chain_id,
-                            address,
-                            artifact.block_number,
-                        ),
-                        timeout=self.settings.contract_resolution_timeout_seconds,
-                    )
-            except Exception as exc:
-                # Resolution is enrichment. Raw storage history for this owner
-                # remains valid and must not make the transaction request fail.
-                errors.append(
-                    f"{type(exc).__name__}: historical resolution failed"
-                )
+            code_addresses = code_addresses_by_owner.get(address.lower(), ())
 
-            layout = self._layout(metadata)
+            async def guarded_resolve(
+                target: str,
+                *,
+                follow_proxy: bool,
+            ) -> ContractMetadata | None:
+                try:
+                    async with semaphore:
+                        return await asyncio.wait_for(
+                            self._resolve_metadata(
+                                chain_id,
+                                target,
+                                artifact.block_number,
+                                follow_proxy=follow_proxy,
+                            ),
+                            timeout=self.settings.contract_resolution_timeout_seconds,
+                        )
+                except Exception as exc:
+                    message = (
+                        f"{target.lower()}: {type(exc).__name__}: "
+                        "historical resolution failed"
+                    )
+                    if message not in errors:
+                        errors.append(message)
+                    return None
+
+            metadata_task = guarded_resolve(address, follow_proxy=True)
+            direct_addresses = tuple(dict.fromkeys((address.lower(), *code_addresses)))
+            direct_results = await asyncio.gather(
+                *(guarded_resolve(target, follow_proxy=False) for target in direct_addresses),
+                metadata_task,
+            )
+            metadata = direct_results[-1]
+            direct_metadata = {
+                target: result
+                for target, result in zip(direct_addresses, direct_results[:-1])
+                if result is not None
+            }
+
+            layouts_by_code_address = {
+                target: layout
+                for target, resolved in direct_metadata.items()
+                if (layout := self._layout(resolved)) is not None and layout.variables
+            }
+            sources_by_code_address = {
+                target: resolved.sources
+                for target, resolved in direct_metadata.items()
+                if resolved.sources
+            }
+            fallback_layout = self._layout(metadata)
+            if fallback_layout and fallback_layout.variables:
+                for target in code_addresses:
+                    layouts_by_code_address.setdefault(target, fallback_layout)
+            all_layouts = list(layouts_by_code_address.values())
+            if fallback_layout and fallback_layout.variables:
+                all_layouts.append(fallback_layout)
+            combined_layout = self._combine_layouts(all_layouts)
+
+            fallback_sources = metadata.sources if metadata else None
             diff = self.tracer.project_trace_artifact(
                 artifact,
                 address,
-                layout=layout,
-                sources=metadata.sources if metadata else None,
+                layout=combined_layout,
+                sources=fallback_sources,
+                layouts_by_code_address=layouts_by_code_address,
+                sources_by_code_address=sources_by_code_address,
                 journal=journal,
             )
+            candidates = [
+                direct_metadata.get(address.lower()),
+                metadata,
+                *(direct_metadata.get(target) for target in code_addresses),
+            ]
+            display_name = self._preferred_name(candidates)
             return ContractHistoryProjection(
                 storage_address=address.lower(),
                 metadata=metadata,
                 diff=diff,
-                code_addresses=code_addresses_by_owner.get(address.lower(), ()),
+                code_addresses=code_addresses,
+                display_name=display_name,
+                layouts_by_code_address=layouts_by_code_address,
                 errors=tuple(errors),
             )
 
@@ -136,6 +190,8 @@ class TransactionHistoryService:
         chain_id: int,
         address: str,
         block_number: int,
+        *,
+        follow_proxy: bool = True,
     ) -> ContractMetadata:
         # Each concurrent owner receives its own AsyncSession. SQLAlchemy does
         # not permit concurrent operations on one request-scoped session.
@@ -153,7 +209,47 @@ class TransactionHistoryService:
                 address,
                 block_number=block_number,
                 sourcify_layout_only=True,
+                follow_proxy=follow_proxy,
             )
+
+    @staticmethod
+    def _preferred_name(candidates: list[ContractMetadata | None]) -> str | None:
+        generic = {
+            "proxy",
+            "appproxyupgradeable",
+            "erc1967proxy",
+            "fiattokenproxy",
+            "ossifiableproxy",
+            "vyper_contract",
+        }
+        for metadata in candidates:
+            if metadata and metadata.name and metadata.name.lower() not in generic:
+                return metadata.name
+        return next(
+            (metadata.name for metadata in candidates if metadata and metadata.name),
+            None,
+        )
+
+    @staticmethod
+    def _combine_layouts(layouts: list[StorageLayout]) -> StorageLayout | None:
+        if not layouts:
+            return None
+        variables = {}
+        types = {}
+        for layout in layouts:
+            types.update(layout.types)
+            for variable in layout.variables:
+                variables[
+                    (variable.name, variable.slot, variable.offset, variable.type_id)
+                ] = variable
+        return StorageLayout(
+            contract_name=" + ".join(dict.fromkeys(
+                layout.contract_name for layout in layouts if layout.contract_name
+            )),
+            variables=list(variables.values()),
+            types=types,
+            resolver_version=max(layout.resolver_version for layout in layouts),
+        )
 
     @staticmethod
     def _layout(metadata: ContractMetadata | None) -> StorageLayout | None:

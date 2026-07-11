@@ -43,6 +43,7 @@ EIP1967_BEACON_SLOT = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582
 BEACON_IMPL_SELECTOR = "0x5c60da1b"
 
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+LAYOUT_RESOLVER_VERSION = 2
 
 # EIP-1167 Minimal Proxy bytecode patterns
 # Standard: 363d3d373d3d3d363d73<address>5af43d82803e903d91602b57fd5bf3
@@ -82,6 +83,7 @@ class ContractResolver:
         address: str,
         block_number: Optional[int] = None,
         sourcify_layout_only: bool = False,
+        follow_proxy: bool = True,
     ) -> ContractMetadata:
         """
         Resolve full contract metadata.
@@ -99,28 +101,48 @@ class ContractResolver:
             historical = await self.contract_repo.get_at_block(
                 chain_id, address, block_number
             )
-            if historical and historical.is_verified and historical.storage_layout:
+            if (
+                historical
+                and (follow_proxy or not historical.is_proxy)
+                and historical.is_verified
+                and historical.storage_layout
+            ):
                 metadata = self.contract_repo.to_metadata(historical)
-                await self._hydrate_compiler_inputs(metadata)
-                return metadata
+                layout = metadata.storage_layout
+                if isinstance(layout, StorageLayout) and self._cache_layout_is_usable(layout):
+                    layout.resolver_version = LAYOUT_RESOLVER_VERSION
+                    await self._hydrate_compiler_inputs(metadata)
+                    return metadata
 
         # The address cache is not block-versioned. It is safe only for latest;
         # historical proxy/address resolution must inspect chain state at the
         # requested block instead of reusing today's implementation/layout.
         if self.contract_repo and block_number is None:
             cached = await self.contract_repo.get(chain_id, address)
-            if cached and cached.is_verified and cached.storage_layout:
+            if (
+                cached
+                and (follow_proxy or not cached.is_proxy)
+                and cached.is_verified
+                and cached.storage_layout
+            ):
                 logger.debug(f"Cache hit for {address} on chain {chain_id}")
                 metadata = self.contract_repo.to_metadata(cached)
-                await self._hydrate_compiler_inputs(metadata)
-                return metadata
+                layout = metadata.storage_layout
+                if isinstance(layout, StorageLayout) and self._cache_layout_is_usable(layout):
+                    layout.resolver_version = LAYOUT_RESOLVER_VERSION
+                    await self._hydrate_compiler_inputs(metadata)
+                    return metadata
 
         # Verify it's a contract
         bytecode = await self._check_is_contract(chain_id, address, block_number)
         code_hash = Web3.keccak(bytecode).hex()
 
         # Detect proxy (pass bytecode for EIP-1167 detection)
-        proxy_info = await self.detect_proxy(chain_id, address, block_number, bytecode)
+        proxy_info = (
+            await self.detect_proxy(chain_id, address, block_number, bytecode)
+            if follow_proxy
+            else None
+        )
 
         # Determine which address to verify
         verify_address = address
@@ -138,7 +160,10 @@ class ContractResolver:
             cached_by_bytecode = await self.contract_repo.get_layout_by_code_hash(code_hash)
             if cached_by_bytecode and cached_by_bytecode.storage_layout:
                 logger.info(f"Bytecode cache hit for {address} (code_hash={code_hash[:16]}...)")
-                parsed_layout = StorageLayout.from_dict(cached_by_bytecode.storage_layout)
+                candidate_layout = StorageLayout.from_dict(cached_by_bytecode.storage_layout)
+                if self._cache_layout_is_usable(candidate_layout):
+                    candidate_layout.resolver_version = LAYOUT_RESOLVER_VERSION
+                    parsed_layout = candidate_layout
 
         # Fetch verification only if we don't have a layout from bytecode cache
         verification = None
@@ -184,15 +209,24 @@ class ContractResolver:
             except Exception as e:
                 logger.warning(f"Failed to parse layout from verification: {e}")
                 parsed_layout = None
-        # Check for namespaced storage (ERC-7201 pattern)
-        # If the resolved layout has very few variables but sources are available,
-        # the contract might be using namespaced storage
-        if (parsed_layout and
-            len(parsed_layout.variables) < 10 and
-            verification and
-            verification.sources and
-            language != "Vyper"):
+        # Sourcify can return a deliberately empty compiler layout for old
+        # compiler versions and contracts that exclusively use custom storage
+        # pointers. Derive those layouts from verified source without compiling.
+        if verification and verification.sources and language != "Vyper":
             try:
+                if parsed_layout is None:
+                    parsed_layout = StorageLayout(
+                        contract_name=verification.name or "",
+                        variables=[],
+                        types={},
+                    )
+                if not parsed_layout.variables:
+                    conventional_layout = self.namespace_parser.parse_standard_storage(
+                        verification.sources,
+                        verification.name or parsed_layout.contract_name,
+                    )
+                    if conventional_layout:
+                        parsed_layout = self._merge_layouts(parsed_layout, conventional_layout)
                 namespace_layout = self.namespace_parser.parse_namespaced_storage(
                     verification.sources
                 )
@@ -203,8 +237,32 @@ class ContractResolver:
                     )
                     # Merge namespace variables with standard layout
                     parsed_layout = self._merge_layouts(parsed_layout, namespace_layout)
+                unstructured_layout = self.namespace_parser.parse_unstructured_constants(
+                    verification.sources
+                )
+                if unstructured_layout and len(unstructured_layout.variables) > 0:
+                    parsed_layout = self._merge_layouts(parsed_layout, unstructured_layout)
             except Exception as e:
-                logger.warning(f"Failed to parse namespace storage: {e}")
+                logger.warning(f"Failed to parse verified source storage: {e}")
+
+        if (
+            verification
+            and verification.sources
+            and language == "Vyper"
+            and not (parsed_layout and parsed_layout.variables)
+        ):
+            try:
+                parsed_layout = self.namespace_parser.parse_vyper_storage(
+                    verification.sources,
+                    verification.name or "",
+                )
+            except Exception as e:
+                logger.warning(f"Failed to parse verified Vyper storage: {e}")
+
+        if parsed_layout and not parsed_layout.variables:
+            parsed_layout = None
+        if parsed_layout:
+            parsed_layout.resolver_version = LAYOUT_RESOLVER_VERSION
 
         # Build result - use bytecode cache metadata if verification was skipped
         if cached_by_bytecode and parsed_layout and not verification:
@@ -254,14 +312,16 @@ class ContractResolver:
         # Cache only verified layouts. Missing Sourcify layouts remain raw and
         # can be retried later without pinning an incomplete resolution.
         if (
-            self.contract_repo
+            follow_proxy
+            and self.contract_repo
             and block_number is None
             and result.is_verified
             and result.storage_layout
         ):
             await self.contract_repo.save(result)
         elif (
-            self.contract_repo
+            follow_proxy
+            and self.contract_repo
             and block_number is not None
             and result.is_verified
             and result.storage_layout
@@ -269,6 +329,19 @@ class ContractResolver:
             await self.contract_repo.save_at_block(result, block_number)
 
         return result
+
+    @staticmethod
+    def _cache_layout_is_usable(layout: StorageLayout) -> bool:
+        if layout.resolver_version >= LAYOUT_RESOLVER_VERSION:
+            return bool(layout.variables)
+        # Exact compiler-produced variables do not change when the enrichment
+        # resolver changes. Preserve those valuable layouts (notably historical
+        # Vyper layouts) while forcing old source-inferred/empty layouts through
+        # the new source pipeline.
+        return bool(layout.variables) and all(
+            variable.provenance == "compiler_layout"
+            for variable in layout.variables
+        )
 
     async def _hydrate_compiler_inputs(self, metadata: ContractMetadata) -> None:
         """Restore sources/settings retained with the raw compiler artifact."""
@@ -497,8 +570,12 @@ class ContractResolver:
 
         return StorageLayout(
             contract_name=standard_layout.contract_name,
-            variables=merged_variables,
+            variables=list({
+                (variable.name, variable.slot, variable.offset, variable.type_id): variable
+                for variable in merged_variables
+            }.values()),
             types=merged_types,
+            resolver_version=LAYOUT_RESOLVER_VERSION,
         )
 
     async def _fetch_verification(
@@ -526,7 +603,7 @@ class ContractResolver:
         try:
             response = await self.http_client.get(
                 url,
-                params={"fields": "storageLayout,compilation"},
+                params={"fields": "sources,storageLayout,compilation"},
             )
             if response.status_code != 200:
                 return None
@@ -539,18 +616,29 @@ class ContractResolver:
                 raise ValueError("expected compilation metadata to be an object")
             fully_qualified_name = compilation.get("fullyQualifiedName") or ""
             compilation_target = None
+            target_name = None
             if ":" in fully_qualified_name:
                 source_path, target_name = fully_qualified_name.rsplit(":", 1)
                 compilation_target = {source_path: target_name}
 
+            raw_sources = data.get("sources") or {}
+            if not isinstance(raw_sources, dict):
+                raise ValueError("expected sources to be an object")
+            sources: dict[str, str] = {}
+            for filename, source in raw_sources.items():
+                if isinstance(source, str):
+                    sources[filename] = source
+                elif isinstance(source, dict) and isinstance(source.get("content"), str):
+                    sources[filename] = source["content"]
+
             return VerificationResult(
                 source="sourcify",
                 match_type=data.get("match") or "unknown",
-                name=compilation.get("name"),
+                name=compilation.get("name") or target_name,
                 compilation_target=compilation_target,
                 compiler_version=compilation.get("compilerVersion"),
                 compiler_settings=compilation.get("compilerSettings"),
-                sources=None,
+                sources=sources or None,
                 storage_layout=data.get("storageLayout"),
                 language=compilation.get("language") or "Solidity",
             )

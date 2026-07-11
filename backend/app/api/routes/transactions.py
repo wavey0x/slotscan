@@ -367,6 +367,7 @@ def _group_changes_by_slot(
     changes: list[StorageChange],
     layout: Optional[StorageLayout] = None,
     storage_address: Optional[str] = None,
+    layouts_by_code_address: Optional[dict[str, StorageLayout]] = None,
 ) -> list[SlotChangeResponse]:
     """Group storage changes by slot, preserving execution order."""
     if not changes:
@@ -376,6 +377,11 @@ def _group_changes_by_slot(
     normalized_storage_address = (
         storage_address.lower() if storage_address else None
     )
+    default_layout = layout
+    layouts_by_code_address = {
+        address.lower(): code_layout
+        for address, code_layout in (layouts_by_code_address or {}).items()
+    }
 
     # Group changes by slot
     slot_changes: dict[str, list[StorageChange]] = defaultdict(list)
@@ -391,6 +397,10 @@ def _group_changes_by_slot(
     for slot, slot_change_list in slot_changes.items():
         first = slot_change_list[0]
         last = slot_change_list[-1]
+        layout = (
+            layouts_by_code_address.get((first.code_address or "").lower())
+            or default_layout
+        )
         summary_before = first.state_initial_value or first.old_value
         summary_after = last.state_final_value or last.new_value
 
@@ -922,6 +932,7 @@ async def get_transaction_storage_history(
             projection.diff.changes,
             projection.diff.layout,
             storage_address=projection.storage_address,
+            layouts_by_code_address=projection.layouts_by_code_address,
         )
         counts = _history_counts(slots)
         resolved = sum(
@@ -944,14 +955,16 @@ async def get_transaction_storage_history(
         contract_responses.append(
             ContractHistoryResponse(
                 storage_address=projection.storage_address,
-                name=metadata.name if metadata else None,
+                name=projection.display_name,
                 is_proxy=metadata.is_proxy if metadata else False,
                 is_verified=metadata.is_verified if metadata else False,
                 implementation_addresses=list(dict.fromkeys(implementations)),
                 code_addresses=list(projection.code_addresses),
                 first_write_step=min(steps) if steps else None,
                 last_write_step=max(steps) if steps else None,
-                layout_available=projection.diff.layout is not None,
+                layout_available=bool(
+                    projection.diff.layout and projection.diff.layout.variables
+                ),
                 resolution=ContractResolutionResponse(
                     resolved=resolved,
                     total=len(slots),

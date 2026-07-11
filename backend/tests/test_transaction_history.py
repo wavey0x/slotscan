@@ -8,7 +8,12 @@ from app.api.routes.transactions import (
     get_transaction_storage_history,
 )
 from app.config import Settings
-from app.models.domain import ContractMetadata
+from app.models.domain import (
+    ContractMetadata,
+    StorageLayout,
+    StorageType,
+    StorageVariable,
+)
 from app.repositories.trace_cache import TransactionTraceArtifactData
 from app.services.decoder import TypeDecoder
 from app.services.tracer.tracer import TransactionAnalysisService
@@ -20,6 +25,7 @@ ADDRESS_A = "0x" + "11" * 20
 ADDRESS_B = "0x" + "22" * 20
 ADDRESS_C = "0x" + "33" * 20
 CODE_A = "0x" + "aa" * 20
+CODE_B = "0x" + "bb" * 20
 ZERO = "0x" + "00" * 32
 ONE = "0x" + "00" * 31 + "01"
 FIVE = "0x" + "00" * 31 + "05"
@@ -139,9 +145,11 @@ class _HistoryService(TransactionHistoryService):
         chain_id,
         address,
         block_number,
+        *,
+        follow_proxy=True,
     ):
         if hasattr(self, "resolution_calls"):
-            self.resolution_calls.append((chain_id, address, block_number))
+            self.resolution_calls.append((chain_id, address, block_number, follow_proxy))
         if address.lower() == ADDRESS_B:
             raise RuntimeError("unverified fixture")
         return ContractMetadata(
@@ -188,6 +196,54 @@ class TransactionOwnerTests(TestCase):
         )
         self.assertEqual(reverted_slots[0].classification, "reverted_only")
         self.assertEqual(reverted_slots[0].changes[0].frame_outcome, "reverted")
+
+    def test_each_delegate_code_uses_its_own_layout(self):
+        slot_two = "0x" + "00" * 31 + "02"
+        value = replace(
+            artifact(),
+            prestate_diff={
+                "pre": {ADDRESS_A: {"storage": {SLOT_1: ZERO, slot_two: ZERO}}},
+                "post": {ADDRESS_A: {"storage": {SLOT_1: ONE, slot_two: ONE}}},
+            },
+            write_events=[
+                {
+                    **artifact().write_events[0],
+                    "slot": SLOT_1,
+                    "code_address": CODE_A,
+                    "index": 10,
+                },
+                {
+                    **artifact().write_events[0],
+                    "slot": slot_two,
+                    "code_address": CODE_B,
+                    "index": 20,
+                },
+            ],
+        )
+        uint_type = StorageType(
+            "t_uint256", "uint256", "value", "inplace", 32
+        )
+
+        def layout(name, slot):
+            return StorageLayout(
+                name,
+                [StorageVariable(name, slot, 0, 32, uint_type.id, uint_type.label)],
+                {uint_type.id: uint_type},
+            )
+
+        diff = self.tracer.project_trace_artifact(
+            value,
+            ADDRESS_A,
+            layouts_by_code_address={
+                CODE_A: layout("ownerNonce", 1),
+                CODE_B: layout("strategyDebt", 2),
+            },
+        )
+
+        self.assertEqual(
+            [change.variable_path for change in diff.changes],
+            ["ownerNonce", "strategyDebt"],
+        )
 
 
 class PrestateRecoveryTests(TestCase):
@@ -250,10 +306,12 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
         self.assertEqual(result.contracts[1].metadata, None)
         self.assertEqual(
             result.contracts[1].errors,
-            ("RuntimeError: historical resolution failed",),
+            (
+                f"{ADDRESS_B}: RuntimeError: historical resolution failed",
+            ),
         )
         self.assertEqual(
-            {block for _, _, block in service.resolution_calls},
+            {block for _, _, block, _ in service.resolution_calls},
             {artifact().block_number},
         )
 
