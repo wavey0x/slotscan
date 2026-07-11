@@ -6,7 +6,6 @@ import { CopyButton } from '@/components/ui/CopyButton';
 import { EtherscanLink } from '@/components/ui/EtherscanLink';
 import { Input } from '@/components/ui/Input';
 import { Loading } from '@/components/ui/Loading';
-import { Toggle } from '@/components/ui/Toggle';
 import { getAddressExplorerUrl, getBlockExplorerUrl, getTxExplorerUrl } from '@/lib/constants';
 import { useTransactionStorageHistory } from '@/lib/hooks/useTransactionStorageHistory';
 import {
@@ -22,7 +21,6 @@ import {
 } from '@/lib/utils';
 
 type ViewMode = 'grouped' | 'timeline';
-type Scope = 'all' | 'net_changed' | 'restored' | 'reverted';
 
 interface TransactionStorageExplorerProps {
   chain: string;
@@ -34,22 +32,6 @@ interface TimelineEntry {
   slot: SlotChangeResponse;
   event: StorageChangeResponse;
   ordinal: number;
-}
-
-const scopeLabels: Record<Scope, string> = {
-  all: 'All changes',
-  net_changed: 'Net effects',
-  restored: 'Restored',
-  reverted: 'Reverted',
-};
-
-function slotMatchesScope(slot: SlotChangeResponse, scope: Scope, showNoops: boolean) {
-  if (!showNoops && slot.classification === 'noop_only') return false;
-  if (scope === 'all') return true;
-  if (scope === 'net_changed') return slot.classification === 'net_changed';
-  if (scope === 'restored') return slot.classification === 'restored';
-  return slot.classification === 'reverted_only'
-    || slot.changes.some((event) => event.frame_outcome === 'reverted');
 }
 
 function searchableContract(contract: ContractHistoryResponse, slot: SlotChangeResponse) {
@@ -64,16 +46,15 @@ function searchableContract(contract: ContractHistoryResponse, slot: SlotChangeR
   ].filter(Boolean).join(' ').toLowerCase();
 }
 
-function eventValue(event: StorageChangeResponse, side: 'before' | 'after', showHex: boolean) {
+function eventValue(event: StorageChangeResponse, side: 'before' | 'after') {
   const pair = event[side];
-  if (showHex) return pair.value_encoded ?? 'unknown';
   return pair.value_decoded === null || pair.value_decoded === undefined
     ? pair.value_encoded ?? 'unknown'
     : formatDecodedValue(pair.value_decoded);
 }
 
 function ContractIndex({ contracts }: { contracts: ContractHistoryResponse[] }) {
-  if (contracts.length < 2) return null;
+  if (contracts.length < 4) return null;
   return (
     <nav className="sticky top-0 z-10 mb-6 border border-gray-300 bg-white/95 backdrop-blur" aria-label="Storage owners">
       <div className="flex gap-1 overflow-x-auto p-2">
@@ -87,7 +68,7 @@ function ContractIndex({ contracts }: { contracts: ContractHistoryResponse[] }) 
               {contract.name || truncateAddress(contract.storage_address)}
             </div>
             <div className="mt-0.5 text-[10px] text-gray-500">
-              {contract.counts.slots_written} slots · {contract.counts.sstore_events} writes
+              {contract.counts.sstore_events} writes · {contract.counts.slots_written} slots
             </div>
           </a>
         ))}
@@ -96,9 +77,17 @@ function ContractIndex({ contracts }: { contracts: ContractHistoryResponse[] }) 
   );
 }
 
-function Timeline({ entries, chain, showHex }: { entries: TimelineEntry[]; chain: string; showHex: boolean }) {
+function Timeline({
+  entries,
+  chain,
+  showContract,
+}: {
+  entries: TimelineEntry[];
+  chain: string;
+  showContract: boolean;
+}) {
   if (entries.length === 0) {
-    return <div className="border border-gray-300 p-8 text-center text-gray-500">No events match the current filters</div>;
+    return <div className="border border-gray-300 p-8 text-center text-gray-500">No writes match the search</div>;
   }
 
   return (
@@ -107,30 +96,34 @@ function Timeline({ entries, chain, showHex }: { entries: TimelineEntry[]; chain
         <div
           key={`${contract.storage_address}:${slot.slot}:${event.step}:${ordinal}`}
           data-testid="timeline-event"
-          className="grid grid-cols-[4rem_minmax(8rem,12rem)_minmax(10rem,1fr)_minmax(12rem,1.4fr)] gap-3 border-b border-gray-200 py-2 text-xs"
+          className={cn(
+            'grid gap-3 border-b border-gray-200 py-2 text-xs',
+            showContract
+              ? 'grid-cols-[4rem_minmax(8rem,12rem)_minmax(10rem,1fr)_minmax(12rem,1.4fr)]'
+              : 'grid-cols-[4rem_minmax(10rem,1fr)_minmax(12rem,1.4fr)]'
+          )}
         >
           <div className="font-mono text-gray-400">{event.step ?? '—'}</div>
-          <a
-            href={getAddressExplorerUrl(chain, contract.storage_address)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="truncate text-gray-700 hover:underline"
-          >
-            {contract.name || truncateAddress(contract.storage_address)}
-          </a>
+          {showContract && (
+            <a
+              href={getAddressExplorerUrl(chain, contract.storage_address)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="truncate text-gray-700 hover:underline"
+            >
+              {contract.name || truncateAddress(contract.storage_address)}
+            </a>
+          )}
           <div className="truncate font-mono text-gray-900" title={slot.variable_path || slot.slot}>
             {slot.variable_path || slot.variable_name || truncateHash(slot.slot, 7)}
           </div>
           <div className="min-w-0 font-mono">
-            <span className="break-all text-gray-400">{eventValue(event, 'before', showHex)}</span>
+            <span className="break-all text-gray-400">{eventValue(event, 'before')}</span>
             <span className="mx-1 text-gray-400">→</span>
-            <span className="break-all text-gray-900">{eventValue(event, 'after', showHex)}</span>
-            {(event.frame_outcome === 'reverted' || event.changed_value === false) && (
-              <span className={cn(
-                'ml-2 text-[9px] uppercase tracking-wide',
-                event.frame_outcome === 'reverted' ? 'text-amber-600' : 'text-gray-400'
-              )}>
-                {event.frame_outcome === 'reverted' ? 'reverted' : 'no-op'}
+            <span className="break-all text-gray-900">{eventValue(event, 'after')}</span>
+            {event.frame_outcome === 'reverted' && (
+              <span className="ml-2 text-[9px] uppercase tracking-wide text-amber-600">
+                reverted
               </span>
             )}
           </div>
@@ -142,25 +135,18 @@ function Timeline({ entries, chain, showHex }: { entries: TimelineEntry[]; chain
 
 export function TransactionStorageExplorer({ chain, txHash }: TransactionStorageExplorerProps) {
   const { data, isLoading, error } = useTransactionStorageHistory(chain, txHash);
-  const [view, setView] = useState<ViewMode>('grouped');
-  const [scope, setScope] = useState<Scope>('all');
-  // Forensic mode defaults to the complete write inventory. Users can hide
-  // no-op-only slots when they want a lower-noise operational view.
-  const [showNoops, setShowNoops] = useState(true);
-  const [showHex, setShowHex] = useState(false);
+  const [selectedView, setSelectedView] = useState<ViewMode | null>(null);
   const [search, setSearch] = useState('');
 
   const filteredContracts = useMemo(() => {
     if (!data) return [];
     const query = search.trim().toLowerCase();
+    if (!query) return data.contracts;
     return data.contracts.map((contract) => ({
       ...contract,
-      slots: contract.slots.filter((slot) => (
-        slotMatchesScope(slot, scope, showNoops)
-        && (!query || searchableContract(contract, slot).includes(query))
-      )),
+      slots: contract.slots.filter((slot) => searchableContract(contract, slot).includes(query)),
     })).filter((contract) => contract.slots.length > 0);
-  }, [data, scope, showNoops, search]);
+  }, [data, search]);
 
   const timeline = useMemo(() => {
     if (!data) return [];
@@ -184,13 +170,11 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
       const slot = slots.get(`${reference.storage_address.toLowerCase()}:${reference.slot}`);
       const event = slot?.changes[reference.event_index];
       if (!contract || !slot || !event) return null;
-      if (!slotMatchesScope(slot, scope, showNoops)) return null;
-      if (!showNoops && event.changed_value === false) return null;
       if (query && !searchableContract(contract, slot).includes(query)) return null;
       return { contract, slot, event, ordinal: reference.ordinal };
     }).filter((entry): entry is TimelineEntry => entry !== null)
       .sort((a, b) => (a.event.step ?? Number.MAX_SAFE_INTEGER) - (b.event.step ?? Number.MAX_SAFE_INTEGER) || a.ordinal - b.ordinal);
-  }, [data, scope, showNoops, search]);
+  }, [data, search]);
 
   if (isLoading) {
     return <Loading messages={['Loading transaction trace', 'Replaying storage writes', 'Resolving storage owners', 'Decoding slot histories']} subtitle="Large transactions can take up to two minutes" />;
@@ -212,50 +196,99 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
     !data.capabilities.code_attribution_complete && 'Some implementation/code addresses are unknown.',
   ].filter(Boolean) as string[];
 
-  const summary = data.summary;
-  const summaryItems = [
-    ['Owners', summary.storage_owners],
-    ['Slots', summary.slots_written],
-    ['SSTOREs', summary.sstore_events],
-    ['Net', summary.net_changed_slots],
-    ['Restored', summary.restored_slots],
-    ['Reverted', summary.reverted_writes],
-    ['No-op', summary.noop_writes],
-    ['Resolved', `${summary.resolved_slots}/${summary.slots_written}`],
-  ];
+  const singleContract = data.contracts.length === 1 ? data.contracts[0] : null;
+  const defaultView: ViewMode = singleContract && data.capabilities.execution_order_available
+    ? 'timeline'
+    : 'grouped';
+  const view = selectedView || defaultView;
+  const showSearch = data.summary.slots_written > 15 || data.contracts.length > 3;
+  const fromAddress = data.from_address;
+  const toAddress = data.to_address || data.created_contract;
 
   return (
     <div>
-      <header className="mb-6">
-        <div className="mb-3 flex flex-wrap items-center gap-2">
+      <header className="mb-7">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
           <h1 className="text-lg font-medium text-gray-900">Transaction storage history</h1>
-          <span className={cn('text-[10px] uppercase tracking-wide', data.status === 'success' ? 'text-emerald-700' : 'text-amber-600')}>{data.status}</span>
+          <span className={cn(
+            'text-[10px] uppercase tracking-wide',
+            data.status === 'success' ? 'text-gray-500' : 'text-amber-600'
+          )}>
+            {data.status}
+          </span>
         </div>
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3 text-sm leading-snug">
-          <dt className="text-gray-500">Txn:</dt>
-          <dd className="flex items-center gap-1 font-mono"><span>{truncateHash(data.tx_hash, 12)}</span><CopyButton value={data.tx_hash} /><EtherscanLink href={getTxExplorerUrl(chain, data.tx_hash)} title="View transaction" /></dd>
-          <dt className="text-gray-500">Block:</dt>
-          <dd className="flex items-center gap-1 font-mono"><span>{data.block_number.toLocaleString()}</span><EtherscanLink href={getBlockExplorerUrl(chain, data.block_number)} title="View block" /></dd>
-          {data.from_address && <><dt className="text-gray-500">From:</dt><dd><a className="font-mono hover:underline" href={getAddressExplorerUrl(chain, data.from_address)} target="_blank" rel="noopener noreferrer">{truncateAddress(data.from_address)}</a></dd></>}
-          {(data.to_address || data.created_contract) && <><dt className="text-gray-500">To:</dt><dd><a className="font-mono hover:underline" href={getAddressExplorerUrl(chain, data.to_address || data.created_contract!)} target="_blank" rel="noopener noreferrer">{truncateAddress(data.to_address || data.created_contract!)}</a></dd></>}
-        </dl>
+        <div className="flex flex-wrap items-center gap-1 text-sm font-mono">
+          <span>{truncateHash(data.tx_hash, 12)}</span>
+          <CopyButton value={data.tx_hash} />
+          <EtherscanLink href={getTxExplorerUrl(chain, data.tx_hash)} title="View transaction" />
+          <span className="mx-1 text-gray-300">·</span>
+          <span className="text-gray-500">Block</span>
+          <span>{data.block_number.toLocaleString()}</span>
+          <EtherscanLink href={getBlockExplorerUrl(chain, data.block_number)} title="View block" />
+        </div>
+        {(fromAddress || toAddress) && (
+          <div className="mt-1 flex items-center gap-2 text-sm font-mono text-gray-500">
+            {fromAddress && (
+              <a href={getAddressExplorerUrl(chain, fromAddress)} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                {truncateAddress(fromAddress)}
+              </a>
+            )}
+            {fromAddress && toAddress && <span>→</span>}
+            {toAddress && (
+              <a href={getAddressExplorerUrl(chain, toAddress)} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                {truncateAddress(toAddress)}
+              </a>
+            )}
+          </div>
+        )}
       </header>
 
-      <div className="mb-6 grid grid-cols-4 border-l border-t border-gray-300 sm:grid-cols-8">
-        {summaryItems.map(([label, value]) => <div key={label} className="border-b border-r border-gray-300 p-2"><div className="text-[9px] uppercase tracking-wide text-gray-400">{label}</div><div className="font-mono text-sm text-gray-900">{value}</div></div>)}
+      <div className="mb-5 flex flex-wrap items-baseline gap-2 text-sm">
+        {singleContract ? (
+          <a
+            href={getAddressExplorerUrl(chain, singleContract.storage_address)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium text-gray-900 hover:underline"
+          >
+            {singleContract.name || truncateAddress(singleContract.storage_address)}
+          </a>
+        ) : (
+          <span className="font-medium text-gray-900">{data.summary.storage_owners} contracts</span>
+        )}
+        <span className="text-gray-300">·</span>
+        <span className="text-gray-500">{data.summary.sstore_events} writes · {data.summary.slots_written} slots</span>
+        {singleContract && !singleContract.layout_available && (
+          <span className="text-gray-400">· raw slots</span>
+        )}
       </div>
 
       {warnings.length > 0 && <div className="mb-5 border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">{warnings.join(' ')}</div>}
 
-      <div className="mb-6 space-y-3 border-y border-gray-300 py-3">
-        <div className="flex flex-wrap items-center gap-2">
-          {(['grouped', 'timeline'] as ViewMode[]).map((mode) => <button key={mode} onClick={() => setView(mode)} disabled={mode === 'timeline' && !data.capabilities.execution_order_available} className={cn('px-2 py-1 text-xs capitalize', view === mode ? 'bg-gray-900 text-white' : 'border border-gray-300 text-gray-600', 'disabled:cursor-not-allowed disabled:opacity-40')}>{mode}</button>)}
-          <span className="mx-1 h-4 border-l border-gray-300" />
-          {(Object.keys(scopeLabels) as Scope[]).map((item) => <button key={item} onClick={() => setScope(item)} className={cn('px-2 py-1 text-xs', scope === item ? 'bg-gray-200 text-gray-900' : 'text-gray-500 hover:text-gray-900')}>{scopeLabels[item]}</button>)}
-          <label className="ml-auto flex cursor-pointer items-center gap-2 text-xs text-gray-500"><input type="checkbox" checked={showNoops} onChange={(event) => setShowNoops(event.target.checked)} />No-op writes</label>
-          <Toggle label="HEX" checked={showHex} onChange={setShowHex} />
-        </div>
-        <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter contract, address, slot, or variable path" className="w-full font-mono text-xs" />
+      <div className="mb-7 flex flex-wrap items-center gap-2 border-y border-gray-300 py-3">
+        {(['grouped', 'timeline'] as ViewMode[]).map((mode) => (
+          <button
+            key={mode}
+            onClick={() => setSelectedView(mode)}
+            disabled={mode === 'timeline' && !data.capabilities.execution_order_available}
+            aria-pressed={view === mode}
+            className={cn(
+              'px-2 py-1 text-xs capitalize',
+              view === mode ? 'bg-gray-900 text-white' : 'border border-gray-300 text-gray-600',
+              'disabled:cursor-not-allowed disabled:opacity-40'
+            )}
+          >
+            {mode}
+          </button>
+        ))}
+        {showSearch && (
+          <Input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search contract, address, slot, or variable"
+            className="mt-2 w-full font-mono text-xs sm:ml-auto sm:mt-0 sm:max-w-md"
+          />
+        )}
       </div>
 
       {view === 'grouped' ? (
@@ -268,22 +301,23 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
                   <div className="flex flex-wrap items-baseline gap-2">
                     <h2 className="font-medium text-gray-900">{contract.name || 'Unresolved contract'}</h2>
                     <a href={getAddressExplorerUrl(chain, contract.storage_address)} target="_blank" rel="noopener noreferrer" className="font-mono text-xs text-gray-500 hover:underline">{truncateAddress(contract.storage_address)}</a>
-                    {contract.is_proxy && <span className="text-[9px] uppercase tracking-wide text-blue-600">proxy</span>}
-                    {!contract.layout_available && <span className="text-[9px] uppercase tracking-wide text-gray-400">raw slots</span>}
                   </div>
-                  <div className="mt-1 flex flex-wrap gap-x-4 text-[10px] text-gray-500">
-                    <span>{contract.counts.slots_written} slots</span><span>{contract.counts.sstore_events} writes</span><span>{contract.counts.net_changed_slots} net</span><span>{contract.counts.restored_slots} restored</span><span>{contract.counts.reverted_writes} reverted</span><span>{contract.resolution.resolved}/{contract.resolution.total} resolved</span>
+                  <div className="mt-1 text-[10px] text-gray-500">
+                    {contract.counts.sstore_events} writes · {contract.counts.slots_written} slots
+                    {!contract.layout_available && <span className="text-gray-400"> · raw slots</span>}
                   </div>
                   {contract.implementation_addresses.length > 0 && <div className="mt-1 text-[10px] text-gray-500">written via {contract.implementation_addresses.map(truncateAddress).join(', ')}</div>}
                   {contract.errors.map((message) => <div key={message} className="mt-1 text-[10px] text-amber-600">{message}; showing raw history</div>)}
                 </header>
-                <SlotHistoryTable chainId={chain} slots={contract.slots} showHex={showHex} executionOrderAvailable={data.capabilities.execution_order_available} isComplete={data.is_complete} />
+                <SlotHistoryTable chainId={chain} slots={contract.slots} showHex={false} executionOrderAvailable={data.capabilities.execution_order_available} isComplete={data.is_complete} />
               </section>
             ))}
-            {filteredContracts.length === 0 && <div className="border border-gray-300 p-8 text-center text-gray-500">No storage histories match the current filters</div>}
+            {filteredContracts.length === 0 && <div className="border border-gray-300 p-8 text-center text-gray-500">No writes match the search</div>}
           </div>
         </>
-      ) : <Timeline entries={timeline} chain={chain} showHex={showHex} />}
+      ) : (
+        <Timeline entries={timeline} chain={chain} showContract={!singleContract} />
+      )}
     </div>
   );
 }

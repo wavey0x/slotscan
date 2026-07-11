@@ -259,12 +259,9 @@ const InterimPackedChangeRows = ({
                   <span className="text-[10px] text-gray-400">
                     {changeIndex + 1}/{totalChanges}
                   </span>
-                  {change.effect !== 'applied' && (
-                    <span className={cn(
-                      'text-[9px] uppercase tracking-wide',
-                      change.effect === 'reverted' ? 'text-amber-600' : 'text-gray-500'
-                    )}>
-                      {change.effect}
+                  {change.frame_outcome === 'reverted' && (
+                    <span className="text-[9px] uppercase tracking-wide text-amber-600">
+                      reverted
                     </span>
                   )}
                 </div>
@@ -459,26 +456,14 @@ export function SlotRow({
 
   const hasStructInfo = !!slot.struct_definition;
   const showTypeLabel = slot.type_label && !hasStructInfo && !hasPacked;
-  const classificationLabel: Record<SlotChangeResponse['classification'], string> = {
-    net_changed: 'net',
-    restored: 'restored',
-    reverted_only: 'reverted',
-    noop_only: 'no-op',
-    unchanged: 'unchanged',
-    unknown: 'unknown',
-  };
-  const classificationBadge = (
-    <span className={cn(
-      'inline-block mt-0.5 text-[9px] uppercase tracking-wide',
-      slot.classification === 'restored' && 'text-blue-600',
-      slot.classification === 'reverted_only' && 'text-amber-600',
-      slot.classification === 'noop_only' && 'text-gray-400',
-      slot.classification === 'net_changed' && 'text-emerald-700',
-      (slot.classification === 'unknown' || slot.classification === 'unchanged') && 'text-gray-500'
-    )}>
-      {classificationLabel[slot.classification]} · {slot.event_count} {slot.event_count === 1 ? 'write' : 'writes'}
+  const revertedWriteCount = slot.changes.filter(
+    (change) => change.frame_outcome === 'reverted'
+  ).length;
+  const revertedNotice = revertedWriteCount > 0 ? (
+    <span className="inline-block mt-0.5 text-[9px] uppercase tracking-wide text-amber-600">
+      {revertedWriteCount === 1 ? 'reverted write' : `${revertedWriteCount} reverted writes`}
     </span>
-  );
+  ) : null;
 
   // HoverCard content for variable info
   const variableHoverContent = (
@@ -606,7 +591,7 @@ export function SlotRow({
                 <span className="text-gray-900 font-medium">{slot.variable_name}</span>
               </span>
             </HoverCard>
-            <div>{classificationBadge}</div>
+            {revertedNotice && <div>{revertedNotice}</div>}
           </td>
           <td className={cn('px-1 py-0.5 w-8 align-top', isFirst && 'pt-2')}>
             <HoverCard content={<div className="font-mono text-xs text-gray-100 break-all">{slot.slot}</div>} position="top">
@@ -704,7 +689,7 @@ export function SlotRow({
                 ) : null}
               </span>
             </HoverCard>
-            <div>{classificationBadge}</div>
+            {revertedNotice && <div>{revertedNotice}</div>}
           </td>
 
           <td className={cn('px-1 py-0.5 align-top', isFirst && 'pt-2')}>
@@ -796,12 +781,9 @@ export function SlotRow({
             <td className="pl-3 py-0.5 align-top">
               <div className="flex flex-col items-start gap-0.5">
                 <span className="text-[10px] text-gray-400">{idx + 1}/{slot.changes.length}</span>
-                {change.effect !== 'applied' && (
-                  <span className={cn(
-                    'text-[9px] uppercase tracking-wide',
-                    change.effect === 'reverted' ? 'text-amber-600' : 'text-gray-500'
-                  )}>
-                    {change.effect}
+                {change.frame_outcome === 'reverted' && (
+                  <span className="text-[9px] uppercase tracking-wide text-amber-600">
+                    reverted
                   </span>
                 )}
               </div>
