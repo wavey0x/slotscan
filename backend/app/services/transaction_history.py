@@ -151,12 +151,27 @@ class TransactionHistoryService:
                 sources_by_code_address=sources_by_code_address,
                 journal=journal,
             )
-            candidates = [
-                direct_metadata.get(address.lower()),
-                *(direct_metadata.get(target) for target in code_addresses),
-                metadata,
+            display_names = [
+                (
+                    direct_metadata[address.lower()].name
+                    if address.lower() in direct_metadata
+                    else None
+                ),
+                *(
+                    layouts_by_code_address[target].contract_name
+                    if target in layouts_by_code_address
+                    else None
+                    for target in code_addresses
+                ),
+                *(
+                    direct_metadata[target].name
+                    if target in direct_metadata
+                    else None
+                    for target in code_addresses
+                ),
+                metadata.name if metadata else None,
             ]
-            display_name = self._preferred_name(candidates)
+            display_name = self._preferred_name(display_names)
             return ContractHistoryProjection(
                 storage_address=address.lower(),
                 metadata=metadata,
@@ -213,7 +228,7 @@ class TransactionHistoryService:
             )
 
     @staticmethod
-    def _preferred_name(candidates: list[ContractMetadata | None]) -> str | None:
+    def _preferred_name(candidates: list[str | None]) -> str | None:
         generic = {
             "proxy",
             "appproxyupgradeable",
@@ -222,12 +237,9 @@ class TransactionHistoryService:
             "ossifiableproxy",
             "vyper_contract",
         }
-        for metadata in candidates:
-            if metadata and metadata.name and metadata.name.lower() not in generic:
-                return metadata.name
         return next(
-            (metadata.name for metadata in candidates if metadata and metadata.name),
-            None,
+            (name for name in candidates if name and name.lower() not in generic),
+            next((name for name in candidates if name), None),
         )
 
     @staticmethod

@@ -246,25 +246,9 @@ class TransactionOwnerTests(TestCase):
         )
 
     def test_exact_trace_code_name_precedes_generic_or_stale_proxy_names(self):
-        proxy = ContractMetadata(
-            chain_id=1,
-            address=ADDRESS_A,
-            name="OssifiableProxy",
-        )
-        implementation = ContractMetadata(
-            chain_id=1,
-            address=CODE_A,
-            name="WithdrawalQueueERC721",
-        )
-        stale_proxy_resolution = ContractMetadata(
-            chain_id=1,
-            address=ADDRESS_A,
-            name="VaultHub",
-        )
-
         self.assertEqual(
             TransactionHistoryService._preferred_name(
-                [proxy, implementation, stale_proxy_resolution]
+                ["OssifiableProxy", "WithdrawalQueueERC721", "VaultHub"]
             ),
             "WithdrawalQueueERC721",
         )
