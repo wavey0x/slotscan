@@ -1,17 +1,19 @@
 """Slot resolution - matching storage slots to layout variables."""
 
 import logging
+import re
 from typing import Optional
 
 from eth_abi import encode as abi_encode
 from web3 import Web3
 
 from app.models.domain import StorageLayout, StorageType, StorageVariable
+from app.services.layout_index import ArrayPacking, array_packing
 
 logger = logging.getLogger(__name__)
 
 
-class SlotResolver:
+class SlotPathResolver:
     """Resolves storage slots to layout variables."""
 
     def get_final_mapping_value_type(
@@ -130,10 +132,7 @@ class SlotResolver:
                         )
                         if is_value_array:
                             element_type = layout.get_type(value_type.element_type) if value_type and value_type.element_type else None
-                            element_slots = 1
-                            if element_type:
-                                element_bytes = element_type.num_bytes or 32
-                                element_slots = (element_bytes + 31) // 32
+                            packing = array_packing(element_type)
 
                             return {
                                 "variable": variable,
@@ -144,12 +143,26 @@ class SlotResolver:
                                 "key_type": var_type.key_type if var_type else None,
                                 "value_type": var_type.value_type if var_type else None,
                                 "element_type": element_type,
-                                "element_slots": element_slots,
+                                "element_slots": packing.slots_per_element,
+                                "array_packing": packing,
                                 "data_start_slot": int(slot_hex, 16),
                             }
             return None
 
-        # Must be at least 64 bytes for a mapping
+        # Dynamic string/bytes mapping keys are hashed as their unpadded raw
+        # contents followed by the base slot. Their preimages are not 64-byte
+        # ABI pairs, so resolve them against the declared key schema first.
+        dynamic_match = self._try_dynamic_mapping_preimage(
+            preimage_clean,
+            layout,
+            preimage_lookup,
+            depth,
+            visited,
+        )
+        if dynamic_match:
+            return dynamic_match
+
+        # Must be at least 64 bytes for a fixed-word mapping key + base slot.
         if len(preimage_clean) < 128:
             return None
 
@@ -177,8 +190,6 @@ class SlotResolver:
 
         logger.debug(f"  Parsing preimage: key_hex={key_hex[:18]}..., base_slot_int={base_slot_int}")
 
-        decoded_key = self.decode_mapping_key(key_hex)
-
         # Heuristic for namespaced storage (ERC-7201)
         if not variable and base_slot_int < 256:
             namespace_base = None
@@ -201,7 +212,15 @@ class SlotResolver:
             var_type = layout.get_type(variable.type_id)
             logger.debug(f"  Preimage match: base_slot={base_slot_int}, var={variable.name}, var_type_encoding={var_type.encoding if var_type else None}")
             if var_type and var_type.encoding == "mapping":
+                decoded_key = self.decode_mapping_key(key_hex, var_type.key_type)
                 final_value_type_id, decode_type = self.get_final_mapping_value_type(var_type, layout)
+                remaining_mapping_type = (
+                    layout.get_type(var_type.value_type)
+                    if var_type.value_type
+                    else None
+                )
+                if remaining_mapping_type and remaining_mapping_type.encoding != "mapping":
+                    remaining_mapping_type = None
 
                 return {
                     "variable": variable,
@@ -212,6 +231,7 @@ class SlotResolver:
                     "key_type": var_type.key_type,
                     "value_type": final_value_type_id,
                     "decode_type": decode_type,
+                    "remaining_mapping_type": remaining_mapping_type,
                 }
 
         # Check if base_slot is an intermediate hash (nested mapping)
@@ -229,11 +249,21 @@ class SlotResolver:
                 outer_key = outer_match.get("key", "?")
                 outer_variable = outer_match.get("variable")
                 outer_var_type = layout.get_type(outer_variable.type_id) if outer_variable else None
+                current_mapping_type = outer_match.get("remaining_mapping_type")
+                decoded_key = self.decode_mapping_key(
+                    key_hex,
+                    current_mapping_type.key_type if current_mapping_type else None,
+                )
 
                 final_value_type_id = None
                 decode_type = None
                 if outer_var_type:
                     final_value_type_id, decode_type = self.get_final_mapping_value_type(outer_var_type, layout)
+                next_mapping_type = None
+                if current_mapping_type and current_mapping_type.value_type:
+                    candidate_type = layout.get_type(current_mapping_type.value_type)
+                    if candidate_type and candidate_type.encoding == "mapping":
+                        next_mapping_type = candidate_type
 
                 return {
                     "variable": outer_variable,
@@ -244,46 +274,108 @@ class SlotResolver:
                     "key_type": outer_var_type.key_type if outer_var_type else None,
                     "value_type": final_value_type_id,
                     "decode_type": decode_type,
+                    "remaining_mapping_type": next_mapping_type,
+                }
+
+        # Check if base_slot - offset is in preimage_lookup (mapping->struct->mapping case)
+        # Example: users[addr].eTokenAllowance[spender] where allowance is at struct offset 2
+        # base_slot_int = user_slot_hash + 2, so base_slot_int - 2 = user_slot_hash (in preimage_lookup)
+        # Try both Solidity (second_int) and Vyper (first_int) base slots since we don't know which format is used
+        for candidate_base, candidate_key_hex in [(second_int, first_32), (first_int, second_32)]:
+            for offset, base_match in self.find_struct_offset_matches(
+                candidate_base,
+                layout,
+                preimage_lookup,
+                depth=depth,
+                visited=visited,
+            ):
+                base_variable = base_match.get("variable")
+                base_key = base_match.get("key", "?")
+                outer_decoded_key = self.decode_mapping_key(candidate_key_hex)
+                return {
+                    "variable": base_variable,
+                    "base_slot": base_match.get("base_slot"),
+                    "key": base_key,
+                    "path": f"{base_variable.name}[{base_key}]+{offset}" if base_variable else None,
+                    "encoding": "mapping",
+                    "key_type": base_match.get("key_type"),
+                    "value_type": base_match.get("value_type"),
+                    "decode_type": base_match.get("decode_type"),
+                    "struct_offset": offset,
+                    "outer_key": outer_decoded_key,
                 }
 
         # Check for struct offset: slot might be base_hash + offset
         slot_int = int(slot_hex, 16)
-        for offset in range(1, 10):
-            potential_base = slot_int - offset
-            potential_base_hex = self._normalize_slot(hex(potential_base))
-            if potential_base_hex in preimage_lookup:
-                base_preimage = preimage_lookup[potential_base_hex]
-                logger.debug(f"  Struct offset check: slot_hex-{offset} = {potential_base_hex[:18]}... trying to match")
-                base_match = self.try_match_slot_from_preimage(
-                    potential_base_hex, base_preimage, layout, preimage_lookup,
-                    depth=depth + 1, visited=visited
-                )
-                logger.debug(f"  Struct offset match result: {base_match is not None}, var={base_match.get('variable').name if base_match and base_match.get('variable') else None}")
-                if base_match:
-                    base_variable = base_match.get("variable")
-                    base_key = base_match.get("key", "?")
-                    return {
-                        "variable": base_variable,
-                        "base_slot": base_match.get("base_slot"),
-                        "key": base_key,
-                        "path": f"{base_variable.name}[{base_key}]+{offset}" if base_variable else None,
-                        "encoding": "mapping",
-                        "key_type": base_match.get("key_type"),
-                        "value_type": base_match.get("value_type"),
-                        "decode_type": base_match.get("decode_type"),
-                        "struct_offset": offset,
-                    }
+        for offset, base_match in self.find_struct_offset_matches(
+            slot_int,
+            layout,
+            preimage_lookup,
+            depth=depth,
+            visited=visited,
+        ):
+            base_variable = base_match.get("variable")
+            base_key = base_match.get("key", "?")
+            return {
+                "variable": base_variable,
+                "base_slot": base_match.get("base_slot"),
+                "key": base_key,
+                "path": f"{base_variable.name}[{base_key}]+{offset}" if base_variable else None,
+                "encoding": "mapping",
+                "key_type": base_match.get("key_type"),
+                "value_type": base_match.get("value_type"),
+                "decode_type": base_match.get("decode_type"),
+                "struct_offset": offset,
+                "outer_key": self.decode_mapping_key(key_hex),
+            }
 
         logger.debug(f"  Preimage chain break at depth {depth}: slot={slot_hex[:20]}... "
                     f"base_slot={base_slot_normalized[:20]}... not in layout or preimage_lookup")
         return None
 
+    def find_struct_offset_matches(
+        self,
+        target_slot: int,
+        layout: StorageLayout,
+        preimage_lookup: dict[str, str],
+        *,
+        depth: int = 0,
+        visited: set[str] | None = None,
+    ):
+        """Yield only offsets proven by actual struct-member layout entries."""
+        for potential_base_hex, base_preimage in preimage_lookup.items():
+            try:
+                potential_base = int(potential_base_hex, 16)
+            except (TypeError, ValueError):
+                continue
+            offset = target_slot - potential_base
+            if offset <= 0:
+                continue
+            base_match = self.try_match_slot_from_preimage(
+                potential_base_hex,
+                base_preimage,
+                layout,
+                preimage_lookup,
+                depth=depth + 1,
+                visited=visited,
+            )
+            base_variable = base_match.get("variable") if base_match else None
+            if not base_variable:
+                continue
+            field_name, _ = self.resolve_struct_field(
+                base_variable,
+                offset,
+                layout,
+            )
+            if field_name:
+                yield offset, base_match
+
     def build_dynamic_array_index(
         self,
         layout: StorageLayout,
-    ) -> dict[int, tuple[StorageVariable, int, StorageType | None]]:
+    ) -> dict[int, tuple[StorageVariable, ArrayPacking, StorageType | None]]:
         """Build index of dynamic array data start slots."""
-        index: dict[int, tuple[StorageVariable, int, StorageType | None]] = {}
+        index: dict[int, tuple[StorageVariable, ArrayPacking, StorageType | None]] = {}
         for var in layout.variables:
             var_type = layout.get_type(var.type_id)
             if not var_type:
@@ -299,14 +391,14 @@ class SlotResolver:
             data_start = int.from_bytes(Web3.keccak(encoded_slot), "big")
 
             element_type = layout.get_type(var_type.element_type) if var_type.element_type else None
-            if element_type:
-                element_bytes = element_type.num_bytes or 32
-                element_slots = (element_bytes + 31) // 32
-            else:
-                element_slots = 1
-
-            index[data_start] = (var, element_slots, element_type)
-            logger.debug(f"Dynamic array {var.name}: data_start={hex(data_start)[:18]}..., element_slots={element_slots}")
+            packing = array_packing(element_type)
+            index[data_start] = (var, packing, element_type)
+            logger.debug(
+                "Dynamic array %s: data_start=%s, packing=%s",
+                var.name,
+                hex(data_start)[:18],
+                packing,
+            )
 
         return index
 
@@ -332,9 +424,9 @@ class SlotResolver:
     def build_static_array_index(
         self,
         layout: StorageLayout,
-    ) -> dict[int, tuple[StorageVariable, StorageType | None, int, int]]:
+    ) -> dict[int, tuple[StorageVariable, StorageType | None, ArrayPacking, int]]:
         """Build index of static array slot ranges."""
-        index: dict[int, tuple[StorageVariable, StorageType | None, int, int]] = {}
+        index: dict[int, tuple[StorageVariable, StorageType | None, ArrayPacking, int]] = {}
         for var in layout.variables:
             var_type = layout.get_type(var.type_id)
             if not var_type:
@@ -343,16 +435,18 @@ class SlotResolver:
                 continue
 
             element_type = layout.get_type(var_type.element_type) if var_type.element_type else None
-            if element_type:
-                element_bytes = element_type.num_bytes or 32
-                element_slots = (element_bytes + 31) // 32
-            else:
-                element_slots = 1
+            packing = array_packing(element_type)
 
             start_slot = var.slot
-            end_slot = var.slot + (var_type.array_length * element_slots)
-            index[start_slot] = (var, element_type, element_slots, end_slot)
-            logger.debug(f"Static array {var.name}: slots {start_slot}-{end_slot-1}, element_slots={element_slots}")
+            end_slot = var.slot + packing.slot_count(var_type.array_length)
+            index[start_slot] = (var, element_type, packing, end_slot)
+            logger.debug(
+                "Static array %s: slots %s-%s, packing=%s",
+                var.name,
+                start_slot,
+                end_slot - 1,
+                packing,
+            )
 
         return index
 
@@ -360,12 +454,27 @@ class SlotResolver:
         self,
         slot_int: int,
         layout: StorageLayout,
-        static_array_index: dict[int, tuple[StorageVariable, StorageType | None, int, int]],
+        static_array_index: dict[int, tuple[StorageVariable, StorageType | None, ArrayPacking, int]],
     ) -> Optional[dict]:
         """Try to match a slot to a static array element."""
-        for start_slot, (var, element_type, element_slots, end_slot) in static_array_index.items():
+        for start_slot, (var, element_type, packing, end_slot) in static_array_index.items():
             if start_slot <= slot_int < end_slot:
-                array_index = (slot_int - start_slot) // element_slots
+                array_type = layout.get_type(var.type_id)
+                locations = packing.locations_in_slot(
+                    start_slot,
+                    slot_int,
+                    length=array_type.array_length if array_type else None,
+                )
+                if packing.is_packed:
+                    return {
+                        "variable": var,
+                        "path": f"{var.name} (packed word)",
+                        "array_index": None,
+                        "element_locations": locations,
+                        "element_type": element_type,
+                        "encoding": "inplace",
+                    }
+                array_index = locations[0][0]
                 return {
                     "variable": var,
                     "path": f"{var.name}[{array_index}]",
@@ -384,7 +493,7 @@ class SlotResolver:
         """Try to match a slot to dynamic bytes/string data."""
         for data_start, var in dynamic_bytes_index.items():
             offset_from_start = slot_int - data_start
-            if offset_from_start >= 0 and offset_from_start < 100:
+            if offset_from_start == 0:
                 return {
                     "variable": var,
                     "base_slot": var.slot,
@@ -398,21 +507,32 @@ class SlotResolver:
         self,
         slot_int: int,
         layout: StorageLayout,
-        dynamic_array_index: dict[int, tuple[StorageVariable, int, StorageType | None]],
+        dynamic_array_index: dict[int, tuple[StorageVariable, ArrayPacking, StorageType | None]],
     ) -> Optional[dict]:
         """Try to match a slot to a dynamic array element."""
-        for data_start, (var, element_slots, element_type) in dynamic_array_index.items():
+        for data_start, (var, packing, element_type) in dynamic_array_index.items():
             if slot_int < data_start:
                 continue
 
             offset_from_start = slot_int - data_start
 
-            if element_slots > 1:
-                array_index = offset_from_start // element_slots
-                struct_slot_offset = offset_from_start % element_slots
+            if packing.is_packed:
+                return {
+                    "variable": var,
+                    "base_slot": var.slot,
+                    "array_index": None,
+                    "struct_slot_offset": 0,
+                    "field_name": None,
+                    "element_locations": packing.locations_in_slot(data_start, slot_int),
+                    "path": f"{var.name} (packed word)",
+                    "encoding": "dynamic_array",
+                    "element_type": element_type,
+                    "decode_type": element_type,
+                }
 
-                if array_index > 10_000_000:
-                    continue
+            if packing.slots_per_element > 1:
+                array_index = offset_from_start // packing.slots_per_element
+                struct_slot_offset = offset_from_start % packing.slots_per_element
 
                 slot_members = []
                 if element_type and element_type.members:
@@ -464,9 +584,6 @@ class SlotResolver:
                     }
             else:
                 array_index = offset_from_start
-                if array_index > 10_000_000:
-                    continue
-
                 return {
                     "variable": var,
                     "base_slot": var.slot,
@@ -493,17 +610,34 @@ class SlotResolver:
                 continue
 
             offset_from_start = slot_int - data_start
-            element_slots = match_info.get("element_slots", 1)
+            packing = match_info.get("array_packing") or array_packing(
+                match_info.get("element_type")
+            )
             element_type = match_info.get("element_type")
             variable = match_info.get("variable")
             mapping_key = match_info.get("key", "?")
 
-            if element_slots > 1:
-                array_index = offset_from_start // element_slots
-                struct_slot_offset = offset_from_start % element_slots
+            if packing.is_packed:
+                var_name = variable.name if variable else "?"
+                return {
+                    "variable": variable,
+                    "base_slot": match_info.get("base_slot"),
+                    "array_index": None,
+                    "struct_slot_offset": 0,
+                    "mapping_key": mapping_key,
+                    "field_name": None,
+                    "element_locations": packing.locations_in_slot(
+                        data_start, slot_int
+                    ),
+                    "path": f"{var_name}[{mapping_key}] (packed word)",
+                    "encoding": "mapping_to_array",
+                    "element_type": element_type,
+                    "decode_type": element_type,
+                }
 
-                if array_index > 10_000_000:
-                    continue
+            if packing.slots_per_element > 1:
+                array_index = offset_from_start // packing.slots_per_element
+                struct_slot_offset = offset_from_start % packing.slots_per_element
 
                 slot_members = []
                 if element_type and element_type.members:
@@ -559,9 +693,6 @@ class SlotResolver:
                     }
             else:
                 array_index = offset_from_start
-                if array_index > 10_000_000:
-                    continue
-
                 var_name = variable.name if variable else "?"
                 return {
                     "variable": variable,
@@ -578,12 +709,116 @@ class SlotResolver:
 
         return None
 
-    def decode_mapping_key(self, key_hex: str) -> str:
-        """Decode a mapping key from its 32-byte hex representation."""
+    def _try_dynamic_mapping_preimage(
+        self,
+        preimage_clean: str,
+        layout: StorageLayout,
+        preimage_lookup: dict[str, str],
+        depth: int,
+        visited: set[str],
+    ) -> Optional[dict]:
+        if len(preimage_clean) < 64:
+            return None
+
+        candidates = [
+            (preimage_clean[-64:], preimage_clean[:-64], "solidity"),
+            (preimage_clean[:64], preimage_clean[64:], "vyper"),
+        ]
+        for base_hex, key_data, ordering in candidates:
+            if not key_data:
+                continue
+            base_slot = int(base_hex, 16)
+            variable = layout.get_mapping_by_base_slot(base_slot)
+            outer_match = None
+            var_type = layout.get_type(variable.type_id) if variable else None
+            if not variable:
+                base_slot_hex = self._normalize_slot(hex(base_slot))
+                outer_preimage = preimage_lookup.get(base_slot_hex)
+                if not outer_preimage:
+                    continue
+                outer_match = self.try_match_slot_from_preimage(
+                    base_slot_hex,
+                    outer_preimage,
+                    layout,
+                    preimage_lookup,
+                    depth=depth + 1,
+                    visited=visited,
+                )
+                if not outer_match:
+                    continue
+                variable = outer_match.get("variable")
+                var_type = outer_match.get("remaining_mapping_type")
+
+            key_type = (var_type.key_type or "") if var_type else ""
+            normalized_key_type = key_type.lower()
+            if "string" not in normalized_key_type and not re.search(
+                r"(?:^|t_)bytes(?:_storage)?$", normalized_key_type
+            ):
+                continue
+            if var_type is None or variable is None:
+                continue
+
+            decoded_key = self.decode_mapping_key("0x" + key_data, key_type)
+            final_value_type_id, decode_type = self.get_final_mapping_value_type(var_type, layout)
+            outer_key = outer_match.get("key") if outer_match else None
+            combined_key = f"{outer_key}, {decoded_key}" if outer_key else decoded_key
+            path = (
+                f"{outer_match.get('path')}[{decoded_key}]"
+                if outer_match
+                else f"{variable.name}[{decoded_key}]"
+            )
+            logger.debug(
+                "Resolved %s dynamic mapping preimage for %s",
+                ordering,
+                variable.name,
+            )
+            next_mapping_type = None
+            if var_type.value_type:
+                candidate_type = layout.get_type(var_type.value_type)
+                if candidate_type and candidate_type.encoding == "mapping":
+                    next_mapping_type = candidate_type
+            return {
+                "variable": variable,
+                "base_slot": base_slot,
+                "key": combined_key,
+                "path": path,
+                "encoding": "mapping",
+                "key_type": key_type,
+                "value_type": final_value_type_id,
+                "decode_type": decode_type,
+                "remaining_mapping_type": next_mapping_type,
+            }
+        return None
+
+    def decode_mapping_key(self, key_hex: str, key_type: str | None = None) -> str:
+        """Decode a mapping key using its declared storage type when available."""
         if not key_hex or not key_hex.startswith("0x"):
             return key_hex
 
         key_bytes = key_hex[2:]
+
+        if key_type:
+            normalized = key_type.lower()
+            raw = bytes.fromhex(key_bytes)
+            if "string" in normalized:
+                try:
+                    return raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    return key_hex
+            if re.search(r"(?:^|t_)bytes(?:_storage)?$", normalized):
+                return key_hex
+            fixed_bytes = re.search(r"bytes(\d+)", normalized)
+            if fixed_bytes:
+                size = int(fixed_bytes.group(1))
+                return "0x" + raw[:size].hex()
+            if "address" in normalized or "contract" in normalized:
+                return "0x" + raw[-20:].hex()
+            if "bool" in normalized:
+                return "true" if int.from_bytes(raw, "big") else "false"
+            if "uint" in normalized or "enum" in normalized:
+                return str(int.from_bytes(raw, "big"))
+            if "int" in normalized:
+                return str(int.from_bytes(raw, "big", signed=True))
 
         if len(key_bytes) == 64 and key_bytes[:24] == "0" * 24:
             return "0x" + key_bytes[24:]
@@ -600,3 +835,6 @@ class SlotResolver:
             return f"0x{slot:064x}"
         slot_clean = slot[2:] if slot.startswith("0x") else slot
         return f"0x{slot_clean.lower().zfill(64)}"
+
+
+SlotResolver = SlotPathResolver

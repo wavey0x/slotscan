@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 class ValuePair(BaseModel):
     """Encoded and decoded value pair."""
 
-    value_encoded: str
+    value_encoded: Optional[str]
     value_decoded: Optional[Any] = None
 
 
@@ -66,6 +66,8 @@ class StorageVariableResponse(BaseModel):
     size: int
     type_id: str
     type_label: str
+    provenance: str = "compiler_layout"
+    confidence: str = "exact"
 
 
 class StorageLayoutResponse(BaseModel):
@@ -106,6 +108,11 @@ class StorageChangeResponse(BaseModel):
     after: ValuePair
     pc: Optional[int] = None  # Program counter of the SSTORE operation
     step: Optional[int] = None  # Sequence number in overall transaction execution
+    effect: str = "applied"
+    frame_id: Optional[int] = None
+    depth: Optional[int] = None
+    opcode: str = "SSTORE"
+    namespace: str = "persistent"
 
 
 class PackedFieldResponse(BaseModel):
@@ -149,7 +156,12 @@ class SlotChangeResponse(BaseModel):
 
     slot: str
     slot_decimal: Optional[str] = None  # Decimal representation (only for static slots)
-    is_static_slot: bool = False  # True if slot < 100 (not a keccak256 hash)
+    is_static_slot: bool = False  # True only when proven by the layout index
+    provenance: str = "raw"
+    confidence: str = "unknown"
+    namespace: str = "persistent"
+    net_changed: Optional[bool] = None
+    state_values_known: bool = True
     variable_name: Optional[str] = None
     variable_path: Optional[str] = None
     type_label: Optional[str] = None
@@ -192,6 +204,10 @@ class TransactionDiffResponse(BaseModel):
     contract_name: Optional[str] = None  # Name of the contract
     layout_available: bool = False  # Whether storage layout was available
     execution_order_available: bool = False  # True if step values are real EVM execution order
+    frame_outcomes_available: bool = False
+    write_old_values_available: bool = False
+    final_state_values_available: bool = False
+    trace_step_count: Optional[int] = None
 
 
 class ErrorResponse(BaseModel):

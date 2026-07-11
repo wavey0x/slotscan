@@ -1,5 +1,12 @@
 # SlotScan Trace Strategy
 
+> Current semantics are implemented by `TransactionTraceExtractor` and the
+> rollback-aware `StorageJournal`; see [ARCHITECTURE.md](ARCHITECTURE.md). The
+> prestate tracer is authoritative for durable pre/post state, while struct
+> logs retain all observed SSTORE/TSTORE events, including no-op, restored, and
+> reverted writes. A slot's final value is never derived from a truncated event
+> prefix.
+
 This document describes how SlotScan traces Ethereum transactions to extract storage changes, including the RPC calls made, their purposes, and how results are merged.
 
 ## Overview

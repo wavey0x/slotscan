@@ -1,115 +1,104 @@
-"""Trace cache repository for raw trace data."""
+"""Versioned transaction-level trace artifact repository."""
 
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import CachedTrace
+from app.models.database import TransactionTraceArtifact
+
 
 logger = logging.getLogger(__name__)
+TRACE_SCHEMA_VERSION = 2
 
 
-@dataclass
-class CachedTraceData:
-    """Raw trace data to cache (before decoding)."""
-
+@dataclass(frozen=True)
+class TransactionTraceArtifactData:
     chain_id: int
     tx_hash: str
-    contract_address: str
     block_number: int
-    raw_changes: list[tuple[str, str, str, int | None, int]]  # (slot, old, new, pc, index)
-    preimage_lookup: dict[str, str]  # hash -> preimage
-    trace_step_count: int = 0
+    root_succeeded: bool
+    write_events: list[dict]
+    prestate_diff: dict
+    preimage_lookup: dict[str, str]
+    capabilities: dict
+    trace_step_count: int | None = None
+    trace_schema_version: int = TRACE_SCHEMA_VERSION
 
 
 class TraceCacheRepository:
-    """Repository for cached raw trace data.
-
-    Caches the raw-ish trace data (after RPC, before decoding) to avoid
-    expensive RPC calls on repeated requests.
-    """
+    """Store raw transaction evidence once; contract projections stay derived."""
 
     def __init__(self, session: AsyncSession):
         self.session = session
 
     async def get(
-        self, chain_id: int, tx_hash: str, contract_address: str
-    ) -> Optional[CachedTraceData]:
-        """Get cached trace data if exists."""
+        self,
+        chain_id: int,
+        tx_hash: str,
+        trace_schema_version: int = TRACE_SCHEMA_VERSION,
+    ) -> TransactionTraceArtifactData | None:
         tx_hash_lower = tx_hash.lower()
-        address_lower = contract_address.lower()
-
-        stmt = select(CachedTrace).where(
-            CachedTrace.chain_id == chain_id,
-            CachedTrace.tx_hash == tx_hash_lower,
-            CachedTrace.contract_address == address_lower,
+        stmt = select(TransactionTraceArtifact).where(
+            TransactionTraceArtifact.chain_id == chain_id,
+            TransactionTraceArtifact.tx_hash == tx_hash_lower,
+            TransactionTraceArtifact.trace_schema_version == trace_schema_version,
         )
         result = await self.session.execute(stmt)
         row = result.scalar_one_or_none()
-
         if row is None:
             return None
 
         logger.info(
-            f"Cache HIT for tx {tx_hash_lower[:10]}... contract {address_lower[:10]}... "
-            f"({row.change_count} changes, {row.trace_step_count} steps)"
+            "Trace artifact HIT for tx %s (%s writes, schema v%s)",
+            tx_hash_lower[:10],
+            row.write_count,
+            row.trace_schema_version,
         )
-
-        # Convert JSONB lists back to tuples
-        raw_changes = [
-            (c[0], c[1], c[2], c[3], c[4]) for c in row.raw_changes
-        ]
-
-        return CachedTraceData(
+        return TransactionTraceArtifactData(
             chain_id=row.chain_id,
             tx_hash=row.tx_hash,
-            contract_address=row.contract_address,
             block_number=row.block_number,
-            raw_changes=raw_changes,
+            root_succeeded=row.root_succeeded,
+            write_events=row.write_events,
+            prestate_diff=row.prestate_diff,
             preimage_lookup=row.preimage_lookup,
-            trace_step_count=row.trace_step_count or 0,
+            capabilities=row.capabilities,
+            trace_step_count=row.trace_step_count,
+            trace_schema_version=row.trace_schema_version,
         )
 
-    async def save(self, data: CachedTraceData) -> None:
-        """Save trace data to cache (upsert)."""
+    async def save(self, data: TransactionTraceArtifactData) -> None:
         tx_hash_lower = data.tx_hash.lower()
-        address_lower = data.contract_address.lower()
-
-        # Convert tuples to lists for JSONB storage
-        raw_changes_json = [list(c) for c in data.raw_changes]
-
-        stmt = insert(CachedTrace).values(
-            chain_id=data.chain_id,
-            tx_hash=tx_hash_lower,
-            contract_address=address_lower,
-            block_number=data.block_number,
-            raw_changes=raw_changes_json,
-            preimage_lookup=data.preimage_lookup,
-            trace_step_count=data.trace_step_count,
-            change_count=len(data.raw_changes),
-        )
-
-        # On conflict, update the data
+        values = {
+            "chain_id": data.chain_id,
+            "tx_hash": tx_hash_lower,
+            "trace_schema_version": data.trace_schema_version,
+            "block_number": data.block_number,
+            "root_succeeded": data.root_succeeded,
+            "write_events": data.write_events,
+            "prestate_diff": data.prestate_diff,
+            "preimage_lookup": data.preimage_lookup,
+            "capabilities": data.capabilities,
+            "trace_step_count": data.trace_step_count,
+            "write_count": len(data.write_events),
+        }
+        stmt = insert(TransactionTraceArtifact).values(**values)
         stmt = stmt.on_conflict_do_update(
-            index_elements=["chain_id", "tx_hash", "contract_address"],
+            index_elements=["chain_id", "tx_hash", "trace_schema_version"],
             set_={
-                "raw_changes": raw_changes_json,
-                "preimage_lookup": data.preimage_lookup,
-                "trace_step_count": data.trace_step_count,
-                "change_count": len(data.raw_changes),
+                **values,
                 "created_at": datetime.utcnow(),
             },
         )
-
         await self.session.execute(stmt)
         await self.session.commit()
-
         logger.info(
-            f"Cache SAVE for tx {tx_hash_lower[:10]}... contract {address_lower[:10]}... "
-            f"({len(data.raw_changes)} changes, {data.trace_step_count} steps)"
+            "Trace artifact SAVE for tx %s (%s writes, schema v%s)",
+            tx_hash_lower[:10],
+            len(data.write_events),
+            data.trace_schema_version,
         )

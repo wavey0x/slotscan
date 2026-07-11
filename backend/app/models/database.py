@@ -1,6 +1,5 @@
 """SQLAlchemy database models."""
 
-from datetime import datetime
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, BigInteger, Index
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base
@@ -31,6 +30,7 @@ class Contract(Base):
     is_verified = Column(Boolean, default=False)
     verification_source = Column(String(50))
     compiler_version = Column(String(50))
+    compiler_artifact_fingerprint = Column(String(64))
 
     # Storage layout (JSONB)
     storage_layout = Column(JSONB)
@@ -46,83 +46,54 @@ class Contract(Base):
     )
 
 
-class StorageSnapshotCache(Base):
-    """Cached storage state at a block."""
+class TransactionTraceArtifact(Base):
+    """One versioned, contract-agnostic trace artifact per transaction."""
 
-    __tablename__ = "storage_snapshots_cache"
+    __tablename__ = "transaction_trace_artifacts"
 
     id = Column(Integer, primary_key=True)
     chain_id = Column(Integer, nullable=False)
-    contract_address = Column(String(100), nullable=False)
+    tx_hash = Column(String(66), nullable=False)
+    trace_schema_version = Column(Integer, nullable=False)
     block_number = Column(BigInteger, nullable=False)
+    root_succeeded = Column(Boolean, nullable=False)
 
-    payload = Column(JSONB, nullable=False)
-    is_complete = Column(Boolean, default=True)
-    slot_count = Column(Integer)
+    write_events = Column(JSONB, nullable=False)
+    prestate_diff = Column(JSONB, nullable=False)
+    preimage_lookup = Column(JSONB, nullable=False)
+    capabilities = Column(JSONB, nullable=False)
+
+    # Metadata
+    trace_step_count = Column(Integer)  # For debugging/monitoring
+    write_count = Column(Integer)
 
     created_at = Column(DateTime, server_default=func.now())
-    expires_at = Column(DateTime)
 
     __table_args__ = (
         Index(
-            "idx_snapshots_lookup",
+            "idx_transaction_trace_artifacts_lookup",
             chain_id,
-            contract_address,
-            block_number,
+            tx_hash,
+            trace_schema_version,
             unique=True,
         ),
     )
 
 
-class TxDiffCache(Base):
-    """Cached transaction storage diff."""
+class LegacyCachedTrace(Base):
+    """Read-only schema marker for pre-v2 trace rows retained by migration 004."""
 
-    __tablename__ = "tx_diffs_cache"
-
-    id = Column(Integer, primary_key=True)
-    chain_id = Column(Integer, nullable=False)
-    contract_address = Column(String(100), nullable=False)
-    tx_hash = Column(String(100), nullable=False)
-    block_number = Column(BigInteger, nullable=False)
-
-    payload = Column(JSONB, nullable=False)
-    is_complete = Column(Boolean, default=True)
-    change_count = Column(Integer)
-
-    created_at = Column(DateTime, server_default=func.now())
-    expires_at = Column(DateTime)
-
-    __table_args__ = (
-        Index("idx_tx_diffs_lookup", chain_id, contract_address, tx_hash, unique=True),
-        Index("idx_tx_diffs_block", chain_id, contract_address, block_number),
-    )
-
-
-class CachedTrace(Base):
-    """Cached raw trace data (before decoding).
-
-    Stores the raw-ish trace data after RPC calls but before variable resolution.
-    This is future-proof: decoding logic changes don't invalidate cache.
-    """
-
-    __tablename__ = "cached_traces"
+    __tablename__ = "cached_traces_legacy"
 
     id = Column(Integer, primary_key=True)
     chain_id = Column(Integer, nullable=False)
     tx_hash = Column(String(66), nullable=False)
     contract_address = Column(String(42), nullable=False)
     block_number = Column(BigInteger, nullable=False)
-
-    # Raw trace data (JSONB for flexibility)
-    # raw_changes: List of [slot, old_value, new_value, pc, exec_index]
     raw_changes = Column(JSONB, nullable=False)
-    # preimage_lookup: Dict of {hash: preimage} for mapping key resolution
     preimage_lookup = Column(JSONB, nullable=False)
-
-    # Metadata
-    trace_step_count = Column(Integer)  # For debugging/monitoring
+    trace_step_count = Column(Integer)
     change_count = Column(Integer)
-
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (
@@ -131,6 +102,58 @@ class CachedTrace(Base):
             chain_id,
             tx_hash,
             contract_address,
+            unique=True,
+        ),
+    )
+
+
+class CompilerArtifact(Base):
+    """Raw, versioned compiler input/output retained for reinterpretation."""
+
+    __tablename__ = "compiler_artifacts"
+
+    id = Column(Integer, primary_key=True)
+    fingerprint = Column(String(64), nullable=False)
+    language = Column(String(20), nullable=False)
+    compiler_version = Column(String(100), nullable=False)
+    pipeline = Column(String(50), nullable=False)
+    standard_input = Column(JSONB, nullable=False)
+    compiler_output = Column(JSONB, nullable=False)
+    source_hashes = Column(JSONB, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_compiler_artifacts_fingerprint", fingerprint, unique=True),
+    )
+
+
+class HistoricalContractResolution(Base):
+    """Block-specific address-to-implementation/layout association."""
+
+    __tablename__ = "historical_contract_resolutions"
+
+    id = Column(Integer, primary_key=True)
+    chain_id = Column(Integer, nullable=False)
+    address = Column(String(100), nullable=False)
+    block_number = Column(BigInteger, nullable=False)
+    code_hash = Column(String(100), nullable=False)
+    is_proxy = Column(Boolean, default=False)
+    proxy_type = Column(String(50))
+    implementation_address = Column(String(100))
+    is_verified = Column(Boolean, default=False)
+    verification_source = Column(String(50))
+    name = Column(String(200))
+    compiler_version = Column(String(50))
+    compiler_artifact_fingerprint = Column(String(64))
+    storage_layout = Column(JSONB)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index(
+            "idx_historical_contract_resolution_lookup",
+            chain_id,
+            address,
+            block_number,
             unique=True,
         ),
     )

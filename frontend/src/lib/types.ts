@@ -1,7 +1,7 @@
 // === Value Types ===
 
 export interface ValuePair {
-  value_encoded: string;
+  value_encoded: string | null;
   value_decoded: unknown;
 }
 
@@ -44,6 +44,8 @@ export interface StorageVariableResponse {
   size: number;
   type_id: string;
   type_label: string;
+  provenance: string;
+  confidence: string;
 }
 
 export interface StorageLayoutResponse {
@@ -75,7 +77,12 @@ export interface StorageChangeResponse {
   before: ValuePair;
   after: ValuePair;
   pc: number | null;
-  step: number; // Sequence number in overall transaction execution
+  step: number | null; // Sequence number in overall transaction execution
+  effect: 'applied' | 'noop' | 'reverted';
+  frame_id: number | null;
+  depth: number | null;
+  opcode: 'SSTORE' | 'TSTORE';
+  namespace: 'persistent' | 'transient';
 }
 
 export interface PackedFieldResponse {
@@ -114,7 +121,12 @@ export interface SlotChangeResponse {
   // All changes to a single slot, grouped together
   slot: string;
   slot_decimal: string | null;
-  is_static_slot: boolean;  // True if slot < 100 (not a keccak256 hash)
+  is_static_slot: boolean;  // True only when proven by the layout index
+  provenance: string;
+  confidence: 'exact' | 'inferred' | 'unknown';
+  namespace: 'persistent' | 'transient';
+  net_changed: boolean | null;
+  state_values_known: boolean;
   variable_name: string | null;
   variable_path: string | null;
   type_label: string | null;
@@ -150,6 +162,10 @@ export interface TransactionDiffResponse {
   contract_name: string | null;
   layout_available: boolean;
   execution_order_available: boolean; // True if step values are real EVM execution order
+  frame_outcomes_available: boolean;
+  write_old_values_available: boolean;
+  final_state_values_available: boolean;
+  trace_step_count: number | null;
 }
 
 export interface ErrorResponse {

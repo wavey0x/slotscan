@@ -265,6 +265,8 @@ class NamespaceStorageParser:
 
     def _is_complex_type(self, type_str: str) -> bool:
         """Check if a type is complex (takes full slot, can't pack)."""
+        if "[" in type_str or type_str.strip().startswith("mapping"):
+            return True
         # Remove generic parameters for checking
         base_type = re.sub(r'<[^>]+>', '', type_str)
         base_type = re.sub(r'\[[^\]]*\]', '', base_type)
@@ -273,10 +275,10 @@ class NamespaceStorageParser:
             if pattern in base_type:
                 return True
 
-        # Interface/contract types are addresses (20 bytes) but we treat them as complex
-        # because they often represent pointers to other contracts
-        if base_type.startswith('I') and base_type[1].isupper():
-            return True
+        # Interface/contract values use the same 20-byte representation as an
+        # address and may pack with adjacent value types.
+        if base_type.startswith('I') and len(base_type) > 1 and base_type[1].isupper():
+            return False
 
         # Struct types (contains a dot like AutopoolToken.TokenData)
         if '.' in type_str:
@@ -289,6 +291,21 @@ class NamespaceStorageParser:
         # Check known types
         if type_str in SOLIDITY_TYPE_SIZES:
             return SOLIDITY_TYPE_SIZES[type_str]
+
+        integer_match = re.fullmatch(r"u?int(\d*)", type_str)
+        if integer_match:
+            bits = int(integer_match.group(1) or "256")
+            return bits // 8
+
+        bytes_match = re.fullmatch(r"bytes(\d+)", type_str)
+        if bytes_match:
+            return int(bytes_match.group(1))
+
+        if (
+            (type_str.startswith("I") and len(type_str) > 1 and type_str[1].isupper())
+            or type_str.startswith("contract ")
+        ):
+            return 20
 
         # Enum types - default to uint8 size
         if type_str.endswith('Status') or '.VaultShutdownStatus' in type_str:
@@ -322,8 +339,20 @@ class NamespaceStorageParser:
                 cache[type_str] = slot_count
                 return slot_count
 
-        # Interface types (IFoo) - just an address, 1 slot
-        if type_str.startswith('I') and len(type_str) > 1 and type_str[1].isupper():
+        static_array_match = re.fullmatch(r"(.+)\[(\d+)\]", type_str.strip())
+        if static_array_match:
+            element_name = static_array_match.group(1).strip()
+            length = int(static_array_match.group(2))
+            if self._is_complex_type(element_name):
+                element_slots = self._get_complex_type_slots(element_name, sources, cache)
+                slot_count = length * element_slots
+            else:
+                element_size = self._get_type_size(element_name)
+                slot_count = (length * element_size + 31) // 32
+            cache[type_str] = max(1, slot_count)
+            return cache[type_str]
+
+        if "[]" in type_str or type_str.strip().startswith("mapping"):
             cache[type_str] = 1
             return 1
 
@@ -422,12 +451,39 @@ class NamespaceStorageParser:
                 is_mapping = "mapping" in member.type_str.lower()
                 is_array = "[" in member.type_str
 
+                key_type = None
+                value_type = None
+                mapping_match = re.fullmatch(
+                    r"mapping\s*\(\s*(.+?)\s*=>\s*(.+?)\s*\)",
+                    member.type_str,
+                )
+                if mapping_match:
+                    key_type = mapping_match.group(1).strip()
+                    value_type = mapping_match.group(2).strip()
+
+                element_type = None
+                array_length = None
+                array_match = re.fullmatch(r"(.+)\[(\d*)\]", member.type_str)
+                if array_match:
+                    element_type = array_match.group(1).strip()
+                    array_length = int(array_match.group(2)) if array_match.group(2) else None
+
                 types[type_id] = StorageType(
                     id=type_id,
                     label=member.type_str,
                     kind="mapping" if is_mapping else ("array" if is_array else "value"),
-                    encoding="mapping" if is_mapping else "inplace",
+                    encoding=(
+                        "mapping"
+                        if is_mapping
+                        else "dynamic_array"
+                        if is_array and array_length is None
+                        else "inplace"
+                    ),
                     num_bytes=member.size,
+                    key_type=key_type,
+                    value_type=value_type,
+                    element_type=element_type,
+                    array_length=array_length,
                 )
 
             variables.append(StorageVariable(
@@ -437,6 +493,8 @@ class NamespaceStorageParser:
                 size=member.size,
                 type_id=type_id,
                 label=member.type_str,
+                provenance="source_inference",
+                confidence="inferred",
             ))
 
         return StorageLayout(
@@ -458,27 +516,32 @@ class NamespaceStorageParser:
         if not namespaces:
             return None
 
-        # For now, handle the first namespace found
-        # TODO: Support multiple namespaces
-        namespace = namespaces[0]
+        variables = []
+        types = {}
+        names = []
+        for namespace in namespaces:
+            struct_body = self.find_struct_definition(namespace.struct_name, sources)
+            if not struct_body:
+                logger.warning(f"Could not find struct definition for {namespace.struct_name}")
+                continue
+            members = self.parse_struct_members(struct_body, sources)
+            if not members:
+                logger.warning(f"No members found in struct {namespace.struct_name}")
+                continue
+            namespace_layout = self.create_namespace_layout(namespace, members)
+            variables.extend(namespace_layout.variables)
+            types.update(namespace_layout.types)
+            names.append(namespace.struct_name)
 
-        struct_body = self.find_struct_definition(namespace.struct_name, sources)
-
-        if not struct_body:
-            logger.warning(f"Could not find struct definition for {namespace.struct_name}")
+        if not variables:
             return None
-
-        members = self.parse_struct_members(struct_body, sources)
-
-        if not members:
-            logger.warning(f"No members found in struct {namespace.struct_name}")
-            return None
-
-        layout = self.create_namespace_layout(namespace, members)
-
         logger.info(
-            f"Created namespace layout with {len(layout.variables)} variables "
-            f"for {namespace.struct_name}"
+            "Created inferred layouts for %s namespaces with %s variables",
+            len(names),
+            len(variables),
         )
-
-        return layout
+        return StorageLayout(
+            contract_name=" + ".join(names),
+            variables=variables,
+            types=types,
+        )

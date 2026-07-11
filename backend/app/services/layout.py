@@ -1,17 +1,26 @@
 """Layout parser for extracting storage layouts from Solidity and Vyper source code."""
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
-import subprocess
+import resource
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Optional
 
 import solcx
+from solcx.install import get_executable
 
-from app.models.domain import StorageLayout, StorageType, StorageVariable
+from app.config import Settings
+from app.models.domain import (
+    RawCompilerArtifact,
+    StorageLayout,
+    StorageType,
+    StorageVariable,
+)
 from app.models.errors import CompilationError, LayoutNotFoundError, UnsupportedCompilerVersionError
 
 # Minimum Solidity version that supports --storage-layout output
@@ -21,6 +30,24 @@ MIN_SOLC_VERSION_FOR_LAYOUT = (0, 5, 13)
 MIN_VYPER_VERSION_FOR_LAYOUT = (0, 3, 0)
 
 logger = logging.getLogger(__name__)
+
+
+def _limit_compiler_process(memory_limit_bytes: int, cpu_limit_seconds: int) -> None:
+    """Apply hard resource limits in the compiler child process."""
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (memory_limit_bytes, memory_limit_bytes))
+    except (OSError, ValueError):
+        # RLIMIT_AS is not enforceable on every supported host (notably some
+        # macOS configurations). Linux production workers still enforce it.
+        pass
+    try:
+        resource.setrlimit(
+            resource.RLIMIT_CPU,
+            (cpu_limit_seconds, cpu_limit_seconds),
+        )
+    except (OSError, ValueError):
+        pass
+
 
 # Vyper type sizes in bytes
 VYPER_TYPE_SIZES = {
@@ -42,6 +69,12 @@ VYPER_TYPE_SIZES = {
 
 class LayoutParser:
     """Parses Solidity source into storage layout."""
+
+    def __init__(self, settings: Settings | None = None):
+        self.settings = settings or Settings()
+        self._compilation_semaphore = asyncio.Semaphore(
+            self.settings.max_parallel_compilations
+        )
 
     async def parse(
         self,
@@ -65,7 +98,26 @@ class LayoutParser:
         Returns:
             Normalized StorageLayout
         """
-        solc_output = await self._compile_with_layout(
+        layout, _ = await self.parse_with_artifact(
+            contract_name=contract_name,
+            sources=sources,
+            compiler_version=compiler_version,
+            compiler_settings=compiler_settings,
+            metadata_settings=metadata_settings,
+            contract_fqname=contract_fqname,
+        )
+        return layout
+
+    async def parse_with_artifact(
+        self,
+        contract_name: str,
+        sources: dict[str, str],
+        compiler_version: str,
+        compiler_settings: Optional[dict] = None,
+        metadata_settings: Optional[dict] = None,
+        contract_fqname: Optional[str] = None,
+    ) -> tuple[StorageLayout, RawCompilerArtifact]:
+        solc_output, standard_input = await self._compile_with_layout(
             contract_name=contract_name,
             sources=sources,
             version=compiler_version,
@@ -74,7 +126,16 @@ class LayoutParser:
         )
 
         raw_layout = self._extract_layout(contract_name, solc_output, contract_fqname)
-        return self._normalize_layout(raw_layout, contract_name)
+        layout = self._normalize_layout(raw_layout, contract_name)
+        artifact = self._make_artifact(
+            language="Solidity",
+            compiler_version=compiler_version,
+            pipeline="solc-standard-json",
+            standard_input=standard_input,
+            compiler_output=solc_output,
+            sources=sources,
+        )
+        return layout, artifact
 
     def parse_from_solc_output(
         self, contract_name: str, solc_output: dict, contract_fqname: Optional[str] = None
@@ -95,13 +156,26 @@ class LayoutParser:
         """Ensure the required solc version is installed."""
         normalized = self._normalize_version(version)
 
-        installed = solcx.get_installed_solc_versions()
+        installed = await asyncio.to_thread(solcx.get_installed_solc_versions)
         installed_strs = [str(v) for v in installed]
 
         if normalized not in installed_strs:
+            if not self.settings.allow_compiler_install:
+                raise CompilationError(
+                    f"solc {normalized} is not preinstalled and request-time installation is disabled"
+                )
+            if len(installed_strs) >= self.settings.max_installed_compilers:
+                raise CompilationError(
+                    "Compiler cache is at its configured version limit "
+                    f"({self.settings.max_installed_compilers})"
+                )
             try:
                 logger.info(f"Installing solc {normalized}")
-                solcx.install_solc(normalized)
+                async with self._compilation_semaphore:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(solcx.install_solc, normalized),
+                        timeout=self.settings.compiler_timeout_seconds,
+                    )
             except Exception as e:
                 raise CompilationError(f"Failed to install solc {normalized}: {e}")
 
@@ -149,7 +223,7 @@ class LayoutParser:
         version: str,
         settings: Optional[dict],
         metadata_settings: Optional[dict] = None,
-    ) -> dict:
+    ) -> tuple[dict, dict]:
         """Compile sources with storageLayout output enabled."""
         normalized_version = await self._ensure_solc_version(version)
 
@@ -158,8 +232,94 @@ class LayoutParser:
         if version_tuple < MIN_SOLC_VERSION_FOR_LAYOUT:
             raise UnsupportedCompilerVersionError(normalized_version)
 
-        # Build standard JSON input
-        std_settings: dict = {"outputSelection": {"*": {"*": ["storageLayout"]}}}
+        standard_input = self.build_solidity_standard_input(
+            sources,
+            settings,
+            metadata_settings,
+        )
+
+        try:
+            async with self._compilation_semaphore:
+                output = await self._run_solc_standard_json(
+                    normalized_version,
+                    standard_input,
+                )
+        except asyncio.TimeoutError as e:
+            raise CompilationError("Solidity compilation timed out") from e
+        except Exception as e:
+            raise CompilationError(f"Compilation failed: {e}")
+
+        # Check for errors
+        if "errors" in output:
+            errors = [e for e in output["errors"] if e.get("severity") == "error"]
+            if errors:
+                error_msgs = [e.get("message", str(e)) for e in errors]
+                raise CompilationError(f"Compilation errors: {error_msgs}")
+
+        return output, standard_input
+
+    async def _run_solc_standard_json(
+        self,
+        version: str,
+        standard_input: dict,
+    ) -> dict:
+        executable = get_executable(version)
+        memory_limit = self.settings.compiler_memory_limit_mb * 1024 * 1024
+        process = await asyncio.create_subprocess_exec(
+            str(executable),
+            "--standard-json",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            preexec_fn=lambda: _limit_compiler_process(
+                memory_limit,
+                self.settings.compiler_timeout_seconds,
+            ),
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(
+                    json.dumps(standard_input, separators=(",", ":")).encode("utf-8")
+                ),
+                timeout=self.settings.compiler_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            raise
+        if process.returncode != 0:
+            raise CompilationError(
+                "Solidity compiler process failed: "
+                + stderr.decode("utf-8", errors="replace")[:4000]
+            )
+        try:
+            output_start = stdout.index(b"{")
+            return json.loads(stdout[output_start:])
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise CompilationError("Solidity compiler returned invalid JSON") from exc
+
+    def build_solidity_standard_input(
+        self,
+        sources: dict[str, str],
+        settings: Optional[dict],
+        metadata_settings: Optional[dict] = None,
+    ) -> dict:
+        """Build the canonical compiler input used for fingerprinting/compilation."""
+        source_size = sum(len(content.encode("utf-8")) for content in sources.values())
+        if source_size > self.settings.max_compilation_input_bytes:
+            raise CompilationError(
+                "Compiler input is "
+                f"{source_size} bytes; limit is {self.settings.max_compilation_input_bytes}"
+            )
+
+        std_settings: dict = {
+            "outputSelection": {
+                "*": {
+                    "*": ["storageLayout", "transientStorageLayout"],
+                    "": ["ast"],
+                }
+            }
+        }
 
         # Merge full metadata settings if available (more complete than partial settings)
         # Filter out keys that solc doesn't accept as input or may be malformed:
@@ -187,21 +347,59 @@ class LayoutParser:
             },
             "settings": std_settings,
         }
+        return standard_input
 
-        try:
-            solcx.set_solc_version(normalized_version)
-            output = solcx.compile_standard(standard_input)
-        except Exception as e:
-            raise CompilationError(f"Compilation failed: {e}")
+    def artifact_fingerprint(
+        self,
+        *,
+        language: str,
+        compiler_version: str,
+        pipeline: str,
+        standard_input: dict,
+    ) -> str:
+        fingerprint_input = {
+            "language": language,
+            "compiler_version": compiler_version,
+            "pipeline": pipeline,
+            "standard_input": standard_input,
+        }
+        return hashlib.sha256(
+            json.dumps(
+                fingerprint_input,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
 
-        # Check for errors
-        if "errors" in output:
-            errors = [e for e in output["errors"] if e.get("severity") == "error"]
-            if errors:
-                error_msgs = [e.get("message", str(e)) for e in errors]
-                raise CompilationError(f"Compilation errors: {error_msgs}")
-
-        return output
+    def _make_artifact(
+        self,
+        *,
+        language: str,
+        compiler_version: str,
+        pipeline: str,
+        standard_input: dict,
+        compiler_output: dict,
+        sources: dict[str, str],
+    ) -> RawCompilerArtifact:
+        source_hashes = {
+            filename: hashlib.sha256(content.encode("utf-8")).hexdigest()
+            for filename, content in sorted(sources.items())
+        }
+        fingerprint = self.artifact_fingerprint(
+            language=language,
+            compiler_version=compiler_version,
+            pipeline=pipeline,
+            standard_input=standard_input,
+        )
+        return RawCompilerArtifact(
+            fingerprint=fingerprint,
+            language=language,
+            compiler_version=compiler_version,
+            pipeline=pipeline,
+            standard_input=standard_input,
+            compiler_output=compiler_output,
+            source_hashes=source_hashes,
+        )
 
     def _extract_layout(self, contract_name: str, solc_output: dict, contract_fqname: Optional[str] = None) -> dict:
         """Find and extract storageLayout for target contract."""
@@ -353,7 +551,7 @@ class LayoutParser:
                     name=var.get("label", ""),
                     slot=int(var.get("slot", 0)),
                     offset=int(var.get("offset", 0)),
-                    size=type_info.num_bytes if type_info else 32,
+                    size=(type_info.num_bytes or 32) if type_info else 32,
                     type_id=type_id,
                     label=type_info.label if type_info else type_id,
                 )
@@ -380,6 +578,19 @@ class LayoutParser:
         Returns:
             Normalized StorageLayout
         """
+        layout, _ = await self.parse_vyper_with_artifact(
+            contract_name,
+            sources,
+            compiler_version,
+        )
+        return layout
+
+    async def parse_vyper_with_artifact(
+        self,
+        contract_name: str,
+        sources: dict[str, str],
+        compiler_version: str,
+    ) -> tuple[StorageLayout, RawCompilerArtifact]:
         # Find the main .vy file (usually there's just one)
         vy_files = {k: v for k, v in sources.items() if k.endswith(".vy")}
         if not vy_files:
@@ -395,6 +606,7 @@ class LayoutParser:
                 break
         if not main_file:
             main_file, main_content = next(iter(vy_files.items()))
+        assert main_content is not None
 
         # Compile with Vyper
         raw_layout = await self._compile_vyper_with_layout(
@@ -403,7 +615,24 @@ class LayoutParser:
             version=compiler_version,
         )
 
-        return self._normalize_vyper_layout(raw_layout, contract_name)
+        layout = self._normalize_vyper_layout(raw_layout, contract_name)
+        standard_input = {
+            "language": "Vyper",
+            "sources": {
+                filename: {"content": content}
+                for filename, content in sources.items()
+            },
+            "settings": {"outputSelection": ["layout"]},
+        }
+        artifact = self._make_artifact(
+            language="Vyper",
+            compiler_version=compiler_version,
+            pipeline="vvm-layout",
+            standard_input=standard_input,
+            compiler_output={"storageLayout": raw_layout},
+            sources=sources,
+        )
+        return layout, artifact
 
     async def _compile_vyper_with_layout(
         self,
@@ -419,6 +648,11 @@ class LayoutParser:
         """
         normalized_version = self._normalize_vyper_version(version)
 
+        if len(source_content.encode("utf-8")) > self.settings.max_compilation_input_bytes:
+            raise CompilationError(
+                f"Compiler input exceeds {self.settings.max_compilation_input_bytes} bytes"
+            )
+
         # Check if this Vyper version supports storage layout output
         version_tuple = self._parse_version_tuple(normalized_version)
         if version_tuple < MIN_VYPER_VERSION_FOR_LAYOUT:
@@ -430,24 +664,38 @@ class LayoutParser:
         # Try using vvm first (preferred - handles version management)
         try:
             import vvm
-            logger.info(f"vvm imported, checking installed versions...")
+            logger.info("vvm imported, checking installed versions...")
 
             # Ensure version is installed
-            installed = vvm.get_installed_vyper_versions()
+            installed = await asyncio.to_thread(vvm.get_installed_vyper_versions)
             installed_strs = [str(v) for v in installed]
             logger.info(f"vvm installed versions: {installed_strs[:5]}...")
 
             if normalized_version not in installed_strs:
+                if not self.settings.allow_compiler_install:
+                    raise CompilationError(
+                        f"Vyper {normalized_version} is not preinstalled and request-time installation is disabled"
+                    )
+                if len(installed_strs) >= self.settings.max_installed_compilers:
+                    raise CompilationError(
+                        "Compiler cache is at its configured version limit "
+                        f"({self.settings.max_installed_compilers})"
+                    )
                 logger.info(f"Installing Vyper {normalized_version} via vvm")
-                vvm.install_vyper(normalized_version)
+                async with self._compilation_semaphore:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(vvm.install_vyper, normalized_version),
+                        timeout=self.settings.compiler_timeout_seconds,
+                    )
 
-            # Use vvm.compile_source with layout output format
+            from vvm.install import get_executable as get_vyper_executable
+
             logger.info(f"Compiling Vyper {normalized_version} layout for {filename} using vvm")
-            layout = vvm.compile_source(
-                source_content,
-                vyper_version=normalized_version,
-                output_format="layout",
-            )
+            async with self._compilation_semaphore:
+                layout = await self._run_vyper_layout(
+                    str(get_vyper_executable(normalized_version)),
+                    source_content,
+                )
             logger.info(f"vvm compilation returned type: {type(layout)}")
 
             # vvm returns the layout as a JSON string or dict
@@ -466,41 +714,65 @@ class LayoutParser:
 
         except ImportError as e:
             logger.warning(f"vvm import failed: {e}, falling back to system vyper")
+        except CompilationError:
+            raise
+        except asyncio.TimeoutError as e:
+            raise CompilationError("Vyper installation timed out") from e
         except Exception as e:
             logger.warning(f"vvm compilation failed: {type(e).__name__}: {e}, falling back to system vyper")
             import traceback
             logger.warning(f"vvm traceback: {traceback.format_exc()}")
 
-        # Fallback: use system vyper via subprocess
+        executable = shutil.which("vyper")
+        if not executable:
+            raise CompilationError(
+                "Vyper compiler not found. Install with: pip install vyper vvm"
+            )
+        async with self._compilation_semaphore:
+            return await self._run_vyper_layout(executable, source_content)
+
+    async def _run_vyper_layout(
+        self,
+        executable: str,
+        source_content: str,
+    ) -> dict:
         with tempfile.TemporaryDirectory() as tmpdir:
-            source_path = Path(tmpdir) / filename
+            source_path = Path(tmpdir) / "contract.vy"
             source_path.write_text(source_content)
-
+            memory_limit = self.settings.compiler_memory_limit_mb * 1024 * 1024
+            process = await asyncio.create_subprocess_exec(
+                executable,
+                "-f",
+                "layout",
+                str(source_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                preexec_fn=lambda: _limit_compiler_process(
+                    memory_limit,
+                    self.settings.compiler_timeout_seconds,
+                ),
+            )
             try:
-                result = await asyncio.to_thread(
-                    subprocess.run,
-                    ["vyper", "-f", "layout", str(source_path)],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=self.settings.compiler_timeout_seconds,
                 )
-
-                if result.returncode != 0:
-                    error_msg = result.stderr or result.stdout
-                    raise CompilationError(f"Vyper compilation failed: {error_msg}")
-
-                try:
-                    layout = json.loads(result.stdout)
-                    return layout
-                except json.JSONDecodeError as e:
-                    raise CompilationError(f"Failed to parse Vyper layout output: {e}")
-
-            except FileNotFoundError:
+            except asyncio.TimeoutError as exc:
+                process.kill()
+                await process.wait()
+                raise CompilationError("Vyper compilation timed out") from exc
+            if process.returncode != 0:
                 raise CompilationError(
-                    "Vyper compiler not found. Install with: pip install vyper vvm"
+                    "Vyper compilation failed: "
+                    + stderr.decode("utf-8", errors="replace")[:4000]
                 )
-            except subprocess.TimeoutExpired:
-                raise CompilationError("Vyper compilation timed out")
+            try:
+                layout = json.loads(stdout)
+            except json.JSONDecodeError as exc:
+                raise CompilationError("Failed to parse Vyper layout output") from exc
+            if "storage_layout" in layout:
+                return layout["storage_layout"]
+            return layout
 
     def _normalize_vyper_version(self, version: str) -> str:
         """

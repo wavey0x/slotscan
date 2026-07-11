@@ -67,7 +67,7 @@ const stringifyValueForCopy = (val: unknown, fallback: string): string => {
 };
 
 // Helper to check if a value represents zero
-const isZeroValue = (encoded: string, decoded: unknown): boolean => {
+const isZeroValue = (encoded: string | null, decoded: unknown): boolean => {
   if (encoded === '0x' + '0'.repeat(64)) return true;
   if (encoded === '0x0' || encoded === '0x00') return true;
   if (decoded === 0 || decoded === '0' || decoded === BigInt(0)) return true;
@@ -81,10 +81,11 @@ const getChangedPackedFields = (fields: PackedFieldResponse[]): PackedFieldRespo
   return fields.filter(hasFieldChanged);
 };
 
-const makeHoverProps = (decoded: unknown, encoded: string) => {
+const makeHoverProps = (decoded: unknown, encoded: string | null) => {
+  const fallback = encoded ?? 'unknown';
   return {
-    value: decoded !== null && decoded !== undefined ? getCopyValue(decoded, encoded) : encoded,
-    tooltip: getTooltipValue(decoded, encoded),
+    value: decoded !== null && decoded !== undefined ? getCopyValue(decoded, fallback) : fallback,
+    tooltip: getTooltipValue(decoded, fallback),
   };
 };
 
@@ -108,8 +109,8 @@ const PackedFieldRow = ({
   chainId: string;
   showStep?: boolean;
   slotInfo?: { display: string; full: string };
-  initialEncoded: string;
-  finalEncoded: string;
+  initialEncoded: string | null;
+  finalEncoded: string | null;
   borderClass?: string;
 }) => {
   // Only show tree structure when there are multiple fields (otherwise it's misleading)
@@ -254,9 +255,19 @@ const InterimPackedChangeRows = ({
             {/* Change number column - only on first field */}
             <td className="pl-3 py-0.5 align-top">
               {fieldIdx === 0 && (
-                <span className="text-[10px] text-gray-400">
-                  {changeIndex + 1}/{totalChanges}
-                </span>
+                <div className="flex flex-col items-start gap-0.5">
+                  <span className="text-[10px] text-gray-400">
+                    {changeIndex + 1}/{totalChanges}
+                  </span>
+                  {change.effect !== 'applied' && (
+                    <span className={cn(
+                      'text-[9px] uppercase tracking-wide',
+                      change.effect === 'reverted' ? 'text-amber-600' : 'text-gray-500'
+                    )}>
+                      {change.effect}
+                    </span>
+                  )}
+                </div>
               )}
             </td>
 
@@ -360,10 +371,10 @@ export function SlotRow({
   };
   const slotNumber = formatSlotNumber(slot.slot);
 
-  const getDisplayValue = (decoded: unknown, encoded: string): string => {
-    if (showHex) return encoded;
+  const getDisplayValue = (decoded: unknown, encoded: string | null): string => {
+    if (showHex) return encoded ?? 'unknown';
     if (decoded !== null && decoded !== undefined) return formatDecodedValue(decoded);
-    return encoded;
+    return encoded ?? 'unknown';
   };
 
   const formatKey = (key: string | null): { display: string; full: string } | null => {
@@ -760,7 +771,17 @@ export function SlotRow({
           <tr key={idx} className={cn('bg-gray-100/80', !isFirstChange && 'border-t border-gray-300')}>
             <td className="pl-3 py-0.5 align-top" />
             <td className="pl-3 py-0.5 align-top">
-              <span className="text-[10px] text-gray-400">{idx + 1}/{slot.changes.length}</span>
+              <div className="flex flex-col items-start gap-0.5">
+                <span className="text-[10px] text-gray-400">{idx + 1}/{slot.changes.length}</span>
+                {change.effect !== 'applied' && (
+                  <span className={cn(
+                    'text-[9px] uppercase tracking-wide',
+                    change.effect === 'reverted' ? 'text-amber-600' : 'text-gray-500'
+                  )}>
+                    {change.effect}
+                  </span>
+                )}
+              </div>
             </td>
             <td className="pl-3 py-0.5 align-top">
               <div className="flex flex-col">

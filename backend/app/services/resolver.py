@@ -15,6 +15,7 @@ from app.repositories.contracts import ContractRepository
 from app.services.layout import LayoutParser
 from app.services.namespace_storage import NamespaceStorageParser
 from app.services.web3_provider import Web3Provider
+from app.repositories.compiler_artifacts import CompilerArtifactRepository
 
 logger = logging.getLogger(__name__)
 
@@ -62,12 +63,18 @@ class ContractResolver:
         settings: Settings,
         contract_repo: Optional[ContractRepository] = None,
         layout_parser: Optional[LayoutParser] = None,
+        http_client: Optional[httpx.AsyncClient] = None,
+        compiler_artifact_repo: Optional[CompilerArtifactRepository] = None,
     ):
         self.web3_provider = web3_provider
         self.settings = settings
         self.contract_repo = contract_repo
         self.layout_parser = layout_parser or LayoutParser()
         self.namespace_parser = NamespaceStorageParser()
+        self.http_client = http_client or httpx.AsyncClient(
+            timeout=settings.request_timeout_seconds
+        )
+        self.compiler_artifact_repo = compiler_artifact_repo
 
     async def resolve(
         self,
@@ -87,11 +94,25 @@ class ContractResolver:
         address = Web3.to_checksum_address(address)
 
         # Check cache first
-        if self.contract_repo:
+        if self.contract_repo and block_number is not None:
+            historical = await self.contract_repo.get_at_block(
+                chain_id, address, block_number
+            )
+            if historical and historical.is_verified and historical.storage_layout:
+                metadata = self.contract_repo.to_metadata(historical)
+                await self._hydrate_compiler_inputs(metadata)
+                return metadata
+
+        # The address cache is not block-versioned. It is safe only for latest;
+        # historical proxy/address resolution must inspect chain state at the
+        # requested block instead of reusing today's implementation/layout.
+        if self.contract_repo and block_number is None:
             cached = await self.contract_repo.get(chain_id, address)
             if cached and cached.is_verified and cached.storage_layout:
                 logger.debug(f"Cache hit for {address} on chain {chain_id}")
-                return self.contract_repo.to_metadata(cached)
+                metadata = self.contract_repo.to_metadata(cached)
+                await self._hydrate_compiler_inputs(metadata)
+                return metadata
 
         # Verify it's a contract
         bytecode = await self._check_is_contract(chain_id, address, block_number)
@@ -108,6 +129,7 @@ class ContractResolver:
         # Check bytecode cache for non-proxies and EIP-1167 minimal proxies
         # (EIP-1967/1822 proxies have same bytecode but different implementations, can't cache)
         parsed_layout = None
+        compiler_artifact = None
         cached_by_bytecode = None
         use_bytecode_cache = not proxy_info or proxy_info.proxy_type == "eip1167"
 
@@ -119,8 +141,11 @@ class ContractResolver:
 
         # Fetch verification only if we don't have a layout from bytecode cache
         verification = None
+        language = "Solidity"
         if not parsed_layout:
             verification = await self._fetch_verification(chain_id, verify_address)
+            if verification:
+                language = getattr(verification, "language", None) or "Solidity"
 
         if not parsed_layout and verification and verification.storage_layout:
             try:
@@ -131,24 +156,82 @@ class ContractResolver:
                     )
                 else:
                     parsed_layout = StorageLayout.from_dict(verification.storage_layout)
+                if parsed_layout and verification.sources and verification.compiler_version:
+                    standard_input = {
+                        "language": language,
+                        "sources": {
+                            filename: {"content": content}
+                            for filename, content in verification.sources.items()
+                        },
+                        "settings": verification.compiler_settings or {},
+                    }
+                    compiler_artifact = self.layout_parser._make_artifact(
+                        language=language,
+                        compiler_version=verification.compiler_version,
+                        pipeline="verified-layout",
+                        standard_input=standard_input,
+                        compiler_output={
+                            "storageLayout": verification.storage_layout,
+                        },
+                        sources=verification.sources,
+                    )
+                    if self.compiler_artifact_repo:
+                        await self.compiler_artifact_repo.save(compiler_artifact)
             except Exception as e:
                 logger.warning(f"Failed to parse layout from verification: {e}")
                 parsed_layout = None
         # If no layout from verification but sources available, compile
         if not parsed_layout and verification and verification.sources and verification.compiler_version:
-            language = getattr(verification, 'language', 'Solidity')
             logger.info(f"Compiling {language} layout for {verification.name} with {len(verification.sources)} source files")
             try:
+                if self.compiler_artifact_repo:
+                    if language == "Vyper":
+                        standard_input = {
+                            "language": "Vyper",
+                            "sources": {
+                                filename: {"content": content}
+                                for filename, content in verification.sources.items()
+                            },
+                            "settings": {"outputSelection": ["layout"]},
+                        }
+                        pipeline = "vvm-layout"
+                    else:
+                        standard_input = self.layout_parser.build_solidity_standard_input(
+                            verification.sources,
+                            verification.compiler_settings,
+                            verification.compiler_settings,
+                        )
+                        pipeline = "solc-standard-json"
+                    fingerprint = self.layout_parser.artifact_fingerprint(
+                        language=language,
+                        compiler_version=verification.compiler_version,
+                        pipeline=pipeline,
+                        standard_input=standard_input,
+                    )
+                    compiler_artifact = await self.compiler_artifact_repo.get(fingerprint)
+
+                if compiler_artifact and language == "Vyper":
+                    parsed_layout = self.layout_parser._normalize_vyper_layout(
+                        compiler_artifact.compiler_output["storageLayout"],
+                        verification.name or "",
+                    )
+                elif compiler_artifact:
+                    parsed_layout = self.layout_parser.parse_from_solc_output(
+                        verification.name or "",
+                        compiler_artifact.compiler_output,
+                        self._get_compilation_target(verification),
+                    )
                 if language == "Vyper":
                     # Compile Vyper to get storage layout
-                    parsed_layout = await self.layout_parser.parse_vyper(
-                        contract_name=verification.name or "",
-                        sources=verification.sources,
-                        compiler_version=verification.compiler_version,
-                    )
-                else:
+                    if parsed_layout is None:
+                        parsed_layout, compiler_artifact = await self.layout_parser.parse_vyper_with_artifact(
+                            contract_name=verification.name or "",
+                            sources=verification.sources,
+                            compiler_version=verification.compiler_version,
+                        )
+                elif parsed_layout is None:
                     # Solidity compilation
-                    parsed_layout = await self.layout_parser.parse(
+                    parsed_layout, compiler_artifact = await self.layout_parser.parse_with_artifact(
                         contract_name=verification.name or "",
                         sources=verification.sources,
                         compiler_version=verification.compiler_version,
@@ -156,6 +239,8 @@ class ContractResolver:
                         metadata_settings=verification.compiler_settings,
                         contract_fqname=self._get_compilation_target(verification),
                     )
+                if self.compiler_artifact_repo and compiler_artifact:
+                    await self.compiler_artifact_repo.save(compiler_artifact)
                 logger.info(f"Layout compiled: {len(parsed_layout.variables) if parsed_layout else 0} variables")
             except UnsupportedCompilerVersionError as e:
                 # Log the compiler version issue and continue without layout
@@ -206,6 +291,7 @@ class ContractResolver:
                 sources=None,  # Don't copy large source data
                 compiler_settings=None,
                 storage_layout=parsed_layout,
+                compiler_artifact_fingerprint=cached_by_bytecode.compiler_artifact_fingerprint,
             )
         else:
             result = ContractMetadata(
@@ -224,14 +310,48 @@ class ContractResolver:
                 sources=verification.sources if verification else None,
                 compiler_settings=verification.compiler_settings if verification else None,
                 storage_layout=parsed_layout,
+                compiler_artifact_fingerprint=(
+                    compiler_artifact.fingerprint if compiler_artifact else None
+                ),
             )
+
+        await self._hydrate_compiler_inputs(result)
 
         # Cache result only if verified AND has storage layout
         # (compilation may fail temporarily, we'll retry next request)
-        if self.contract_repo and result.is_verified and result.storage_layout:
+        if (
+            self.contract_repo
+            and block_number is None
+            and result.is_verified
+            and result.storage_layout
+        ):
             await self.contract_repo.save(result)
+        elif (
+            self.contract_repo
+            and block_number is not None
+            and result.is_verified
+            and result.storage_layout
+        ):
+            await self.contract_repo.save_at_block(result, block_number)
 
         return result
+
+    async def _hydrate_compiler_inputs(self, metadata: ContractMetadata) -> None:
+        """Restore sources/settings retained with the raw compiler artifact."""
+        if not (
+            metadata.compiler_artifact_fingerprint and self.compiler_artifact_repo
+        ):
+            return
+        artifact = await self.compiler_artifact_repo.get(
+            metadata.compiler_artifact_fingerprint
+        )
+        if not artifact:
+            return
+        metadata.sources = {
+            filename: source.get("content", "")
+            for filename, source in artifact.standard_input.get("sources", {}).items()
+        }
+        metadata.compiler_settings = artifact.standard_input.get("settings")
 
     async def is_contract(
         self,
@@ -250,11 +370,10 @@ class ContractResolver:
         self, chain_id: int, address: str, block: Optional[int]
     ) -> bytes:
         """Check if address is a contract and return bytecode."""
-        web3 = self.web3_provider.get_web3(chain_id)
-        block_id = block if block else "latest"
+        block_id = block if block is not None else "latest"
 
         try:
-            code = await web3.eth.get_code(address, block_identifier=block_id)
+            code = await self.web3_provider.get_code(chain_id, address, block_id)
         except Exception as e:
             raise RPCError("eth_getCode", str(e))
 
@@ -307,8 +426,7 @@ class ContractResolver:
         2. EIP-1967 implementation slot
         3. EIP-1822 UUPS slot
         """
-        web3 = self.web3_provider.get_web3(chain_id)
-        block_id = block if block else "latest"
+        block_id = block if block is not None else "latest"
 
         # Check EIP-1167 minimal proxy first (from bytecode)
         if bytecode:
@@ -322,17 +440,17 @@ class ContractResolver:
 
         try:
             # Fetch EIP-1967, EIP-1822, ZeppelinOS, and Beacon slots in parallel
-            impl_task = web3.eth.get_storage_at(
-                address, EIP1967_IMPL_SLOT, block_identifier=block_id
+            impl_task = self.web3_provider.get_storage_at(
+                chain_id, address, EIP1967_IMPL_SLOT, block_id
             )
-            uups_task = web3.eth.get_storage_at(
-                address, EIP1822_SLOT, block_identifier=block_id
+            uups_task = self.web3_provider.get_storage_at(
+                chain_id, address, EIP1822_SLOT, block_id
             )
-            zos_task = web3.eth.get_storage_at(
-                address, ZEPPELINOS_IMPL_SLOT, block_identifier=block_id
+            zos_task = self.web3_provider.get_storage_at(
+                chain_id, address, ZEPPELINOS_IMPL_SLOT, block_id
             )
-            beacon_task = web3.eth.get_storage_at(
-                address, EIP1967_BEACON_SLOT, block_identifier=block_id
+            beacon_task = self.web3_provider.get_storage_at(
+                chain_id, address, EIP1967_BEACON_SLOT, block_id
             )
             impl_value, uups_value, zos_value, beacon_value = await asyncio.gather(
                 impl_task, uups_task, zos_task, beacon_task
@@ -342,8 +460,8 @@ class ContractResolver:
 
             if impl_address and impl_address != ZERO_ADDRESS:
                 # EIP-1967 found, fetch admin slot
-                admin_value = await web3.eth.get_storage_at(
-                    address, EIP1967_ADMIN_SLOT, block_identifier=block_id
+                admin_value = await self.web3_provider.get_storage_at(
+                    chain_id, address, EIP1967_ADMIN_SLOT, block_id
                 )
                 admin_address = self._extract_address(bytes(admin_value))
 
@@ -370,8 +488,8 @@ class ContractResolver:
 
             if zos_address and zos_address != ZERO_ADDRESS:
                 # ZeppelinOS found, fetch admin slot
-                zos_admin_value = await web3.eth.get_storage_at(
-                    address, ZEPPELINOS_ADMIN_SLOT, block_identifier=block_id
+                zos_admin_value = await self.web3_provider.get_storage_at(
+                    chain_id, address, ZEPPELINOS_ADMIN_SLOT, block_id
                 )
                 zos_admin_address = self._extract_address(bytes(zos_admin_value))
 
@@ -389,9 +507,10 @@ class ContractResolver:
             if beacon_address and beacon_address != ZERO_ADDRESS:
                 # Beacon found, call implementation() on the beacon to get actual impl
                 try:
-                    impl_result = await web3.eth.call(
+                    impl_result = await self.web3_provider.eth_call(
+                        chain_id,
                         {"to": beacon_address, "data": BEACON_IMPL_SELECTOR},
-                        block_identifier=block_id,
+                        block_id,
                     )
                     beacon_impl_address = self._extract_address(bytes(impl_result))
 
@@ -482,11 +601,10 @@ class ContractResolver:
         """Query Sourcify API for verified source."""
         base_url = "https://sourcify.dev/server"
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
+        try:
                 # Try full match first
                 url = f"{base_url}/files/{chain_id}/{address}"
-                response = await client.get(url)
+                response = await self.http_client.get(url)
 
                 if response.status_code == 200:
                     data = response.json()
@@ -494,14 +612,14 @@ class ContractResolver:
 
                 # Try partial match
                 url = f"{base_url}/files/any/{chain_id}/{address}"
-                response = await client.get(url)
+                response = await self.http_client.get(url)
 
                 if response.status_code == 200:
                     data = response.json()
                     return self._parse_sourcify_response(data, "partial")
 
-            except httpx.RequestError as e:
-                logger.warning(f"Sourcify request failed: {e}")
+        except httpx.RequestError as e:
+            logger.warning(f"Sourcify request failed: {e}")
 
         return None
 
@@ -591,9 +709,8 @@ class ContractResolver:
             "apikey": api_key,
         }
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                response = await client.get(base_url, params=params)
+        try:
+                response = await self.http_client.get(base_url, params=params)
 
                 if response.status_code != 200:
                     return None
@@ -610,8 +727,8 @@ class ContractResolver:
 
                 return self._parse_etherscan_response(result)
 
-            except httpx.RequestError as e:
-                logger.warning(f"Etherscan request failed: {e}")
+        except httpx.RequestError as e:
+            logger.warning(f"Etherscan request failed: {e}")
 
         return None
 

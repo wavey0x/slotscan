@@ -223,6 +223,8 @@ async def get_layout(
                 size=v.size,
                 type_id=v.type_id,
                 type_label=_get_type_label(v),
+                provenance=v.provenance,
+                confidence=v.confidence,
             )
             for v in layout.variables
         ],

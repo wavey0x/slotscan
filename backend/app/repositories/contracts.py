@@ -1,6 +1,6 @@
 """Contract repository for database operations."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import select
@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
 
-from app.models.database import Contract
+from app.models.database import Contract, HistoricalContractResolution
 from app.models.domain import ContractMetadata, StorageLayout
 
 
@@ -24,6 +24,18 @@ class ContractRepository:
             select(Contract).where(
                 Contract.chain_id == chain_id,
                 Contract.address == address.lower(),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_at_block(
+        self, chain_id: int, address: str, block_number: int
+    ) -> Optional[HistoricalContractResolution]:
+        result = await self.session.execute(
+            select(HistoricalContractResolution).where(
+                HistoricalContractResolution.chain_id == chain_id,
+                HistoricalContractResolution.address == address.lower(),
+                HistoricalContractResolution.block_number == block_number,
             )
         )
         return result.scalar_one_or_none()
@@ -45,7 +57,7 @@ class ContractRepository:
         result = await self.session.execute(
             select(Contract).where(
                 Contract.code_hash == code_hash,
-                Contract.is_verified == True,
+                Contract.is_verified.is_(True),
                 Contract.storage_layout.isnot(None),
             ).limit(1)
         )
@@ -75,6 +87,7 @@ class ContractRepository:
             "is_verified": metadata.is_verified,
             "verification_source": metadata.verification_source,
             "compiler_version": metadata.compiler_version,
+            "compiler_artifact_fingerprint": metadata.compiler_artifact_fingerprint,
             "storage_layout": storage_layout_dict,
             "verified_at": datetime.utcnow() if metadata.is_verified else None,
         }
@@ -91,6 +104,7 @@ class ContractRepository:
                 "is_verified": values["is_verified"],
                 "verification_source": values["verification_source"],
                 "compiler_version": values["compiler_version"],
+                "compiler_artifact_fingerprint": values["compiler_artifact_fingerprint"],
                 "storage_layout": values["storage_layout"],
                 "verified_at": values["verified_at"],
                 "updated_at": func.now(),
@@ -101,6 +115,44 @@ class ContractRepository:
         await self.session.commit()
 
         return await self.get(metadata.chain_id, metadata.address)
+
+    async def save_at_block(
+        self, metadata: ContractMetadata, block_number: int
+    ) -> HistoricalContractResolution:
+        layout = (
+            metadata.storage_layout
+            if isinstance(metadata.storage_layout, dict)
+            else metadata.storage_layout.to_dict()
+            if metadata.storage_layout
+            else None
+        )
+        values = {
+            "chain_id": metadata.chain_id,
+            "address": metadata.address.lower(),
+            "block_number": block_number,
+            "code_hash": metadata.code_hash,
+            "is_proxy": metadata.is_proxy,
+            "proxy_type": metadata.proxy_type,
+            "implementation_address": (
+                metadata.implementation_address.lower()
+                if metadata.implementation_address
+                else None
+            ),
+            "is_verified": metadata.is_verified,
+            "verification_source": metadata.verification_source,
+            "name": metadata.name,
+            "compiler_version": metadata.compiler_version,
+            "compiler_artifact_fingerprint": metadata.compiler_artifact_fingerprint,
+            "storage_layout": layout,
+        }
+        stmt = insert(HistoricalContractResolution).values(**values)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["chain_id", "address", "block_number"],
+            set_=values,
+        )
+        await self.session.execute(stmt)
+        await self.session.commit()
+        return await self.get_at_block(metadata.chain_id, metadata.address, block_number)
 
     async def needs_verification_refresh(
         self, chain_id: int, address: str, max_age_hours: int = 24
@@ -137,4 +189,5 @@ class ContractRepository:
             name=contract.name,
             compiler_version=contract.compiler_version,
             storage_layout=storage_layout,
+            compiler_artifact_fingerprint=contract.compiler_artifact_fingerprint,
         )

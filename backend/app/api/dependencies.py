@@ -3,13 +3,14 @@
 from functools import lru_cache
 
 from fastapi import Depends
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.db import get_session
-from app.repositories.cache import CacheRepository
 from app.repositories.contracts import ContractRepository
 from app.repositories.trace_cache import TraceCacheRepository
+from app.repositories.compiler_artifacts import CompilerArtifactRepository
 from app.services.decoder import TypeDecoder
 from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
@@ -25,16 +26,21 @@ def get_web3_provider() -> Web3Provider:
     return Web3Provider(settings)
 
 
-@lru_cache()
 def get_decoder() -> TypeDecoder:
-    """Get cached TypeDecoder instance."""
+    """Get a request-scoped decoder; registries are contract-specific."""
     return TypeDecoder()
 
 
 @lru_cache()
 def get_layout_parser() -> LayoutParser:
     """Get cached LayoutParser instance."""
-    return LayoutParser()
+    return LayoutParser(get_settings())
+
+
+@lru_cache()
+def get_verification_http_client() -> httpx.AsyncClient:
+    settings = get_settings()
+    return httpx.AsyncClient(timeout=settings.request_timeout_seconds)
 
 
 async def get_contract_repository(
@@ -44,16 +50,10 @@ async def get_contract_repository(
     return ContractRepository(session)
 
 
-async def get_cache_repository(
+async def get_compiler_artifact_repository(
     session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
-) -> CacheRepository:
-    """Get CacheRepository with session."""
-    return CacheRepository(
-        session,
-        snapshot_ttl_minutes=settings.cache_snapshot_ttl_minutes,
-        tx_diff_ttl_minutes=settings.cache_tx_diff_ttl_minutes,
-    )
+) -> CompilerArtifactRepository:
+    return CompilerArtifactRepository(session)
 
 
 async def get_trace_cache_repository(
@@ -68,6 +68,10 @@ async def get_contract_resolver(
     settings: Settings = Depends(get_settings),
     contract_repo: ContractRepository = Depends(get_contract_repository),
     layout_parser: LayoutParser = Depends(get_layout_parser),
+    http_client: httpx.AsyncClient = Depends(get_verification_http_client),
+    compiler_artifact_repo: CompilerArtifactRepository = Depends(
+        get_compiler_artifact_repository
+    ),
 ) -> ContractResolver:
     """Get ContractResolver with dependencies."""
     return ContractResolver(
@@ -75,6 +79,8 @@ async def get_contract_resolver(
         settings=settings,
         contract_repo=contract_repo,
         layout_parser=layout_parser,
+        http_client=http_client,
+        compiler_artifact_repo=compiler_artifact_repo,
     )
 
 
@@ -82,14 +88,12 @@ async def get_storage_reader(
     web3_provider: Web3Provider = Depends(get_web3_provider),
     settings: Settings = Depends(get_settings),
     decoder: TypeDecoder = Depends(get_decoder),
-    cache_repo: CacheRepository = Depends(get_cache_repository),
 ) -> StorageReader:
     """Get StorageReader with dependencies."""
     return StorageReader(
         web3_provider=web3_provider,
         settings=settings,
         decoder=decoder,
-        cache_repo=cache_repo,
     )
 
 
@@ -97,7 +101,6 @@ async def get_transaction_tracer(
     web3_provider: Web3Provider = Depends(get_web3_provider),
     settings: Settings = Depends(get_settings),
     decoder: TypeDecoder = Depends(get_decoder),
-    cache_repo: CacheRepository = Depends(get_cache_repository),
     trace_cache_repo: TraceCacheRepository = Depends(get_trace_cache_repository),
 ) -> TransactionTracer:
     """Get TransactionTracer with dependencies."""
@@ -105,6 +108,5 @@ async def get_transaction_tracer(
         web3_provider=web3_provider,
         settings=settings,
         decoder=decoder,
-        cache_repo=cache_repo,
         trace_cache_repo=trace_cache_repo,
     )

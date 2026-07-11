@@ -14,8 +14,14 @@ logger = logging.getLogger(__name__)
 class TypeDecoder:
     """Decodes raw storage slot values to typed Python values."""
 
-    # Type registry for looking up types by ID (set by caller when available)
-    _type_registry: dict[str, StorageType] = {}
+    def __init__(self, type_registry: Optional[dict[str, StorageType]] = None):
+        # Registry state is instance-local. The old class attribute leaked one
+        # contract's types into every request using the singleton decoder.
+        self._type_registry: dict[str, StorageType] = dict(type_registry or {})
+
+    def bound(self, types: dict[str, StorageType]) -> "TypeDecoder":
+        """Return an immutable-by-convention decoder for one layout."""
+        return TypeDecoder(types)
 
     def set_type_registry(self, types: dict[str, StorageType]) -> None:
         """Set the type registry for looking up nested types during decoding."""
@@ -629,3 +635,6 @@ class TypeDecoder:
                 result[var.name] = decoded
 
         return result
+
+
+ValueDecoder = TypeDecoder

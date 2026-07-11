@@ -1,7 +1,6 @@
 """Application configuration loaded from environment variables."""
 
 from functools import lru_cache
-from typing import Optional
 from pydantic_settings import BaseSettings
 from pydantic import Field
 
@@ -35,14 +34,21 @@ class Settings(BaseSettings):
     # Etherscan API
     etherscan_api_key_1: str = Field(default="", alias="ETHERSCAN_API_KEY_1")
 
-    # Cache settings
-    cache_snapshot_ttl_minutes: int = Field(default=30, alias="CACHE_SNAPSHOT_TTL_MINUTES")
-    cache_tx_diff_ttl_minutes: int = Field(default=0, alias="CACHE_TX_DIFF_TTL_MINUTES")
-
     # Limits
     max_slots_per_contract: int = Field(default=10000, alias="MAX_SLOTS_PER_CONTRACT")
     max_sstore_ops: int = Field(default=10000, alias="MAX_SSTORE_OPS")
     request_timeout_seconds: int = Field(default=45, alias="REQUEST_TIMEOUT_SECONDS")
+
+    # Compiler isolation
+    allow_compiler_install: bool = Field(default=False, alias="ALLOW_COMPILER_INSTALL")
+    max_installed_compilers: int = Field(default=64, alias="MAX_INSTALLED_COMPILERS")
+    max_parallel_compilations: int = Field(default=2, alias="MAX_PARALLEL_COMPILATIONS")
+    compiler_timeout_seconds: int = Field(default=120, alias="COMPILER_TIMEOUT_SECONDS")
+    compiler_memory_limit_mb: int = Field(default=1536, alias="COMPILER_MEMORY_LIMIT_MB")
+    max_compilation_input_bytes: int = Field(
+        default=5 * 1024 * 1024,
+        alias="MAX_COMPILATION_INPUT_BYTES",
+    )
 
     model_config = {
         "env_file": "../.env",

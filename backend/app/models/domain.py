@@ -1,7 +1,7 @@
 """Domain models for SlotScan."""
 
 import re
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from typing import Optional, Any
 
 # Pre-compiled regex patterns for type synthesis (performance optimization)
@@ -27,6 +27,8 @@ class StorageVariable:
     size: int
     type_id: str
     label: str
+    provenance: str = "compiler_layout"
+    confidence: str = "exact"
 
 
 @dataclass
@@ -78,40 +80,50 @@ class StorageLayout:
         nothing for mappings, or the array length for dynamic arrays).
         Does not attempt to resolve hashed element slots (requires keys/indices).
         """
-        for var in self.variables:
-            var_type = self.get_type(var.type_id)  # Use get_type() for synthesis fallback
-            if not var_type:
-                continue
+        # Imported lazily to keep domain models independent of service wiring.
+        from app.services.layout_index import LayoutIndex
 
-            # For mappings/dynamic arrays, only match the exact base slot
-            if var_type.encoding in ("mapping", "dynamic_array"):
-                if var.slot == slot:
-                    return var
-                continue
-
-            # Calculate span - for static arrays, use array_length * element_slots
-            # Skip Vyper String[N] types which have array_length but aren't real arrays
-            is_vyper_string = var_type.element_type and var_type.element_type.lower() in ("string", "bytes")
-            if var_type.array_length and var_type.element_type and not is_vyper_string:
-                element_type = self.get_type(var_type.element_type)
-                element_slots = 1
-                if element_type and element_type.num_bytes:
-                    element_slots = max(1, (element_type.num_bytes + 31) // 32)
-                span_slots = var_type.array_length * element_slots
-            else:
-                span_slots = max(1, (var.size + 31) // 32 if var.size else 1)
-
-            if var.slot <= slot < var.slot + span_slots:
-                return var
-        return None
+        entry = LayoutIndex(self).first_at(slot)
+        return entry.variable if entry else None
 
     def get_mapping_by_base_slot(self, slot: int) -> Optional[StorageVariable]:
-        """Find mapping variable whose base slot matches."""
+        """
+        Find mapping variable whose base slot matches.
+
+        Searches both top-level variables and mappings inside struct members.
+        For struct members, returns a StorageVariable with the full path name
+        (e.g., "vaultStorage.users" instead of just "users").
+        """
+        # First, check top-level variables (direct mappings)
         for var in self.variables:
             if var.slot == slot:
                 var_type = self.types.get(var.type_id)
                 if var_type and var_type.encoding == "mapping":
                     return var
+
+        # Second, check mappings inside struct members
+        # For a struct at slot N, a member at relative slot M has absolute slot N+M
+        for var in self.variables:
+            var_type = self.types.get(var.type_id)
+            if not var_type or var_type.kind != "struct" or not var_type.members:
+                continue
+
+            # Check each member of the struct
+            for member in var_type.members:
+                absolute_slot = var.slot + member.slot
+                if absolute_slot == slot:
+                    member_type = self.types.get(member.type_id)
+                    if member_type and member_type.encoding == "mapping":
+                        # Return a synthetic variable with full path name
+                        return StorageVariable(
+                            name=f"{var.name}.{member.name}",
+                            slot=absolute_slot,  # Use absolute slot
+                            offset=member.offset,
+                            size=member.size,
+                            type_id=member.type_id,
+                            label=member.label,
+                        )
+
         return None
 
     def get_all_variables_in_slot(self, slot: int) -> list[StorageVariable]:
@@ -142,17 +154,34 @@ class StorageLayout:
         if var_type.element_type and var_type.element_type.lower() in ("string", "bytes"):
             return None
 
-        # Calculate element size in slots
+        # A packed slot can contain multiple array elements. This compatibility
+        # helper returns the first; callers that decode values must use
+        # ``get_static_array_locations`` and inspect every byte range.
+        locations = self.get_static_array_locations(var, slot)
+        return locations[0][0] if locations else None
+
+    def get_static_array_locations(
+        self, var: StorageVariable, slot: int
+    ) -> tuple[tuple[int, Any], ...]:
+        """Return every static-array element represented by a storage word."""
+        from app.services.layout_index import array_packing
+
+        var_type = self.get_type(var.type_id)
+        if (
+            not var_type
+            or var_type.encoding != "inplace"
+            or var_type.array_length is None
+            or not var_type.element_type
+            or var_type.element_type.lower() in {"string", "bytes"}
+        ):
+            return ()
         element_type = self.get_type(var_type.element_type) if var_type.element_type else None
-        element_slots = 1
-        if element_type and element_type.num_bytes:
-            element_slots = (element_type.num_bytes + 31) // 32
-
-        offset = slot - var.slot
-        if offset < 0 or offset >= var_type.array_length * element_slots:
-            return None
-
-        return offset // element_slots
+        packing = array_packing(element_type)
+        return packing.locations_in_slot(
+            var.slot,
+            slot,
+            length=var_type.array_length,
+        )
 
     def get_type(self, type_id: str) -> Optional[StorageType]:
         """Get type definition by ID, synthesizing primitives if not found."""
@@ -452,6 +481,23 @@ class DecodedValue:
     decoded: Any
     type_label: str
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "raw": self.raw,
+            "decoded": self.decoded,
+            "type_label": self.type_label,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DecodedValue":
+        # Older cache rows may contain the removed presentation-only `display`
+        # property. Domain deserialization intentionally ignores it.
+        return cls(
+            raw=data["raw"],
+            decoded=data.get("decoded"),
+            type_label=data["type_label"],
+        )
+
 
 @dataclass
 class SlotValue:
@@ -488,16 +534,7 @@ class StorageSnapshot:
                     "raw_value": s.raw_value,
                     "variable_path": s.variable_path,
                     "variable": asdict(s.variable) if s.variable else None,
-                    "decoded_value": (
-                        {
-                            "raw": s.decoded_value.raw,
-                            "decoded": s.decoded_value.decoded,
-                            "type_label": s.decoded_value.type_label,
-                            "display": s.decoded_value.display,
-                        }
-                        if s.decoded_value
-                        else None
-                    ),
+                    "decoded_value": s.decoded_value.to_dict() if s.decoded_value else None,
                 }
                 for s in self.slots
             ],
@@ -511,7 +548,7 @@ class StorageSnapshot:
             variable = StorageVariable(**s["variable"]) if s.get("variable") else None
             decoded = None
             if s.get("decoded_value"):
-                decoded = DecodedValue(**s["decoded_value"])
+                decoded = DecodedValue.from_dict(s["decoded_value"])
             slots.append(
                 SlotValue(
                     slot=s["slot"],
@@ -536,7 +573,7 @@ class StorageChange:
     """A single storage slot change in a transaction."""
 
     slot: str
-    old_value: str
+    old_value: Optional[str]
     new_value: str
     mapping_base_slot: Optional[int] = None
     variable: Optional[StorageVariable] = None
@@ -553,6 +590,14 @@ class StorageChange:
     array_index: Optional[int] = None  # Array index for dynamic array entries
     change_index: int = 0  # Order of change within transaction
     pc: Optional[int] = None  # Program counter of the SSTORE operation
+    effect: str = "applied"  # applied | noop | reverted
+    frame_id: Optional[int] = None
+    depth: Optional[int] = None
+    opcode: str = "SSTORE"
+    namespace: str = "persistent"
+    state_initial_value: Optional[str] = None
+    state_final_value: Optional[str] = None
+    state_values_known: bool = True
 
 
 @dataclass
@@ -569,6 +614,10 @@ class TransactionDiff:
     trace_unavailable: bool = False
     contract_name: Optional[str] = None  # Name of the contract
     execution_order_available: bool = False  # True if step values are real EVM execution order
+    frame_outcomes_available: bool = False
+    write_old_values_available: bool = False
+    final_state_values_available: bool = False
+    trace_step_count: Optional[int] = None
 
     def to_dict(self) -> dict:
         """Serialize for caching."""
@@ -581,6 +630,10 @@ class TransactionDiff:
             "trace_unavailable": self.trace_unavailable,
             "contract_name": self.contract_name,
             "execution_order_available": self.execution_order_available,
+            "frame_outcomes_available": self.frame_outcomes_available,
+            "write_old_values_available": self.write_old_values_available,
+            "final_state_values_available": self.final_state_values_available,
+            "trace_step_count": self.trace_step_count,
             "changes": [
                 {
                     "slot": c.slot,
@@ -594,28 +647,20 @@ class TransactionDiff:
                     "encoding": c.encoding,
                     "key_type": c.key_type,
                     "value_type": c.value_type,
+                    "element_type_id": c.element_type_id,
+                    "array_index": c.array_index,
                     "change_index": c.change_index,
                     "pc": c.pc,
-                    "old_decoded": (
-                        {
-                            "raw": c.old_decoded.raw,
-                            "decoded": c.old_decoded.decoded,
-                            "type_label": c.old_decoded.type_label,
-                            "display": c.old_decoded.display,
-                        }
-                        if c.old_decoded
-                        else None
-                    ),
-                    "new_decoded": (
-                        {
-                            "raw": c.new_decoded.raw,
-                            "decoded": c.new_decoded.decoded,
-                            "type_label": c.new_decoded.type_label,
-                            "display": c.new_decoded.display,
-                        }
-                        if c.new_decoded
-                        else None
-                    ),
+                    "effect": c.effect,
+                    "frame_id": c.frame_id,
+                    "depth": c.depth,
+                    "opcode": c.opcode,
+                    "namespace": c.namespace,
+                    "state_initial_value": c.state_initial_value,
+                    "state_final_value": c.state_final_value,
+                    "state_values_known": c.state_values_known,
+                    "old_decoded": c.old_decoded.to_dict() if c.old_decoded else None,
+                    "new_decoded": c.new_decoded.to_dict() if c.new_decoded else None,
                 }
                 for c in self.changes
             ],
@@ -628,10 +673,10 @@ class TransactionDiff:
         for c in data.get("changes", []):
             variable = StorageVariable(**c["variable"]) if c.get("variable") else None
             old_decoded = (
-                DecodedValue(**c["old_decoded"]) if c.get("old_decoded") else None
+                DecodedValue.from_dict(c["old_decoded"]) if c.get("old_decoded") else None
             )
             new_decoded = (
-                DecodedValue(**c["new_decoded"]) if c.get("new_decoded") else None
+                DecodedValue.from_dict(c["new_decoded"]) if c.get("new_decoded") else None
             )
             changes.append(
                 StorageChange(
@@ -648,8 +693,18 @@ class TransactionDiff:
                     encoding=c.get("encoding"),
                     key_type=c.get("key_type"),
                     value_type=c.get("value_type"),
+                    element_type_id=c.get("element_type_id"),
+                    array_index=c.get("array_index"),
                     change_index=c.get("change_index", 0),
                     pc=c.get("pc"),
+                    effect=c.get("effect", "applied"),
+                    frame_id=c.get("frame_id"),
+                    depth=c.get("depth"),
+                    opcode=c.get("opcode", "SSTORE"),
+                    namespace=c.get("namespace", "persistent"),
+                    state_initial_value=c.get("state_initial_value"),
+                    state_final_value=c.get("state_final_value"),
+                    state_values_known=c.get("state_values_known", True),
                 )
             )
         return cls(
@@ -663,7 +718,24 @@ class TransactionDiff:
             layout=None,
             contract_name=data.get("contract_name"),
             execution_order_available=data.get("execution_order_available", False),
+            frame_outcomes_available=data.get("frame_outcomes_available", False),
+            write_old_values_available=data.get("write_old_values_available", False),
+            final_state_values_available=data.get("final_state_values_available", False),
+            trace_step_count=data.get("trace_step_count"),
         )
+
+
+@dataclass(frozen=True)
+class RawCompilerArtifact:
+    """Versioned raw compiler evidence retained independently of parsing."""
+
+    fingerprint: str
+    language: str
+    compiler_version: str
+    pipeline: str
+    standard_input: dict
+    compiler_output: dict
+    source_hashes: dict[str, str]
 
 
 @dataclass
@@ -683,6 +755,7 @@ class ContractMetadata:
     sources: Optional[dict[str, str]] = None
     compiler_settings: Optional[dict] = None
     storage_layout: Optional[StorageLayout] = None
+    compiler_artifact_fingerprint: Optional[str] = None
 
 
 @dataclass

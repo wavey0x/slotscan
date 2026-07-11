@@ -1,7 +1,7 @@
 """Transaction tracer for extracting storage changes from transactions."""
 
-import asyncio
 import logging
+from dataclasses import asdict
 from typing import Optional
 
 from web3 import Web3
@@ -11,43 +11,47 @@ from app.models.domain import (
     DecodedValue,
     StorageChange,
     StorageLayout,
-    StorageType,
-    StorageVariable,
     TransactionDiff,
 )
 from app.models.errors import TraceNotAvailableError
-from app.repositories.cache import CacheRepository
-from app.repositories.trace_cache import TraceCacheRepository, CachedTraceData
+from app.repositories.trace_cache import (
+    TraceCacheRepository,
+    TransactionTraceArtifactData,
+)
 from app.services.decoder import TypeDecoder
 from app.services.web3_provider import Web3Provider
 from app.services.tracer.rpc_client import TraceRPCClient
 from app.services.tracer.preimage_resolver import PreimageResolver
 from app.services.tracer.slot_resolver import SlotResolver
+from app.services.layout_index import array_packing
+from app.services.layout_index import LayoutIndex, StorageLocation, StorageNamespace
+from app.services.tracer.journal import StorageJournal, StorageJournalBuilder
+from app.services.tracer.extractor import TransactionTraceExtractor
 
 logger = logging.getLogger(__name__)
 
 
-class TransactionTracer:
-    """Traces transactions to extract storage changes."""
+class TransactionAnalysisService:
+    """Orchestrate transaction evidence, journaling, resolution, and decoding."""
 
     def __init__(
         self,
         web3_provider: Web3Provider,
         settings: Settings,
         decoder: TypeDecoder,
-        cache_repo: Optional[CacheRepository] = None,
         trace_cache_repo: Optional[TraceCacheRepository] = None,
     ):
         self.web3_provider = web3_provider
         self.settings = settings
         self.decoder = decoder
-        self.cache_repo = cache_repo
         self.trace_cache_repo = trace_cache_repo
 
         # Composed services
         self.rpc_client = TraceRPCClient(web3_provider)
+        self.trace_extractor = TransactionTraceExtractor(self.rpc_client)
         self.preimage_resolver = PreimageResolver()
         self.slot_resolver = SlotResolver()
+        self.journal_builder = StorageJournalBuilder()
 
     async def trace_transaction(
         self,
@@ -65,24 +69,33 @@ class TransactionTracer:
         """
         contract_address = Web3.to_checksum_address(contract_address)
 
-        # Check trace cache first
         cached_trace = None
         if self.trace_cache_repo:
-            cached_trace = await self.trace_cache_repo.get(chain_id, tx_hash, contract_address)
+            cached_trace = await self.trace_cache_repo.get(chain_id, tx_hash)
 
         if cached_trace:
             logger.info(f"Trace cache HIT for {tx_hash[:10]}... - skipping RPC calls")
 
-            raw_changes = cached_trace.raw_changes
+            raw_changes, cached_journal, had_unknown_sstores = self._build_changes_from_sstore_trace(
+                cached_trace.write_events,
+                cached_trace.prestate_diff,
+                contract_address,
+                root_succeeded=cached_trace.root_succeeded,
+                evm_step_count=cached_trace.trace_step_count,
+            )
             preimage_lookup = cached_trace.preimage_lookup
             block_number = cached_trace.block_number
-            execution_order_available = True
+            execution_order_available = cached_journal.capabilities.execution_order
 
-            is_complete = len(raw_changes) <= self.settings.max_sstore_ops
-            if not is_complete:
+            is_complete = (
+                len(raw_changes) <= self.settings.max_sstore_ops
+                and not had_unknown_sstores
+            )
+            if len(raw_changes) > self.settings.max_sstore_ops:
                 raw_changes = raw_changes[: self.settings.max_sstore_ops]
 
             decoded_changes = self._decode_changes(raw_changes, layout, preimage_lookup)
+            self._apply_journal_metadata(decoded_changes, cached_journal, contract_address)
 
             return TransactionDiff(
                 chain_id=chain_id,
@@ -94,15 +107,16 @@ class TransactionTracer:
                 layout=layout,
                 trace_unavailable=False,
                 execution_order_available=execution_order_available,
+                frame_outcomes_available=cached_journal.capabilities.frame_outcomes,
+                write_old_values_available=cached_journal.capabilities.write_old_values,
+                final_state_values_available=cached_journal.capabilities.final_state_values,
+                trace_step_count=cached_trace.trace_step_count,
             )
 
         logger.info(f"Trace cache MISS for {tx_hash[:10]}... - executing RPC calls")
 
         try:
-            trace_result, receipt = await asyncio.gather(
-                self.rpc_client.execute_prestate_trace(chain_id, tx_hash),
-                self.rpc_client.get_receipt(chain_id, tx_hash),
-            )
+            evidence = await self.trace_extractor.extract(chain_id, tx_hash)
         except TraceNotAvailableError:
             receipt = await self.rpc_client.get_receipt(chain_id, tx_hash)
             return TransactionDiff(
@@ -116,18 +130,13 @@ class TransactionTracer:
                 trace_unavailable=True,
             )
 
+        trace_result = evidence.prestate_diff
+        receipt = evidence.receipt
+        sstore_trace = evidence.writes
+        sha3_trace = evidence.sha3_operations
+        evm_step_count = evidence.evm_step_count
         block_number = receipt["blockNumber"]
         prestate_changes = self._extract_contract_changes(trace_result, contract_address)
-
-        tx_to_address = receipt.get("to")
-        if not tx_to_address:
-            tx_to_address = receipt.get("contractAddress")
-            if tx_to_address:
-                logger.info(f"Contract creation transaction - using created address: {tx_to_address}")
-
-        sstore_trace, sha3_trace = await self.rpc_client.execute_structlogs_trace(
-            chain_id, tx_hash, tx_to_address
-        )
 
         preimage_lookup = self.preimage_resolver.build_preimage_lookup(sha3_trace)
 
@@ -140,38 +149,53 @@ class TransactionTracer:
 
         execution_order_available = False
         trace_step_count = 0
-        if sstore_trace:
-            raw_changes, had_unknown_sstores = self._build_changes_from_sstore_trace(
-                sstore_trace, trace_result, contract_address
+        journal: StorageJournal | None = None
+        had_unknown_sstores = False
+        if evm_step_count:
+            raw_changes, journal, had_unknown_sstores = self._build_changes_from_sstore_trace(
+                sstore_trace,
+                trace_result,
+                contract_address,
+                root_succeeded=int(receipt.get("status", 1)) == 1,
+                evm_step_count=evm_step_count,
             )
             execution_order_available = True
-            trace_step_count = len(sstore_trace) + len(sha3_trace)
+            trace_step_count = evm_step_count
         else:
             raw_changes = [
-                (self._normalize_slot(slot), old, new, None, None)
+                (self._normalize_slot(slot), old, new, None, i)
                 for i, (slot, old, new) in enumerate(prestate_changes)
             ]
             execution_order_available = False
 
-        if self.trace_cache_repo:
+        if self.trace_cache_repo and journal:
             try:
-                await self.trace_cache_repo.save(CachedTraceData(
-                    chain_id=chain_id,
-                    tx_hash=tx_hash,
-                    contract_address=contract_address,
-                    block_number=block_number,
-                    raw_changes=raw_changes,
-                    preimage_lookup=preimage_lookup,
-                    trace_step_count=trace_step_count,
-                ))
+                await self.trace_cache_repo.save(
+                    TransactionTraceArtifactData(
+                        chain_id=chain_id,
+                        tx_hash=tx_hash,
+                        block_number=block_number,
+                        root_succeeded=journal.root_succeeded,
+                        write_events=sstore_trace,
+                        prestate_diff=trace_result,
+                        preimage_lookup=preimage_lookup,
+                        capabilities=asdict(journal.capabilities),
+                        trace_step_count=trace_step_count or None,
+                    )
+                )
             except Exception as e:
-                logger.warning(f"Failed to save trace to cache: {e}")
+                logger.warning(f"Failed to save trace artifact: {e}")
 
-        is_complete = len(raw_changes) <= self.settings.max_sstore_ops
+        is_complete = (
+            len(raw_changes) <= self.settings.max_sstore_ops
+            and not had_unknown_sstores
+        )
         if not is_complete:
             raw_changes = raw_changes[: self.settings.max_sstore_ops]
 
         decoded_changes = self._decode_changes(raw_changes, layout, preimage_lookup)
+        if journal:
+            self._apply_journal_metadata(decoded_changes, journal, contract_address)
 
         diff = TransactionDiff(
             chain_id=chain_id,
@@ -183,15 +207,26 @@ class TransactionTracer:
             layout=layout,
             trace_unavailable=False,
             execution_order_available=execution_order_available,
+            frame_outcomes_available=(
+                journal.capabilities.frame_outcomes if journal else False
+            ),
+            write_old_values_available=(
+                journal.capabilities.write_old_values if journal else False
+            ),
+            final_state_values_available=(
+                journal.capabilities.final_state_values if journal else False
+            ),
+            trace_step_count=trace_step_count or None,
         )
-
-        if self.cache_repo:
-            await self.cache_repo.save_tx_diff(diff)
 
         return diff
 
     async def get_transaction_block(self, chain_id: int, tx_hash: str) -> int:
         """Get the block number a transaction was included in."""
+        if self.trace_cache_repo:
+            artifact = await self.trace_cache_repo.get(chain_id, tx_hash)
+            if artifact:
+                return artifact.block_number
         receipt = await self.rpc_client.get_receipt(chain_id, tx_hash)
         return receipt["blockNumber"]
 
@@ -200,59 +235,75 @@ class TransactionTracer:
         sstore_trace: list[dict],
         pre_state: dict,
         contract_address: str,
-    ) -> tuple[list[tuple[str, str, str, int | None, int]], bool]:
-        """Build list of (slot, old_value, new_value, pc, index) from SSTORE trace."""
+        *,
+        root_succeeded: bool = True,
+        evm_step_count: int | None = None,
+    ) -> tuple[
+        list[tuple[str, str | None, str, int | None, int]],
+        StorageJournal,
+        bool,
+    ]:
+        """Build a truthful legacy projection from the canonical write journal."""
+        journal = self.journal_builder.build(
+            sstore_trace,
+            pre_state,
+            root_succeeded=root_succeeded,
+            evm_step_count=evm_step_count,
+        )
         contract_address_lower = contract_address.lower()
-        zero_value = "0x" + "0" * 64
+        raw_changes: list[tuple[str, str | None, str, int | None, int]] = []
+        had_unknown_evidence = any(not op.get("address") for op in sstore_trace)
 
-        pre_storage: dict[str, str] = {}
-        post_storage: dict[str, str] = {}
-        for addr, state in pre_state.get("pre", {}).items():
-            if addr.lower() == contract_address_lower:
-                raw_storage = state.get("storage", {})
-                for slot, value in raw_storage.items():
-                    normalized_slot = self._normalize_slot(slot)
-                    pre_storage[normalized_slot] = self._normalize_value(value)
-                break
-        for addr, state in pre_state.get("post", {}).items():
-            if addr.lower() == contract_address_lower:
-                raw_storage = state.get("storage", {})
-                for slot, value in raw_storage.items():
-                    normalized_slot = self._normalize_slot(slot)
-                    post_storage[normalized_slot] = self._normalize_value(value)
-                break
+        for history in journal.for_contract(
+            contract_address_lower,
+            StorageNamespace.PERSISTENT,
+        ):
+            for event in history.writes:
+                if event.value_before is None:
+                    had_unknown_evidence = True
+                raw_changes.append(
+                    (
+                        event.slot,
+                        event.value_before,
+                        event.value_after,
+                        event.pc,
+                        event.step,
+                    )
+                )
 
-        slot_current_value: dict[str, str] = dict(pre_storage)
-        changes: list[tuple[str, str, str, int | None, int]] = []
-        had_unknown_address = False
+        raw_changes.sort(key=lambda change: change[4])
+        return raw_changes, journal, had_unknown_evidence
 
-        for op in sorted(sstore_trace, key=lambda x: x.get("index", 0)):
-            op_addr = (op.get("address") or "").lower()
-            slot = self._normalize_slot(op.get("slot", "0x0"))
+    def _apply_journal_metadata(
+        self,
+        changes: list[StorageChange],
+        journal: StorageJournal,
+        contract_address: str,
+    ) -> None:
+        histories = journal.for_contract(
+            contract_address,
+            StorageNamespace.PERSISTENT,
+        )
+        history_by_slot = {history.slot: history for history in histories}
+        events_by_key = {
+            (event.slot, event.step): event
+            for history in histories
+            for event in history.writes
+        }
 
-            address_matches = op_addr == contract_address_lower
-            addr_unknown = not op_addr
-
-            if addr_unknown:
-                had_unknown_address = True
-
-            should_accept = address_matches
-
-            if not should_accept:
-                continue
-
-            new_value = self._normalize_value(op.get("value", zero_value))
-            pc = op.get("pc")
-            index = op.get("index", 0)
-
-            old_value = slot_current_value.get(slot, zero_value)
-
-            if old_value != new_value:
-                changes.append((slot, old_value, new_value, pc, index))
-
-            slot_current_value[slot] = new_value
-
-        return changes, had_unknown_address
+        for change in changes:
+            history = history_by_slot.get(change.slot)
+            event = events_by_key.get((change.slot, change.change_index))
+            if history:
+                change.state_initial_value = history.initial_value
+                change.state_final_value = history.final_value
+                change.state_values_known = history.state_values_known
+            if event:
+                change.effect = event.effect.value
+                change.frame_id = event.frame_id
+                change.depth = event.depth
+                change.opcode = event.opcode
+                change.namespace = event.namespace.value
 
     def _extract_contract_changes(
         self, trace_result: dict, contract_address: str
@@ -315,13 +366,14 @@ class TransactionTracer:
 
     def _decode_changes(
         self,
-        raw_changes: list[tuple[str, str, str, int | None, int]],
+        raw_changes: list[tuple[str, str | None, str, int | None, int]],
         layout: Optional[StorageLayout],
         preimage_lookup: Optional[dict[str, str]] = None,
     ) -> list[StorageChange]:
         """Convert raw slot changes to decoded StorageChange objects."""
         decoded_changes = []
-        base_slot_index = layout.get_base_slot_index() if layout else {}
+        layout_index = LayoutIndex(layout) if layout else None
+        decoder = self.decoder.bound(layout.types) if layout else self.decoder.bound({})
         dynamic_array_index = self.slot_resolver.build_dynamic_array_index(layout) if layout else {}
         dynamic_bytes_index = self.slot_resolver.build_dynamic_bytes_index(layout) if layout else {}
         static_array_index = self.slot_resolver.build_static_array_index(layout) if layout else {}
@@ -343,9 +395,6 @@ class TransactionTracer:
             if mapping_to_array_index:
                 logger.info(f"Built mapping-to-array index with {len(mapping_to_array_index)} entries")
 
-        if layout and layout.types:
-            self.decoder.set_type_registry(layout.types)
-
         matched_slots: dict[int, dict] = {}
 
         stats = {
@@ -366,6 +415,7 @@ class TransactionTracer:
         for change_idx, (slot_hex, old_value, new_value, pc, exec_index) in enumerate(raw_changes):
             stats["total"] += 1
             resolution_path = "unknown"
+            reported_old_value = old_value
 
             if change_idx > 0 and change_idx % 50 == 0:
                 logger.info(f"  Decoded {change_idx}/{total_changes} changes...")
@@ -375,6 +425,32 @@ class TransactionTracer:
                     slot_int = int(slot_hex, 16)
                 except Exception:
                     slot_int = 0
+
+                packed_array_changes = self._decode_packed_array_change(
+                    slot_int=slot_int,
+                    slot_hex=slot_hex,
+                    old_value=old_value,
+                    new_value=new_value,
+                    pc=pc,
+                    exec_index=exec_index,
+                    layout=layout,
+                    layout_index=layout_index,
+                    decoder=decoder,
+                    dynamic_array_index=dynamic_array_index,
+                    mapping_to_array_index=mapping_to_array_index,
+                )
+                if packed_array_changes is not None:
+                    decoded_changes.extend(packed_array_changes)
+                    stats[
+                        "static_array"
+                        if packed_array_changes[0].encoding == "inplace"
+                        else "dynamic_array"
+                    ] += 1
+                    continue
+
+                # Decode the known side of an incomplete event normally, then
+                # clear the synthetic old decode before presentation.
+                old_value = old_value or ("0x" + "0" * 64)
 
                 variable = None
                 variable_path = None
@@ -392,7 +468,8 @@ class TransactionTracer:
 
                 if layout:
                     try:
-                        variable = layout.get_variable_for_slot(slot_int)
+                        direct_entry = layout_index.first_at(slot_int) if layout_index else None
+                        variable = direct_entry.variable if direct_entry else None
 
                         if variable:
                             stats["layout_direct"] += 1
@@ -429,8 +506,8 @@ class TransactionTracer:
                                     new_bytes = bytes.fromhex(new_value[2:])
                                     if var_type.encoding == "bytes":
                                         type_label = var_type.label
-                                        old_decoded = self.decoder.decode_dynamic_bytes_slot(old_bytes, type_label)
-                                        new_decoded = self.decoder.decode_dynamic_bytes_slot(new_bytes, type_label)
+                                        old_decoded = decoder.decode_dynamic_bytes_slot(old_bytes, type_label)
+                                        new_decoded = decoder.decode_dynamic_bytes_slot(new_bytes, type_label)
                                         old_is_long = (old_bytes[-1] & 1) == 1 if old_bytes else False
                                         new_is_long = (new_bytes[-1] & 1) == 1 if new_bytes else False
                                         if old_is_long or new_is_long or old_is_long != new_is_long:
@@ -457,8 +534,8 @@ class TransactionTracer:
                                         variable_path = f"{variable.name} (array length)"
                                     elif decode_type:
                                         slot_offset = slot_int - variable.slot if variable else 0
-                                        old_decoded = self.decoder.decode(old_bytes, decode_type, variable.offset, slot_offset)
-                                        new_decoded = self.decoder.decode(new_bytes, decode_type, variable.offset, slot_offset)
+                                        old_decoded = decoder.decode(old_bytes, decode_type, variable.offset, slot_offset)
+                                        new_decoded = decoder.decode(new_bytes, decode_type, variable.offset, slot_offset)
                                 except Exception as e:
                                     logger.warning(f"Failed to decode change at slot {slot_hex}: {e}")
                         else:
@@ -481,6 +558,34 @@ class TransactionTracer:
                                     value_type = preimage_match.get("value_type")
                                     decode_type = preimage_match.get("decode_type")
 
+                                    # Handle struct offset with nested mapping (e.g., users[addr].allowance[spender])
+                                    # The outer_key is the key for the mapping at the struct offset
+                                    struct_offset_from_preimage = preimage_match.get("struct_offset")
+                                    outer_key = preimage_match.get("outer_key")
+                                    if struct_offset_from_preimage and variable:
+                                        field_name, field_type = self.slot_resolver.resolve_struct_field(
+                                            variable, struct_offset_from_preimage, layout
+                                        )
+                                        if field_name:
+                                            # Build path: base_path.field_name
+                                            base_path = preimage_match.get("path", "")
+                                            # Replace +N with .field_name
+                                            if f"+{struct_offset_from_preimage}" in base_path:
+                                                variable_path = base_path.replace(
+                                                    f"+{struct_offset_from_preimage}", f".{field_name}"
+                                                )
+                                            else:
+                                                variable_path = f"{base_path}.{field_name}" if base_path else field_name
+                                            # If field is a mapping and we have outer_key, append [key]
+                                            if outer_key and field_type and field_type.encoding == "mapping":
+                                                variable_path = f"{variable_path}[{outer_key}]"
+                                                # Update mapping_key to include outer_key
+                                                if mapping_key:
+                                                    mapping_key = f"{mapping_key}, {outer_key}"
+                                                else:
+                                                    mapping_key = outer_key
+                                            decode_type = field_type
+
                                     if encoding == "mapping_to_array":
                                         stats["mapping_to_array"] += 1
                                         resolution_path = "mapping_to_array"
@@ -495,8 +600,8 @@ class TransactionTracer:
                                         try:
                                             old_bytes = bytes.fromhex(old_value[2:])
                                             new_bytes = bytes.fromhex(new_value[2:])
-                                            old_decoded = self.decoder.decode(old_bytes, decode_type, variable.offset if variable else 0)
-                                            new_decoded = self.decoder.decode(new_bytes, decode_type, variable.offset if variable else 0)
+                                            old_decoded = decoder.decode(old_bytes, decode_type, variable.offset if variable else 0)
+                                            new_decoded = decoder.decode(new_bytes, decode_type, variable.offset if variable else 0)
                                         except Exception:
                                             pass
 
@@ -516,8 +621,8 @@ class TransactionTracer:
                                         try:
                                             old_bytes = bytes.fromhex(old_value[2:])
                                             new_bytes = bytes.fromhex(new_value[2:])
-                                            old_decoded = self.decoder.decode(old_bytes, element_type, 0)
-                                            new_decoded = self.decoder.decode(new_bytes, element_type, 0)
+                                            old_decoded = decoder.decode(old_bytes, element_type, 0)
+                                            new_decoded = decoder.decode(new_bytes, element_type, 0)
                                         except Exception:
                                             pass
 
@@ -541,8 +646,8 @@ class TransactionTracer:
                                         try:
                                             old_bytes = bytes.fromhex(old_value[2:])
                                             new_bytes = bytes.fromhex(new_value[2:])
-                                            old_packed = self.decoder.decode_packed_slot(old_bytes, slot_members, layout.types if layout else {})
-                                            new_packed = self.decoder.decode_packed_slot(new_bytes, slot_members, layout.types if layout else {})
+                                            old_packed = decoder.decode_packed_slot(old_bytes, slot_members, layout.types if layout else {})
+                                            new_packed = decoder.decode_packed_slot(new_bytes, slot_members, layout.types if layout else {})
                                             old_decoded = DecodedValue(raw=old_value, decoded={k: v.decoded for k, v in old_packed.items()}, type_label="packed")
                                             new_decoded = DecodedValue(raw=new_value, decoded={k: v.decoded for k, v in new_packed.items()}, type_label="packed")
                                         except Exception:
@@ -552,8 +657,8 @@ class TransactionTracer:
                                         try:
                                             old_bytes = bytes.fromhex(old_value[2:])
                                             new_bytes = bytes.fromhex(new_value[2:])
-                                            old_decoded = self.decoder.decode(old_bytes, decode_type, 0, struct_slot_offset)
-                                            new_decoded = self.decoder.decode(new_bytes, decode_type, 0, struct_slot_offset)
+                                            old_decoded = decoder.decode(old_bytes, decode_type, 0, struct_slot_offset)
+                                            new_decoded = decoder.decode(new_bytes, decode_type, 0, struct_slot_offset)
                                         except Exception:
                                             pass
 
@@ -579,8 +684,8 @@ class TransactionTracer:
                                         try:
                                             old_bytes = bytes.fromhex(old_value[2:])
                                             new_bytes = bytes.fromhex(new_value[2:])
-                                            old_packed = self.decoder.decode_packed_slot(old_bytes, slot_members, layout.types if layout else {})
-                                            new_packed = self.decoder.decode_packed_slot(new_bytes, slot_members, layout.types if layout else {})
+                                            old_packed = decoder.decode_packed_slot(old_bytes, slot_members, layout.types if layout else {})
+                                            new_packed = decoder.decode_packed_slot(new_bytes, slot_members, layout.types if layout else {})
                                             old_decoded = DecodedValue(raw=old_value, decoded={k: v.decoded for k, v in old_packed.items()}, type_label="packed")
                                             new_decoded = DecodedValue(raw=new_value, decoded={k: v.decoded for k, v in new_packed.items()}, type_label="packed")
                                         except Exception:
@@ -590,8 +695,8 @@ class TransactionTracer:
                                         try:
                                             old_bytes = bytes.fromhex(old_value[2:])
                                             new_bytes = bytes.fromhex(new_value[2:])
-                                            old_decoded = self.decoder.decode(old_bytes, decode_type, 0, struct_slot_offset)
-                                            new_decoded = self.decoder.decode(new_bytes, decode_type, 0, struct_slot_offset)
+                                            old_decoded = decoder.decode(old_bytes, decode_type, 0, struct_slot_offset)
+                                            new_decoded = decoder.decode(new_bytes, decode_type, 0, struct_slot_offset)
                                         except Exception:
                                             pass
 
@@ -610,59 +715,55 @@ class TransactionTracer:
                                         new_bytes = bytes.fromhex(new_value[2:])
                                         var_type = layout.get_type(variable.type_id)
                                         type_label = var_type.label if var_type else "bytes"
-                                        old_decoded = self.decoder.decode_dynamic_bytes_data_slot(old_bytes, type_label, data_offset)
-                                        new_decoded = self.decoder.decode_dynamic_bytes_data_slot(new_bytes, type_label, data_offset)
+                                        old_decoded = decoder.decode_dynamic_bytes_data_slot(old_bytes, type_label, data_offset)
+                                        new_decoded = decoder.decode_dynamic_bytes_data_slot(new_bytes, type_label, data_offset)
                                     except Exception as e:
                                         logger.warning(f"Failed to decode dynamic bytes data slot: {e}")
                     except Exception as e:
                         logger.error(f"Slot matching/decoding failed for slot {slot_hex}: {e}", exc_info=True)
 
                 # Handle struct offsets
-                if not variable and slot_hex not in preimage_lookup:
-                    for struct_offset in range(1, 10):
-                        base_slot_int = slot_int - struct_offset
-                        base_slot_hex = self._normalize_slot(hex(base_slot_int))
-                        if base_slot_hex in preimage_lookup:
-                            base_preimage = preimage_lookup[base_slot_hex]
-                            base_match = self.slot_resolver.try_match_slot_from_preimage(
-                                base_slot_hex, base_preimage, layout, preimage_lookup
+                if layout and not variable and slot_hex not in preimage_lookup:
+                    for struct_offset, base_match in self.slot_resolver.find_struct_offset_matches(
+                        slot_int,
+                        layout,
+                        preimage_lookup,
+                    ):
+                        base_var = base_match.get("variable")
+                        if base_var:
+                            stats["struct_offset"] += 1
+                            resolution_path = "struct_offset"
+                            variable = base_var
+                            mapping_base_slot = base_match.get("base_slot")
+                            mapping_key = base_match.get("key")
+                            base_path = base_match.get("path", "")
+                            is_mapping = True
+                            encoding = base_match.get("encoding")
+                            key_type = base_match.get("key_type")
+                            value_type = base_match.get("value_type")
+                            field_name, field_type = self.slot_resolver.resolve_struct_field(
+                                base_var, struct_offset, layout
                             )
-                            if base_match:
-                                base_var = base_match.get("variable")
-                                if base_var:
-                                    stats["struct_offset"] += 1
-                                    resolution_path = "struct_offset"
-                                    variable = base_var
-                                    mapping_base_slot = base_match.get("base_slot")
-                                    mapping_key = base_match.get("key")
-                                    base_path = base_match.get("path", "")
-                                    is_mapping = True
-                                    encoding = base_match.get("encoding")
-                                    key_type = base_match.get("key_type")
-                                    value_type = base_match.get("value_type")
-
-                                    field_name, field_type = self.slot_resolver.resolve_struct_field(base_var, struct_offset, layout)
-                                    if field_name:
-                                        variable_path = f"{base_path}.{field_name}" if base_path else f".{field_name}"
-                                        if field_type:
-                                            try:
-                                                old_bytes = bytes.fromhex(old_value[2:])
-                                                new_bytes = bytes.fromhex(new_value[2:])
-                                                old_decoded = self.decoder.decode(old_bytes, field_type, 0)
-                                                new_decoded = self.decoder.decode(new_bytes, field_type, 0)
-                                            except Exception:
-                                                pass
-                                    else:
-                                        variable_path = f"{base_path}[+{struct_offset}]" if base_path else f"[+{struct_offset}]"
-                                    break
+                            variable_path = (
+                                f"{base_path}.{field_name}" if base_path else field_name
+                            )
+                            if field_type:
+                                try:
+                                    old_bytes = bytes.fromhex(old_value[2:])
+                                    new_bytes = bytes.fromhex(new_value[2:])
+                                    old_decoded = decoder.decode(old_bytes, field_type, 0)
+                                    new_decoded = decoder.decode(new_bytes, field_type, 0)
+                                except Exception:
+                                    pass
+                            break
 
                 # Heuristic decode if no layout or no decoded values
                 if (not layout or not variable) and not old_decoded:
                     try:
                         old_bytes = bytes.fromhex(old_value[2:])
                         new_bytes = bytes.fromhex(new_value[2:])
-                        old_decoded = self.decoder.decode_heuristic(old_bytes)
-                        new_decoded = self.decoder.decode_heuristic(new_bytes)
+                        old_decoded = decoder.decode_heuristic(old_bytes)
+                        new_decoded = decoder.decode_heuristic(new_bytes)
                     except Exception:
                         pass
 
@@ -680,11 +781,13 @@ class TransactionTracer:
                         "value_type": value_type,
                     }
 
+                if reported_old_value is None:
+                    old_decoded = None
                 decoded_changes.append(
                     StorageChange(
                         slot=slot_hex,
                         mapping_base_slot=mapping_base_slot,
-                        old_value=old_value,
+                        old_value=reported_old_value,
                         new_value=new_value,
                         variable=variable,
                         variable_path=variable_path,
@@ -705,19 +808,22 @@ class TransactionTracer:
             except Exception as e:
                 logger.error(f"Fatal error decoding slot {slot_hex}: {e}", exc_info=True)
                 try:
-                    old_bytes = bytes.fromhex(old_value[2:]) if old_value.startswith("0x") else bytes.fromhex(old_value)
+                    fallback_old_value = old_value or ("0x" + "0" * 64)
+                    old_bytes = bytes.fromhex(fallback_old_value[2:]) if fallback_old_value.startswith("0x") else bytes.fromhex(fallback_old_value)
                     new_bytes = bytes.fromhex(new_value[2:]) if new_value.startswith("0x") else bytes.fromhex(new_value)
-                    old_decoded = self.decoder.decode_heuristic(old_bytes)
-                    new_decoded = self.decoder.decode_heuristic(new_bytes)
+                    old_decoded = decoder.decode_heuristic(old_bytes)
+                    new_decoded = decoder.decode_heuristic(new_bytes)
                 except Exception:
                     old_decoded = None
                     new_decoded = None
 
+                if reported_old_value is None:
+                    old_decoded = None
                 decoded_changes.append(
                     StorageChange(
                         slot=slot_hex,
                         mapping_base_slot=None,
-                        old_value=old_value,
+                        old_value=reported_old_value,
                         new_value=new_value,
                         variable=None,
                         variable_path=None,
@@ -739,11 +845,17 @@ class TransactionTracer:
         for i, change in enumerate(decoded_changes):
             if change.variable is None:
                 slot_int = int(change.slot, 16)
-                for offset in range(1, 11):
-                    base_slot_int = slot_int - offset
-                    if base_slot_int in matched_slots:
-                        base_match = matched_slots[base_slot_int]
-                        base_var = base_match["variable"]
+                for base_slot_int, base_match in matched_slots.items():
+                    offset = slot_int - base_slot_int
+                    if offset <= 0:
+                        continue
+                    base_var = base_match["variable"]
+                    field_name, _ = self.slot_resolver.resolve_struct_field(
+                        base_var,
+                        offset,
+                        layout,
+                    ) if layout else (None, None)
+                    if field_name:
                         base_key = base_match["mapping_key"]
                         decoded_changes[i] = StorageChange(
                             slot=change.slot,
@@ -751,7 +863,7 @@ class TransactionTracer:
                             old_value=change.old_value,
                             new_value=change.new_value,
                             variable=base_var,
-                            variable_path=f"{base_var.name}[{base_key}]+{offset}",
+                            variable_path=f"{base_var.name}[{base_key}].{field_name}",
                             old_decoded=change.old_decoded,
                             new_decoded=change.new_decoded,
                             mapping_key=base_key,
@@ -773,3 +885,178 @@ class TransactionTracer:
             f"{stats['heuristic']} heuristic"
         )
         return decoded_changes
+
+    def _decode_packed_array_change(
+        self,
+        *,
+        slot_int: int,
+        slot_hex: str,
+        old_value: str | None,
+        new_value: str,
+        pc: int | None,
+        exec_index: int,
+        layout: StorageLayout | None,
+        layout_index: LayoutIndex | None,
+        decoder: TypeDecoder,
+        dynamic_array_index: dict,
+        mapping_to_array_index: dict[int, dict],
+    ) -> list[StorageChange] | None:
+        """Expand a changed packed-array word into every changed element.
+
+        An SSTORE is still retained as a raw slot event by the journal layer.
+        This projection is specifically for human-readable paths: one word can
+        contain several array elements and therefore several logical changes.
+        """
+        if layout is None:
+            return None
+
+        direct_entry = layout_index.first_at(slot_int) if layout_index else None
+        variable = direct_entry.variable if direct_entry else None
+        element_type = None
+        locations: tuple[tuple[int, StorageLocation], ...] = ()
+        encoding = "inplace"
+        mapping_key = None
+        mapping_base_slot = None
+        path_prefix = None
+
+        if variable:
+            variable_type = layout.get_type(variable.type_id)
+            if (
+                variable_type
+                and variable_type.encoding == "inplace"
+                and variable_type.array_length is not None
+                and variable_type.element_type
+            ):
+                element_type = layout.get_type(variable_type.element_type)
+                packing = array_packing(element_type)
+                if packing.is_packed:
+                    locations = packing.locations_in_slot(
+                        variable.slot,
+                        slot_int,
+                        length=variable_type.array_length,
+                    )
+                    path_prefix = variable.name
+
+        if not locations:
+            # Prefer the closest known data start. The existing trace-derived
+            # indexes are exact starts; this avoids choosing an unrelated array
+            # when several arrays precede the numeric slot value.
+            candidates = []
+            for data_start, entry in dynamic_array_index.items():
+                if data_start <= slot_int:
+                    candidates.append((data_start, entry, False))
+            for data_start, entry in mapping_to_array_index.items():
+                if data_start <= slot_int:
+                    candidates.append((data_start, entry, True))
+
+            for data_start, entry, is_mapping_array in sorted(candidates, reverse=True):
+                if is_mapping_array:
+                    candidate_type = entry.get("element_type")
+                    candidate_variable = entry.get("variable")
+                else:
+                    candidate_variable, _, candidate_type = entry
+
+                packing = array_packing(candidate_type)
+                if not packing.is_packed:
+                    continue
+
+                variable = candidate_variable
+                element_type = candidate_type
+                locations = packing.locations_in_slot(data_start, slot_int)
+                if is_mapping_array:
+                    encoding = "mapping_to_array"
+                    mapping_key = entry.get("key", "?")
+                    mapping_base_slot = entry.get("base_slot")
+                    path_prefix = f"{variable.name}[{mapping_key}]" if variable else None
+                else:
+                    encoding = "dynamic_array"
+                    path_prefix = variable.name if variable else None
+                break
+
+        if not locations or variable is None or element_type is None or path_prefix is None:
+            return None
+
+        if old_value is None:
+            return [
+                StorageChange(
+                    slot=slot_hex,
+                    old_value=None,
+                    new_value=new_value,
+                    mapping_base_slot=mapping_base_slot,
+                    variable=variable,
+                    variable_path=f"{path_prefix} (packed word)",
+                    mapping_key=mapping_key,
+                    is_mapping=encoding == "mapping_to_array",
+                    encoding=encoding,
+                    value_type="packed",
+                    element_type_id=element_type.id,
+                    change_index=exec_index,
+                    pc=pc,
+                    state_values_known=False,
+                )
+            ]
+        old_bytes = bytes.fromhex(old_value.removeprefix("0x")).rjust(32, b"\x00")
+        new_bytes = bytes.fromhex(new_value.removeprefix("0x")).rjust(32, b"\x00")
+        result: list[StorageChange] = []
+
+        for array_index, location in locations:
+            start = 32 - location.byte_offset - location.byte_size
+            end = 32 - location.byte_offset
+            if old_bytes[start:end] == new_bytes[start:end]:
+                continue
+
+            result.append(
+                StorageChange(
+                    slot=slot_hex,
+                    old_value=old_value,
+                    new_value=new_value,
+                    mapping_base_slot=mapping_base_slot,
+                    variable=variable,
+                    variable_path=f"{path_prefix}[{array_index}]",
+                    old_decoded=decoder.decode(
+                        old_bytes,
+                        element_type,
+                        location.byte_offset,
+                    ),
+                    new_decoded=decoder.decode(
+                        new_bytes,
+                        element_type,
+                        location.byte_offset,
+                    ),
+                    mapping_key=mapping_key,
+                    is_mapping=encoding == "mapping_to_array",
+                    encoding=encoding,
+                    value_type=element_type.label,
+                    element_type_id=element_type.id,
+                    array_index=array_index,
+                    change_index=exec_index,
+                    pc=pc,
+                )
+            )
+
+        if not result:
+            # A no-op SSTORE proves that the packed word was touched but does
+            # not reveal which source-level element motivated the write.
+            result.append(
+                StorageChange(
+                    slot=slot_hex,
+                    old_value=old_value,
+                    new_value=new_value,
+                    mapping_base_slot=mapping_base_slot,
+                    variable=variable,
+                    variable_path=f"{path_prefix} (packed word)",
+                    mapping_key=mapping_key,
+                    is_mapping=encoding == "mapping_to_array",
+                    encoding=encoding,
+                    value_type="packed",
+                    element_type_id=element_type.id,
+                    change_index=exec_index,
+                    pc=pc,
+                )
+            )
+        return result
+
+
+# Backwards-compatible API name. New code should depend on the orchestration
+# role rather than treating this service as the raw trace extractor.
+TransactionTracer = TransactionAnalysisService

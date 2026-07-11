@@ -1,7 +1,6 @@
 """RPC client for trace operations."""
 
 import logging
-from typing import Optional
 
 from web3 import Web3
 
@@ -19,9 +18,8 @@ class TraceRPCClient:
 
     async def get_receipt(self, chain_id: int, tx_hash: str) -> dict:
         """Fetch transaction receipt with error handling."""
-        web3 = self.web3_provider.get_web3(chain_id)
         try:
-            receipt = await web3.eth.get_transaction_receipt(tx_hash)
+            receipt = await self.web3_provider.get_transaction_receipt(chain_id, tx_hash)
         except Exception as e:
             error_msg = str(e).lower()
             if "not found" in error_msg or "transaction receipt" in error_msg:
@@ -34,16 +32,14 @@ class TraceRPCClient:
 
     async def execute_prestate_trace(self, chain_id: int, tx_hash: str) -> dict:
         """Execute debug_traceTransaction with prestateTracer."""
-        web3 = self.web3_provider.get_web3(chain_id)
-
         tracer_config = {
             "tracer": "prestateTracer",
             "tracerConfig": {"diffMode": True},
         }
 
         try:
-            result = await web3.provider.make_request(
-                "debug_traceTransaction", [tx_hash, tracer_config]
+            result = await self.web3_provider.make_request(
+                chain_id, "debug_traceTransaction", [tx_hash, tracer_config]
             )
         except Exception as e:
             error_msg = str(e).lower()
@@ -59,13 +55,23 @@ class TraceRPCClient:
                 error_msg = error.get("message", str(error))
             else:
                 error_msg = str(error)
+            if any(
+                marker in error_msg.lower()
+                for marker in (
+                    "method not found",
+                    "not supported",
+                    "unknown tracer",
+                    "debug api is disabled",
+                )
+            ):
+                raise TraceNotAvailableError(error_msg)
             raise RPCError("debug_traceTransaction", error_msg)
 
         return result.get("result", {})
 
     async def execute_structlogs_trace(
         self, chain_id: int, tx_hash: str, tx_to_address: str | None = None
-    ) -> tuple[list[dict], list[dict]]:
+    ) -> tuple[list[dict], list[dict], int]:
         """
         Parse structLogs to extract SSTORE and SHA3 operations.
 
@@ -87,12 +93,12 @@ class TraceRPCClient:
 
         Returns (sstores, sha3s) where sha3s contains preimage data.
         """
-        web3 = self.web3_provider.get_web3(chain_id)
         include_memory = True
         sha3_from_tracer = []
 
         try:
-            result = await web3.provider.make_request(
+            result = await self.web3_provider.make_request(
+                chain_id,
                 "debug_traceTransaction",
                 [tx_hash, {
                     "enableMemory": True,
@@ -101,7 +107,7 @@ class TraceRPCClient:
             )
         except Exception as e:
             logger.warning(f"structLogs trace failed for {tx_hash}: {e}")
-            return [], []
+            return [], [], 0
 
         if "error" in result:
             error = result["error"]
@@ -109,10 +115,11 @@ class TraceRPCClient:
 
             if "too big" in error_msg.lower() or "exceeded" in error_msg.lower():
                 logger.info(f"structLogs trace too large for {tx_hash}, using custom SHA3 tracer + no-memory structLogs")
-                sha3_from_tracer = await self._get_sha3_via_custom_tracer(web3, tx_hash)
+                sha3_from_tracer = await self._get_sha3_via_custom_tracer(chain_id, tx_hash)
 
                 try:
-                    result = await web3.provider.make_request(
+                    result = await self.web3_provider.make_request(
+                        chain_id,
                         "debug_traceTransaction",
                         [tx_hash, {
                             "disableMemory": True,
@@ -123,18 +130,18 @@ class TraceRPCClient:
                     include_memory = False
                     if "error" in result:
                         logger.warning(f"structLogs trace (no memory) error for {tx_hash}: {result['error']}")
-                        return [], []
+                        return [], [], 0
                 except Exception as e2:
                     logger.warning(f"structLogs trace (no memory) failed for {tx_hash}: {e2}")
-                    return [], []
+                    return [], [], 0
             else:
                 logger.warning(f"structLogs trace error for {tx_hash}: {error_msg}")
-                return [], []
+                return [], [], 0
 
         struct_logs = result.get("result", {}).get("structLogs", [])
         if not struct_logs:
             logger.warning(f"No structLogs in trace for {tx_hash}")
-            return [], []
+            return [], [], 0
 
         logger.info(f"structLogs trace: {len(struct_logs)} steps (memory={'enabled' if include_memory else 'disabled'})")
 
@@ -147,7 +154,7 @@ class TraceRPCClient:
         else:
             logger.info(f"structLogs parsed: sstores={len(sstores)}, sha3s={len(sha3s)}")
 
-        return sstores, sha3s
+        return sstores, sha3s, len(struct_logs)
 
     def _parse_structlogs(
         self,
@@ -241,15 +248,23 @@ class TraceRPCClient:
 
             current_storage_address = call_stack[-1][0] if call_stack else ""
 
-            if op == "SSTORE":
+            if op in ("SSTORE", "TSTORE"):
                 if len(stack) >= 2:
                     slot = stack[-1]
                     value = stack[-2]
+                    normalized_slot = self._normalize_slot(slot)
+                    old_value = self._storage_value_before_write(
+                        log.get("storage", {}),
+                        normalized_slot,
+                    )
                     sstores.append({
                         "address": current_storage_address,
                         "pc": pc,
-                        "slot": self._normalize_slot(slot),
+                        "slot": normalized_slot,
                         "value": self._normalize_value(value),
+                        "old_value": old_value,
+                        "opcode": op,
+                        "namespace": "persistent" if op == "SSTORE" else "transient",
                         "depth": depth,
                         "index": i,
                     })
@@ -271,7 +286,80 @@ class TraceRPCClient:
                             "depth": depth,
                         }
 
+        self._annotate_frame_outcomes(struct_logs, sstores)
         return sstores, sha3s
+
+    def _storage_value_before_write(
+        self, storage: dict | None, normalized_slot: str
+    ) -> str | None:
+        """Read the pre-op word from a structLog storage snapshot, if present."""
+        if not storage:
+            return None
+        target = int(normalized_slot, 16)
+        for raw_slot, raw_value in storage.items():
+            try:
+                slot_value = int(raw_slot, 16) if isinstance(raw_slot, str) else int(raw_slot)
+            except (TypeError, ValueError):
+                continue
+            if slot_value == target:
+                return self._normalize_value(raw_value)
+        # Geth omits zero-valued entries from this snapshot.
+        return "0x" + "0" * 64
+
+    def _annotate_frame_outcomes(
+        self, struct_logs: list[dict], writes: list[dict]
+    ) -> None:
+        """Attach stable frame ids and rollback outcomes to captured writes."""
+        if not struct_logs:
+            return
+
+        root_depth = struct_logs[0].get("depth", 1)
+        frames: dict[int, dict] = {
+            0: {"parent": None, "failed": False, "depth": root_depth}
+        }
+        frame_stack: list[tuple[int, int]] = [(root_depth, 0)]
+        step_frames: dict[int, int] = {}
+        next_frame_id = 1
+
+        for index, log in enumerate(struct_logs):
+            depth = log.get("depth", root_depth)
+            while frame_stack and frame_stack[-1][0] > depth:
+                frame_stack.pop()
+
+            if not frame_stack:
+                frame_stack.append((root_depth, 0))
+
+            while frame_stack[-1][0] < depth:
+                parent_id = frame_stack[-1][1]
+                frame_id = next_frame_id
+                next_frame_id += 1
+                child_depth = frame_stack[-1][0] + 1
+                frames[frame_id] = {
+                    "parent": parent_id,
+                    "failed": False,
+                    "depth": child_depth,
+                }
+                frame_stack.append((child_depth, frame_id))
+
+            frame_id = frame_stack[-1][1]
+            step_frames[index] = frame_id
+            op = log.get("op", "")
+            if op in {"REVERT", "INVALID"} or log.get("error"):
+                frames[frame_id]["failed"] = True
+
+        def frame_reverted(frame_id: int) -> bool:
+            current: int | None = frame_id
+            while current is not None:
+                frame = frames[current]
+                if frame["failed"]:
+                    return True
+                current = frame["parent"]
+            return False
+
+        for write in writes:
+            frame_id = step_frames.get(write.get("index", -1), 0)
+            write["frame_id"] = frame_id
+            write["frame_reverted"] = frame_reverted(frame_id)
 
     def _extract_memory_slice(self, memory: list[str], offset: int, size: int) -> str | None:
         """Extract a slice from EVM memory."""
@@ -292,7 +380,7 @@ class TraceRPCClient:
             logger.debug(f"Failed to extract memory slice: {e}")
             return None
 
-    async def _get_sha3_via_custom_tracer(self, web3, tx_hash: str) -> list[dict]:
+    async def _get_sha3_via_custom_tracer(self, chain_id: int, tx_hash: str) -> list[dict]:
         """Get SHA3 preimages using a custom JS tracer."""
         tracer = """
         {
@@ -316,7 +404,8 @@ class TraceRPCClient:
         """
 
         try:
-            result = await web3.provider.make_request(
+            result = await self.web3_provider.make_request(
+                chain_id,
                 "debug_traceTransaction",
                 [tx_hash, {"tracer": tracer}]
             )
@@ -333,7 +422,7 @@ class TraceRPCClient:
                 preimage = op.get("preimage", "")
                 if preimage:
                     preimage_bytes = bytes.fromhex(preimage[2:] if preimage.startswith("0x") else preimage)
-                    hash_value = web3.keccak(preimage_bytes).hex()
+                    hash_value = Web3.keccak(preimage_bytes).hex()
                     sha3_list.append({
                         "preimage": preimage,
                         "hash": hash_value,

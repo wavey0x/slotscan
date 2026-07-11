@@ -20,8 +20,8 @@ export function DiffTable({ chainId, address, txHash, showHex }: DiffTableProps)
   const sortedSlots = useMemo(() => {
     if (!data?.slots) return [];
     return [...data.slots].sort((a: SlotChangeResponse, b: SlotChangeResponse) => {
-      const stepA = a.changes.length > 0 ? a.changes[0].step : Infinity;
-      const stepB = b.changes.length > 0 ? b.changes[0].step : Infinity;
+      const stepA = a.changes.length > 0 ? (a.changes[0].step ?? Infinity) : Infinity;
+      const stepB = b.changes.length > 0 ? (b.changes[0].step ?? Infinity) : Infinity;
       return stepA - stepB;
     });
   }, [data?.slots]);

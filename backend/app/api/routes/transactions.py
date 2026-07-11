@@ -21,7 +21,12 @@ from app.models.api import (
     ValuePair,
     ValuePairDecoded,
 )
-from app.models.domain import StorageChange, StorageLayout
+from app.models.domain import (
+    StorageChange,
+    StorageLayout,
+    StorageType,
+    StorageVariable,
+)
 from app.models.errors import (
     NotAContractError,
     RPCError,
@@ -31,6 +36,7 @@ from app.models.errors import (
 from app.services.decoder import TypeDecoder
 from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
+from app.services.layout_index import LayoutIndex
 from app.services.tracer import TransactionTracer
 from app.utils.type_labels import (
     clean_type_label,
@@ -75,7 +81,6 @@ def _get_mapping_key_types(
     layout: Optional[StorageLayout],
 ) -> list[str]:
     """Get all key types for a (possibly nested) mapping."""
-    from app.models.domain import StorageVariable
 
     if not layout or not variable:
         return []
@@ -104,7 +109,6 @@ def _get_final_value_type(
     For mapping(address => mapping(uint => uint256)), returns "uint256".
     For mapping(address => SomeStruct), returns "SomeStruct" (cleaned).
     """
-    from app.models.domain import StorageVariable
 
     if not layout or not variable:
         return None
@@ -245,7 +249,6 @@ def _get_struct_definition(
     layout: StorageLayout,
 ) -> Optional[StructDefinitionResponse]:
     """Get the struct definition for a mapping that points to a struct."""
-    from app.models.domain import StorageVariable
 
     var_type = layout.get_type(variable.type_id)
     if not var_type:
@@ -295,7 +298,6 @@ def _get_struct_type_from_value_type(
     layout: StorageLayout,
 ) -> Optional["StorageType"]:
     """Get the struct type from a value_type ID, traversing nested mappings."""
-    from app.models.domain import StorageType
 
     while value_type_id:
         value_type = layout.get_type(value_type_id)
@@ -351,7 +353,6 @@ def _get_struct_members_in_slot(
     slot_offset: int,
 ) -> list["StorageVariable"]:
     """Get struct members that reside in the given slot offset within the struct."""
-    from app.models.domain import StorageVariable
 
     if not struct_type.members:
         return []
@@ -384,6 +385,21 @@ def _group_changes_by_slot(
     for slot, slot_change_list in slot_changes.items():
         first = slot_change_list[0]
         last = slot_change_list[-1]
+        summary_before = first.state_initial_value or first.old_value
+        summary_after = last.state_final_value or last.new_value
+
+        def decoded_for_value(encoded: Optional[str]):
+            if encoded is None:
+                return None
+            for change in slot_change_list:
+                if change.old_value == encoded and change.old_decoded:
+                    return change.old_decoded.decoded
+                if change.new_value == encoded and change.new_decoded:
+                    return change.new_decoded.decoded
+            return None
+
+        summary_before_decoded = decoded_for_value(summary_before)
+        summary_after_decoded = decoded_for_value(summary_after)
 
         # Cache the variable's type lookup to avoid repeated regex-based synthesis
         first_var_type = None
@@ -403,6 +419,11 @@ def _group_changes_by_slot(
                 ),
                 pc=c.pc,
                 step=c.change_index,
+                effect=c.effect,
+                frame_id=c.frame_id,
+                depth=c.depth,
+                opcode=c.opcode,
+                namespace=c.namespace,
             )
             for c in slot_change_list
         ]
@@ -423,8 +444,8 @@ def _group_changes_by_slot(
                     packed_fields = []
 
                     # Decode initial and final values for each packed variable
-                    initial_bytes = bytes.fromhex(first.old_value[2:]) if first.old_value.startswith("0x") else bytes.fromhex(first.old_value)
-                    final_bytes = bytes.fromhex(last.new_value[2:]) if last.new_value.startswith("0x") else bytes.fromhex(last.new_value)
+                    initial_bytes = bytes.fromhex(summary_before[2:]) if summary_before.startswith("0x") else bytes.fromhex(summary_before)
+                    final_bytes = bytes.fromhex(summary_after[2:]) if summary_after.startswith("0x") else bytes.fromhex(summary_after)
 
                     initial_decoded = decoder.decode_packed_slot(initial_bytes, all_vars, layout.types)
                     final_decoded = decoder.decode_packed_slot(final_bytes, all_vars, layout.types)
@@ -506,8 +527,8 @@ def _group_changes_by_slot(
                     if len(slot_0_members) > 0:
                         # Decode packed struct members
                         packed_fields = []
-                        initial_bytes = bytes.fromhex(first.old_value[2:]) if first.old_value.startswith("0x") else bytes.fromhex(first.old_value)
-                        final_bytes = bytes.fromhex(last.new_value[2:]) if last.new_value.startswith("0x") else bytes.fromhex(last.new_value)
+                        initial_bytes = bytes.fromhex(summary_before[2:]) if summary_before.startswith("0x") else bytes.fromhex(summary_before)
+                        final_bytes = bytes.fromhex(summary_after[2:]) if summary_after.startswith("0x") else bytes.fromhex(summary_after)
 
                         initial_decoded = decoder.decode_packed_slot(initial_bytes, slot_0_members, layout.types)
                         final_decoded = decoder.decode_packed_slot(final_bytes, slot_0_members, layout.types)
@@ -548,8 +569,8 @@ def _group_changes_by_slot(
                     if len(slot_0_members) > 0:
                         # Decode packed struct members
                         packed_fields = []
-                        initial_bytes = bytes.fromhex(first.old_value[2:]) if first.old_value.startswith("0x") else bytes.fromhex(first.old_value)
-                        final_bytes = bytes.fromhex(last.new_value[2:]) if last.new_value.startswith("0x") else bytes.fromhex(last.new_value)
+                        initial_bytes = bytes.fromhex(summary_before[2:]) if summary_before.startswith("0x") else bytes.fromhex(summary_before)
+                        final_bytes = bytes.fromhex(summary_after[2:]) if summary_after.startswith("0x") else bytes.fromhex(summary_after)
 
                         initial_decoded = decoder.decode_packed_slot(initial_bytes, slot_0_members, layout.types)
                         final_decoded = decoder.decode_packed_slot(final_bytes, slot_0_members, layout.types)
@@ -595,8 +616,8 @@ def _group_changes_by_slot(
 
                         if len(slot_members) > 0:
                             packed_fields = []
-                            initial_bytes = bytes.fromhex(first.old_value[2:]) if first.old_value.startswith("0x") else bytes.fromhex(first.old_value)
-                            final_bytes = bytes.fromhex(last.new_value[2:]) if last.new_value.startswith("0x") else bytes.fromhex(last.new_value)
+                            initial_bytes = bytes.fromhex(summary_before[2:]) if summary_before.startswith("0x") else bytes.fromhex(summary_before)
+                            final_bytes = bytes.fromhex(summary_after[2:]) if summary_after.startswith("0x") else bytes.fromhex(summary_after)
 
                             initial_decoded = decoder.decode_packed_slot(initial_bytes, slot_members, layout.types)
                             final_decoded = decoder.decode_packed_slot(final_bytes, slot_members, layout.types)
@@ -626,20 +647,43 @@ def _group_changes_by_slot(
             mapping_key = _extract_keys_from_path(first.variable_path)
 
         # Build unified params from mapping key and types
-        params = _build_mapping_params(mapping_key, first.variable, layout) if mapping_key else None
+        params = (
+            _build_mapping_params(mapping_key, first.variable, layout)
+            if mapping_key and first.variable
+            else None
+        )
 
-        # Calculate is_static_slot - slot < 100 is likely a static slot (not a keccak256 hash)
+        # A slot is compiler-declared only when the layout index proves it;
+        # numeric magnitude is not storage provenance.
         try:
             slot_int = int(slot, 16) if slot.startswith("0x") else int(slot)
-            is_static_slot = slot_int < 100
+            layout_entry = LayoutIndex(layout).first_at(slot_int) if layout else None
+            is_static_slot = layout_entry is not None
         except ValueError:
             is_static_slot = False
+            layout_entry = None
+
+        provenance = (
+            first.variable.provenance
+            if first.variable and first.variable.provenance != "compiler_layout"
+            else "compiler_layout"
+            if layout_entry and first.variable
+            else "runtime_preimage"
+            if first.variable
+            else "raw"
+        )
+        confidence = first.variable.confidence if first.variable else "unknown"
 
         result.append(
             SlotChangeResponse(
                 slot=slot,
                 slot_decimal=str(int(slot, 16)) if slot.startswith("0x") else slot,
                 is_static_slot=is_static_slot,
+                provenance=provenance,
+                confidence=confidence,
+                namespace=first.namespace,
+                net_changed=(summary_before != summary_after) if first.state_values_known else None,
+                state_values_known=first.state_values_known,
                 variable_name=first.variable.name if first.variable else None,
                 variable_path=first.variable_path,
                 type_label=_normalize_contract_label(
@@ -660,12 +704,12 @@ def _group_changes_by_slot(
                 ),
                 # Summary values: before (initial) and after (final)
                 before=ValuePair(
-                    value_encoded=first.old_value,
-                    value_decoded=_preserve_large_ints(first.old_decoded.decoded if first.old_decoded else None),
+                    value_encoded=summary_before,
+                    value_decoded=_preserve_large_ints(summary_before_decoded),
                 ),
                 after=ValuePair(
-                    value_encoded=last.new_value,
-                    value_decoded=_preserve_large_ints(last.new_decoded.decoded if last.new_decoded else None),
+                    value_encoded=summary_after,
+                    value_decoded=_preserve_large_ints(summary_after_decoded),
                 ),
                 # Packed storage fields
                 packed_fields=packed_fields,
@@ -714,9 +758,16 @@ async def get_tx_diff(
             detail={"error": "Invalid transaction hash", "code": "INVALID_TX_HASH"},
         )
 
-    # Resolve contract
+    # Resolve the layout against chain state at the transaction's block. This
+    # prevents a later proxy upgrade from changing historical decoding.
     try:
-        metadata = await resolver.resolve(chain_id, address)
+        tx_block = await tracer.get_transaction_block(chain_id, tx_hash)
+        metadata = await resolver.resolve(chain_id, address, block_number=tx_block)
+    except TransactionNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "Transaction not found", "code": "TX_NOT_FOUND"},
+        )
     except NotAContractError:
         raise HTTPException(
             status_code=404,
@@ -746,8 +797,8 @@ async def get_tx_diff(
                 metadata_settings=metadata.compiler_settings,
             )
             metadata.storage_layout = layout
-            if resolver.contract_repo:
-                await resolver.contract_repo.save(metadata)
+            # Historical address/layout associations must not be written to the
+            # unversioned latest-address cache.
         except Exception:
             layout = None
 
@@ -799,4 +850,8 @@ async def get_tx_diff(
         contract_name=metadata.name,
         layout_available=layout is not None,
         execution_order_available=diff.execution_order_available,
+        frame_outcomes_available=diff.frame_outcomes_available,
+        write_old_values_available=diff.write_old_values_available,
+        final_state_values_available=diff.final_state_values_available,
+        trace_step_count=diff.trace_step_count,
     )

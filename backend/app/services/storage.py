@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from web3 import Web3
 
@@ -16,15 +16,14 @@ except ImportError:
 from app.config import Settings
 from app.models.errors import RPCError
 from app.models.domain import (
-    DecodedValue,
     SlotValue,
     StorageLayout,
     StorageSnapshot,
     StorageVariable,
 )
-from app.repositories.cache import CacheRepository
 from app.services.decoder import TypeDecoder
 from app.services.web3_provider import Web3Provider
+from app.services.layout_index import array_packing
 from app.utils.slots import compute_mapping_slot
 
 logger = logging.getLogger(__name__)
@@ -38,12 +37,10 @@ class StorageReader:
         web3_provider: Web3Provider,
         settings: Settings,
         decoder: TypeDecoder,
-        cache_repo: Optional[CacheRepository] = None,
     ):
         self.web3_provider = web3_provider
         self.settings = settings
         self.decoder = decoder
-        self.cache_repo = cache_repo
         self._semaphore = asyncio.Semaphore(20)  # Limit concurrent RPC calls
 
     async def read_at_block(
@@ -61,35 +58,30 @@ class StorageReader:
         For unverified contracts: scans slots 0-256 for non-zero values.
         """
         address = Web3.to_checksum_address(address)
-
-        # Check cache first
-        # Cache disabled for testing; always compute fresh
+        resolved_block_number = (
+            await self.web3_provider.get_block_number(chain_id)
+            if block_number == "latest"
+            else int(block_number)
+        )
 
         # Read based on whether we have a layout
         if layout:
-            slots = await self._read_verified_contract(
-                chain_id, address, block_number, layout, include_mapping_keys
+            slots, is_complete = await self._read_verified_contract(
+                chain_id, address, resolved_block_number, layout, include_mapping_keys
             )
         else:
-            slots = await self._read_unverified_contract(chain_id, address, block_number)
-
-        is_complete = len(slots) <= self.settings.max_slots_per_contract
-        if len(slots) > self.settings.max_slots_per_contract:
-            slots = slots[: self.settings.max_slots_per_contract]
-            is_complete = False
+            slots, is_complete = await self._read_unverified_contract(
+                chain_id, address, resolved_block_number
+            )
 
         snapshot = StorageSnapshot(
             chain_id=chain_id,
             address=address,
-            block_number=block_number,
+            block_number=resolved_block_number,
             slots=slots,
             is_complete=is_complete,
             layout=layout,
         )
-
-        # Cache result
-        if self.cache_repo:
-            await self.cache_repo.save_snapshot(snapshot)
 
         return snapshot
 
@@ -97,13 +89,12 @@ class StorageReader:
         self, chain_id: int, address: str, slot: int, block_number: int | str
     ) -> str:
         """Read a single slot value (hex string)."""
-        web3 = self.web3_provider.get_web3(chain_id)
         slot_hex = hex(slot)
 
         try:
             async with self._semaphore:
-                value = await web3.eth.get_storage_at(
-                    address, slot_hex, block_identifier=block_number
+                value = await self.web3_provider.get_storage_at(
+                    chain_id, address, slot_hex, block_number
                 )
         except Web3RPCError as e:
             error_msg = str(e)
@@ -154,12 +145,18 @@ class StorageReader:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         slot_values = {}
+        failures: list[str] = []
         for slot, result in zip(slots, results):
             if isinstance(result, Exception):
                 logger.warning(f"Failed to read slot {slot}: {result}")
-                slot_values[slot] = "0x" + "00" * 32
+                failures.append(f"slot {slot}: {result}")
             else:
-                slot_values[slot] = result
+                slot_values[slot] = cast(str, result)
+
+        if failures:
+            sample = "; ".join(failures[:3])
+            suffix = f"; and {len(failures) - 3} more" if len(failures) > 3 else ""
+            raise RPCError("eth_getStorageAt", sample + suffix)
 
         return slot_values
 
@@ -170,12 +167,27 @@ class StorageReader:
         block_number: int | str,
         layout: StorageLayout,
         mapping_keys: Optional[dict[int, list[Any]]] = None,
-    ) -> list[SlotValue]:
+    ) -> tuple[list[SlotValue], bool]:
         """Read storage for a verified contract using its layout."""
         slots_to_read = []
         slot_to_var: dict[int, tuple[StorageVariable, Any]] = {}
         mapping_slot_index: dict[int, tuple[StorageVariable, Any]] = {}
         vyper_string_vars: dict[int, int] = {}  # base_slot -> max_length
+        scheduled_slots: set[int] = set()
+        is_complete = True
+
+        def schedule(slot: int, variable: StorageVariable, extra: Any) -> bool:
+            nonlocal is_complete
+            if slot in scheduled_slots:
+                slot_to_var[slot] = (variable, extra)
+                return True
+            if len(scheduled_slots) >= self.settings.max_slots_per_contract:
+                is_complete = False
+                return False
+            scheduled_slots.add(slot)
+            slots_to_read.append(slot)
+            slot_to_var[slot] = (variable, extra)
+            return True
 
         # Collect static slots from layout
         for var in layout.variables:
@@ -192,38 +204,37 @@ class StorageReader:
                 vyper_string_vars[var.slot] = max_len
                 for i in range(total_slots):
                     slot = var.slot + i
-                    slots_to_read.append(slot)
-                    slot_to_var[slot] = (var, i)
+                    if not schedule(slot, var, i):
+                        break
             elif var_type.encoding in ("inplace", "bytes"):
                 num_bytes = var_type.num_bytes or var.size or 32
                 num_slots = max(1, (num_bytes + 31) // 32)
                 for i in range(num_slots):
                     slot = var.slot + i
-                    slots_to_read.append(slot)
-                    slot_to_var[slot] = (var, i)
+                    if not schedule(slot, var, i):
+                        break
 
             elif var_type.encoding == "dynamic_array":
                 # Read array length at base slot
-                slots_to_read.append(var.slot)
-                slot_to_var[var.slot] = (var, 0)
+                schedule(var.slot, var, 0)
 
         # Add mapping entries for provided keys
         if mapping_keys:
             for base_slot, keys in mapping_keys.items():
-                var = layout.get_variable_by_slot(base_slot)
-                if not var:
+                mapping_var = layout.get_variable_by_slot(base_slot)
+                if not mapping_var:
                     continue
 
-                var_type = layout.get_type(var.type_id)
+                var_type = layout.get_type(mapping_var.type_id)
                 if not var_type or var_type.encoding != "mapping":
                     continue
 
                 key_type = var_type.key_type or "bytes32"
                 for key in keys:
                     computed_slot = compute_mapping_slot(base_slot, key, key_type)
-                    slots_to_read.append(computed_slot)
-                    slot_to_var[computed_slot] = (var, key)
-                    mapping_slot_index[computed_slot] = (var, key)
+                    if not schedule(computed_slot, mapping_var, key):
+                        break
+                    mapping_slot_index[computed_slot] = (mapping_var, key)
 
         # Batch read
         slot_values = await self.read_slots_batch(
@@ -232,7 +243,6 @@ class StorageReader:
 
         # Build SlotValue results
         results = []
-        base_slot_index = layout.get_base_slot_index()
         processed_vyper_strings = set()  # Track which Vyper strings we've already processed
 
         for slot, raw_value in sorted(slot_values.items()):
@@ -245,6 +255,36 @@ class StorageReader:
                 variable_path = None
 
                 var_type = layout.get_type(variable.type_id)
+
+                if (
+                    var_type
+                    and var_type.encoding == "inplace"
+                    and var_type.array_length is not None
+                    and var_type.element_type
+                ):
+                    element_type = layout.get_type(var_type.element_type)
+                    packing = array_packing(element_type)
+                    if packing.is_packed and element_type:
+                        raw_bytes = bytes.fromhex(raw_value[2:])
+                        for array_index, location in packing.locations_in_slot(
+                            variable.slot,
+                            slot,
+                            length=var_type.array_length,
+                        ):
+                            results.append(
+                                SlotValue(
+                                    slot=hex(slot),
+                                    raw_value=raw_value,
+                                    variable=variable,
+                                    decoded_value=self.decoder.decode(
+                                        raw_bytes,
+                                        element_type,
+                                        location.byte_offset,
+                                    ),
+                                    variable_path=f"{variable.name}[{array_index}]",
+                                )
+                            )
+                        continue
 
                 # Handle Vyper String[N] types specially
                 if variable.slot in vyper_string_vars:
@@ -342,7 +382,7 @@ class StorageReader:
                     )
                 )
 
-        return results
+        return results, is_complete
 
     async def _read_unverified_contract(
         self,
@@ -350,13 +390,19 @@ class StorageReader:
         address: str,
         block_number: int | str,
         additional_slots: Optional[list[int]] = None,
-    ) -> list[SlotValue]:
+    ) -> tuple[list[SlotValue], bool]:
         """Read storage for an unverified contract (scan 0-256)."""
-        slots_to_read = list(range(257))
+        slots_to_read = list(range(min(257, self.settings.max_slots_per_contract)))
+        is_complete = self.settings.max_slots_per_contract >= 257
 
         if additional_slots:
-            slots_to_read.extend(additional_slots)
-            slots_to_read = list(set(slots_to_read))
+            for slot in additional_slots:
+                if slot in slots_to_read:
+                    continue
+                if len(slots_to_read) >= self.settings.max_slots_per_contract:
+                    is_complete = False
+                    break
+                slots_to_read.append(slot)
 
         slot_values = await self.read_slots_batch(
             chain_id, address, slots_to_read, block_number
@@ -378,7 +424,7 @@ class StorageReader:
                     )
                 )
 
-        return results
+        return results, is_complete
 
     async def get_single_slot(
         self,

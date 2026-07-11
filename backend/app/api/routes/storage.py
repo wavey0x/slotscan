@@ -81,8 +81,7 @@ async def get_storage(
     if use_latest:
         # Resolve "latest" to actual block number for the response
         try:
-            web3 = web3_provider.get_web3(chain_id)
-            block_number = await web3.eth.get_block_number()
+            block_number = await web3_provider.get_block_number(chain_id)
         except Exception as e:
             raise HTTPException(
                 status_code=502,
@@ -117,7 +116,11 @@ async def get_storage(
 
     # Resolve contract
     try:
-        metadata = await resolver.resolve(chain_id, address)
+        metadata = await resolver.resolve(
+            chain_id,
+            address,
+            block_number=None if use_latest else block_number,
+        )
     except NotAContractError:
         raise HTTPException(
             status_code=404,
@@ -147,7 +150,7 @@ async def get_storage(
                 metadata_settings=metadata.compiler_settings,
             )
             metadata.storage_layout = layout
-            if resolver.contract_repo:
+            if resolver.contract_repo and use_latest:
                 await resolver.contract_repo.save(metadata)
         except Exception:
             layout = None
@@ -206,6 +209,7 @@ async def get_slot(
     Block can be a number or 'latest'.
     """
     # Parse block
+    block_number: int | str
     if block.lower() == "latest":
         block_number = "latest"
     else:
@@ -232,7 +236,11 @@ async def get_slot(
 
     # Resolve contract
     try:
-        metadata = await resolver.resolve(chain_id, address)
+        metadata = await resolver.resolve(
+            chain_id,
+            address,
+            block_number=None if block_number == "latest" else block_number,
+        )
     except NotAContractError:
         raise HTTPException(
             status_code=404,
@@ -269,7 +277,7 @@ async def get_slot(
             chain_id=chain_id,
             address=address,
             slot=slot_int,
-            block_number=block,
+            block_number=block_number,
             layout=layout,
             use_heuristic_unverified=heuristic,
         )
