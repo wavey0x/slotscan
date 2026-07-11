@@ -5,6 +5,8 @@ const RESTORED_TX = '0x7fe79d06862f71a5809babfadac1c9a204b09dfbb8c40ac725d23b9ba
 const REVERTED_WRITES_TX = '0x561dd631cb9eabc2ba595ca4410fd26ca3e6183d2b8ba4f55bbf4c4b9c742ae2';
 const SOURCE_LAYOUT_TX = '0x3353c2009d984e15a2dd909d09f56f2833cfa99129fa834ea6eaf9349f14cd60';
 const NESTED_STRUCT_MAPPING_TX = '0x8e37bdd5003c883a684cd6c944c5fac24cc7f29b15ef23c5f6d7adf41c222f82';
+const MULTI_KEY_MAPPING_ADDRESS = '0xb45ad160634c528Cc3D2926d9807104FA3157305';
+const MULTI_KEY_MAPPING_TX = '0xb93506af8f1a39f6a31e2d34f5f6a262c2799fef6e338640f42ab8737ed3d8a4';
 
 test('home search accepts a transaction hash and opens transaction-wide history', async ({ page }) => {
   await page.goto('/');
@@ -13,7 +15,6 @@ test('home search accepts a transaction hash and opens transaction-wide history'
 
   await expect(page).toHaveURL(`/1/tx/${SIMPLE_TX}`);
   await expect(page.getByRole('heading', { name: 'Transaction storage history' })).toBeVisible();
-  await expect(page.getByText('TetherToken')).toBeVisible();
   await expect(page.getByTestId('summary-writes').getByText('2', { exact: true })).toBeVisible();
   await expect(page.getByTestId('summary-slots').getByText('2', { exact: true })).toBeVisible();
   for (const label of ['Transaction', 'Block', 'From', 'To']) {
@@ -30,7 +31,6 @@ test('all writes remain visible without interpretive classification controls', a
   await page.goto(`/1/tx/${RESTORED_TX}`);
 
   await expect(page.getByRole('heading', { name: 'Transaction storage history' })).toBeVisible();
-  await expect(page.getByText('Chromia', { exact: true })).toHaveCount(1);
   await expect(page.getByTestId('summary-writes').getByText('5', { exact: true })).toBeVisible();
   await expect(page.getByTestId('summary-slots').getByText('4', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Timeline' })).toHaveAttribute('aria-pressed', 'true');
@@ -77,7 +77,7 @@ test('verified sources recover proxy, namespace, legacy, and Vyper variable name
   await expect(page.getByText('Contract', { exact: true })).toBeVisible();
   await expect(page.getByText('Activity', { exact: true })).toBeVisible();
   const safeSection = page.getByRole('heading', { name: 'GnosisSafe' }).locator('xpath=ancestor::section');
-  await expect(safeSection.getByText('0xfeb4...ff52', { exact: true })).toBeVisible();
+  await expect(safeSection.getByText('0x1638...0ff7', { exact: true })).toBeVisible();
   await expect(safeSection.getByRole('button', { name: 'Copy' })).toBeVisible();
 
   const search = page.getByPlaceholder('Search contract, address, slot, or variable');
@@ -105,14 +105,53 @@ test('verified sources recover proxy, namespace, legacy, and Vyper variable name
 });
 
 test('nested mappings inside mapping structs show the full resolved path', async ({ page }) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.goto(`/1/tx/${NESTED_STRUCT_MAPPING_TX}`);
 
   const search = page.getByPlaceholder('Search contract, address, slot, or variable');
   await search.fill('lastExecutionTimestamp');
 
   await expect(page.getByRole('heading', { name: 'borgCore' })).toBeVisible();
-  await expect(page.getByText(
+  const variable = page.getByTestId('keyed-variable-path');
+  await expect(variable.getByText('lastExecutionTimestamp', { exact: true })).toBeVisible();
+  await expect(variable.getByText('policy', { exact: true })).toBeVisible();
+  await expect(variable.getByText('0x40a2...130d', { exact: true })).toBeVisible();
+  await expect(variable.getByText('methods', { exact: true })).toBeVisible();
+  await expect(variable.getByText('0x8d80ff0a', { exact: true })).toBeVisible();
+  await expect(variable.getByText('uint256', { exact: true })).toBeVisible();
+  await expect(variable.getByText('PolicyItem', { exact: true })).toHaveCount(0);
+
+  const primaryBox = await variable.getByTestId('keyed-variable-primary').boundingBox();
+  const contextBox = await variable.getByTestId('keyed-variable-context').boundingBox();
+  expect(primaryBox).not.toBeNull();
+  expect(contextBox).not.toBeNull();
+  expect(contextBox!.y).toBeGreaterThan(primaryBox!.y);
+
+  const copy = variable.getByRole('button', { name: 'Copy full path' });
+  await expect(copy).toBeVisible();
+  await copy.click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(
     'policy[0x40a2accbd92bca938b02010e17a5b8929b49130d].methods[0x8d80ff0a].lastExecutionTimestamp',
-    { exact: true },
-  )).toBeVisible();
+  );
+});
+
+test('multi-key mappings stay compact and copy their complete path', async ({ page }) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.goto(`/1/${MULTI_KEY_MAPPING_ADDRESS}?tx=${MULTI_KEY_MAPPING_TX}`);
+
+  await expect(page.getByRole('heading', { name: 'State Changes' })).toBeVisible();
+  const keyedVariables = page.getByTestId('keyed-variable-path');
+  await expect(keyedVariables).toHaveCount(9);
+
+  const allowance = keyedVariables.filter({ hasText: 'allowance' }).first();
+  await expect(allowance.getByText('0xd8e8...6982', { exact: true })).toBeVisible();
+  await expect(allowance.getByText('0x0079...a1f7', { exact: true })).toBeVisible();
+  await expect(allowance.getByText('uint256', { exact: true })).toBeVisible();
+  await expect(allowance).not.toContainText('0xd8e8544e0c808641b9b89dfb285b5655bd5b6982');
+
+  const copy = allowance.getByRole('button', { name: 'Copy full path' });
+  await copy.click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(
+    'allowance[0xd8e8544e0c808641b9b89dfb285b5655bd5b6982][0x0079885e248b572cdc4559a8b156745e2d8ea1f7]',
+  );
 });

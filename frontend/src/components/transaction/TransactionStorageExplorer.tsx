@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { SlotHistoryTable } from '@/components/diff/DiffTable';
+import { KeyedVariablePath } from '@/components/diff/KeyedVariablePath';
 import { ValueDiff } from '@/components/diff/ValueDiff';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { Input } from '@/components/ui/Input';
@@ -210,9 +211,17 @@ function Timeline({
               {contract.name || truncateAddress(contract.storage_address)}
             </a>
           )}
-          <div className="truncate font-mono text-gray-900" title={slot.variable_path || slot.slot}>
-            {slot.variable_path || slot.variable_name || truncateHash(slot.slot, 7)}
-          </div>
+          {slot.variable_path?.includes('[') ? (
+            <KeyedVariablePath
+              path={slot.variable_path}
+              typeLabel={slot.value_type || slot.type_label}
+              chainId={chain}
+            />
+          ) : (
+            <div className="truncate font-mono text-gray-900" title={slot.variable_path || slot.slot}>
+              {slot.variable_path || slot.variable_name || truncateHash(slot.slot, 7)}
+            </div>
+          )}
           <div className="min-w-0 overflow-hidden font-mono">
             <ValueDiff
               before={eventValue(event, 'before')}

@@ -30,6 +30,7 @@ import { HoverCell } from '@/components/ui/HoverCell';
 import { HoverCard, HoverCardSection, HoverCardDivider, HoverCardRow } from '@/components/ui/HoverCard';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { ValueDiff } from './ValueDiff';
+import { KeyedVariablePath } from './KeyedVariablePath';
 
 interface SlotRowProps {
   slot: SlotChangeResponse;
@@ -346,6 +347,13 @@ export function SlotRow({
     return match ? match[1] : null;
   })();
 
+  const hasKeyedVariablePath = !!slot.variable_path && slot.variable_path.includes('[');
+  const resolvedLeafType = slot.struct_field && slot.struct_definition
+    ? slot.struct_definition.members.find((member) => member.name === slot.struct_field)?.type_label
+      || slot.value_type
+      || slot.type_label
+    : slot.value_type || slot.type_label;
+
   // Check if this is a static array element (has array_index but not is_mapping or is_dynamic_array)
   const isStaticArray = slot.array_index !== null && slot.array_index !== undefined &&
                         !slot.is_mapping && !slot.is_dynamic_array;
@@ -646,51 +654,59 @@ export function SlotRow({
 
           <td className={cn('px-1 py-0.5 align-top w-48 whitespace-normal', isFirst && 'pt-1')}>
             <HoverCard content={variableHoverContent} delay={200} maxWidth="max-w-sm">
-              <span className="space-y-0 break-words block no-underline decoration-transparent">
-                {/* Struct type + variable name */}
-                {slot.struct_definition?.name && (
-                  <span className="text-xs font-mono leading-tight block">
-                    <span className="text-gray-400">{slot.struct_definition.name}</span>{' '}
-                    <span className="text-gray-900 font-medium">{slot.variable_name}</span>
-                  </span>
-                )}
-                {/* Simple mapping variable name */}
-                {slot.is_mapping && !slot.struct_definition?.name && slot.variable_name && (
-                  <span className="text-xs font-mono leading-tight block">
-                    <span className="text-gray-900 font-medium">{variableDisplayName}</span>
-                  </span>
-                )}
-                {/* Struct field member */}
-                {slot.struct_field && slot.struct_definition ? (
-                  <span className="text-xs font-mono leading-tight flex items-start">
-                    <span className="text-gray-300 mr-1 select-none">└</span>
-                    <span>
-                      <span className="text-gray-400">
-                        {slot.struct_definition.members.find(m => m.name === slot.struct_field)?.type_label
-                          || slot.value_type
-                          || slot.type_label}
-                      </span>{' '}
+              {hasKeyedVariablePath && slot.variable_path ? (
+                <KeyedVariablePath
+                  path={slot.variable_path}
+                  typeLabel={resolvedLeafType}
+                  chainId={chainId}
+                />
+              ) : (
+                <span className="space-y-0 break-words block no-underline decoration-transparent">
+                  {/* Struct type + variable name */}
+                  {slot.struct_definition?.name && (
+                    <span className="text-xs font-mono leading-tight block">
+                      <span className="text-gray-400">{slot.struct_definition.name}</span>{' '}
+                      <span className="text-gray-900 font-medium">{slot.variable_name}</span>
+                    </span>
+                  )}
+                  {/* Simple mapping variable name */}
+                  {slot.is_mapping && !slot.struct_definition?.name && slot.variable_name && (
+                    <span className="text-xs font-mono leading-tight block">
                       <span className="text-gray-900 font-medium">{variableDisplayName}</span>
                     </span>
-                  </span>
-                ) : slot.is_mapping && !slot.struct_definition?.name && slot.value_type ? (
-                  <span className="text-xs font-mono leading-tight flex items-start">
-                    <span className="text-gray-300 mr-1 select-none">└</span>
-                    <span className="text-gray-400">{slot.value_type}</span>
-                  </span>
-                ) : !slot.struct_definition?.name && !slot.is_mapping ? (
-                  <span className="text-xs font-mono leading-tight block">
-                    {/* For single packed field, prefer packed field's type; otherwise use slot's type */}
-                    {(singlePackedField?.type_label || slot.value_type || slot.type_label) && (
-                      <><span className="text-gray-400">{singlePackedField?.type_label || slot.value_type || slot.type_label}</span>{' '}</>
-                    )}
-                    <span className="text-gray-900 font-medium">{singlePackedField?.name || variableDisplayName}</span>
-                    {variableLabel && (
-                      <span className="text-gray-400 ml-1">({variableLabel})</span>
-                    )}
-                  </span>
-                ) : null}
-              </span>
+                  )}
+                  {/* Struct field member */}
+                  {slot.struct_field && slot.struct_definition ? (
+                    <span className="text-xs font-mono leading-tight flex items-start">
+                      <span className="text-gray-300 mr-1 select-none">└</span>
+                      <span>
+                        <span className="text-gray-400">
+                          {slot.struct_definition.members.find(m => m.name === slot.struct_field)?.type_label
+                            || slot.value_type
+                            || slot.type_label}
+                        </span>{' '}
+                        <span className="text-gray-900 font-medium">{variableDisplayName}</span>
+                      </span>
+                    </span>
+                  ) : slot.is_mapping && !slot.struct_definition?.name && slot.value_type ? (
+                    <span className="text-xs font-mono leading-tight flex items-start">
+                      <span className="text-gray-300 mr-1 select-none">└</span>
+                      <span className="text-gray-400">{slot.value_type}</span>
+                    </span>
+                  ) : !slot.struct_definition?.name && !slot.is_mapping ? (
+                    <span className="text-xs font-mono leading-tight block">
+                      {/* For single packed field, prefer packed field's type; otherwise use slot's type */}
+                      {(singlePackedField?.type_label || slot.value_type || slot.type_label) && (
+                        <><span className="text-gray-400">{singlePackedField?.type_label || slot.value_type || slot.type_label}</span>{' '}</>
+                      )}
+                      <span className="text-gray-900 font-medium">{singlePackedField?.name || variableDisplayName}</span>
+                      {variableLabel && (
+                        <span className="text-gray-400 ml-1">({variableLabel})</span>
+                      )}
+                    </span>
+                  ) : null}
+                </span>
+              )}
             </HoverCard>
             {revertedNotice && <div>{revertedNotice}</div>}
           </td>

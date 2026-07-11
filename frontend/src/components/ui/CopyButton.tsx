@@ -7,6 +7,7 @@ interface CopyButtonProps {
   value: string;
   className?: string;
   size?: 'sm' | 'md';
+  label?: string;
 }
 
 function CopyIcon({ className }: { className?: string }) {
@@ -43,7 +44,7 @@ function CheckIcon({ className }: { className?: string }) {
   );
 }
 
-export function CopyButton({ value, className, size = 'sm' }: CopyButtonProps) {
+export function CopyButton({ value, className, size = 'sm', label = 'Copy' }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async (e: React.MouseEvent) => {
@@ -68,12 +69,12 @@ export function CopyButton({ value, className, size = 'sm' }: CopyButtonProps) {
     <button
       type="button"
       onClick={handleCopy}
-      aria-label={copied ? 'Copied' : 'Copy'}
+      aria-label={copied ? 'Copied' : label}
       className={cn(
         'p-1 text-gray-400 hover:text-gray-900 transition-colors',
         className
       )}
-      title={copied ? 'Copied!' : 'Copy'}
+      title={copied ? 'Copied!' : label}
     >
       {copied ? (
         <CheckIcon className="text-green" />
