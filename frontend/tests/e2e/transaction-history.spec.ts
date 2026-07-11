@@ -67,10 +67,27 @@ test('verified sources recover proxy, namespace, legacy, and Vyper variable name
   await expect(page.getByRole('heading', { name: 'Vat' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'WithdrawalQueueERC721' })).toBeVisible();
 
+  await expect(page.getByText('Contract', { exact: true })).toBeVisible();
+  await expect(page.getByText('Activity', { exact: true })).toBeVisible();
+  const safeSection = page.getByRole('heading', { name: 'GnosisSafe' }).locator('xpath=ancestor::section');
+  await expect(safeSection.getByText('0xfeb4...ff52', { exact: true })).toBeVisible();
+  await expect(safeSection.getByRole('button', { name: 'Copy' })).toBeVisible();
+
   const search = page.getByPlaceholder('Search contract, address, slot, or variable');
   await search.fill('nonreentrant.lock');
   await expect(page.getByTestId('contract-toggle')).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByText('nonreentrant.lock', { exact: true })).toBeVisible();
+
+  const valueDiff = page.getByTestId('value-diff').first();
+  const beforeBox = await valueDiff.getByTestId('value-before').boundingBox();
+  const afterBox = await valueDiff.getByTestId('value-after').boundingBox();
+  const arrowBox = await valueDiff.getByTestId('value-arrow').boundingBox();
+  expect(beforeBox).not.toBeNull();
+  expect(afterBox).not.toBeNull();
+  expect(arrowBox).not.toBeNull();
+  expect(Math.abs((beforeBox!.x + beforeBox!.width) - (afterBox!.x + afterBox!.width))).toBeLessThan(1);
+  expect(Math.abs(beforeBox!.y - arrowBox!.y)).toBeLessThan(1);
+  expect(afterBox!.y).toBeGreaterThan(beforeBox!.y);
 
   await search.fill('current_debt');
   await expect(page.getByText('current_debt', { exact: true })).toHaveCount(2);

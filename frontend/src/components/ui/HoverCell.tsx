@@ -72,7 +72,7 @@ export function HoverCell({
           className
         )}
       >
-        <span className={cn('font-mono truncate', colorClass)}>
+        <span className={cn('inline-block max-w-full truncate align-bottom font-mono', colorClass)}>
           {display}
         </span>
         {showActions && (

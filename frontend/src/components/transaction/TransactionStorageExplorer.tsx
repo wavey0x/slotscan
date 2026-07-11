@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { SlotHistoryTable } from '@/components/diff/DiffTable';
+import { ValueDiff } from '@/components/diff/ValueDiff';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { EtherscanLink } from '@/components/ui/EtherscanLink';
 import { Input } from '@/components/ui/Input';
@@ -71,37 +72,49 @@ function ContractSection({
 
   return (
     <section id={`owner-${contract.storage_address.slice(2)}`} className="scroll-mt-16 border-b border-gray-300">
-      <div className="flex items-center hover:bg-gray-50">
-        <button
-          type="button"
-          data-testid="contract-toggle"
-          aria-expanded={expanded}
-          onClick={() => setIsOpen((open) => !open)}
-          className="flex min-w-0 flex-1 items-center gap-2 py-2 text-left"
-        >
-          <span
-            aria-hidden="true"
-            className={cn('text-[10px] text-gray-400 transition-transform', expanded && 'rotate-90')}
+      <div className="grid grid-cols-[minmax(0,1fr)_auto_1.5rem] items-center gap-x-3 py-1.5 hover:bg-gray-50">
+        <div className="grid min-w-0 grid-cols-[1rem_minmax(0,1fr)] grid-rows-[auto_auto] items-center gap-x-1">
+          <button
+            type="button"
+            data-testid="contract-toggle"
+            aria-expanded={expanded}
+            aria-label={`${expanded ? 'Collapse' : 'Expand'} ${contract.name || 'unresolved contract'}`}
+            onClick={() => setIsOpen((open) => !open)}
+            className="col-span-2 row-start-1 flex min-w-0 items-center gap-1 text-left"
           >
-            ▶
-          </span>
-          <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2">
-            <h2 className="font-medium text-gray-900">
+            <span
+              aria-hidden="true"
+              className={cn('text-[10px] text-gray-400 transition-transform', expanded && 'rotate-90')}
+            >
+              ▶
+            </span>
+            <h2 className="truncate text-sm font-medium text-gray-900">
               {contract.name || 'Unresolved contract'}
             </h2>
-            <span className="font-mono text-xs text-gray-500">
-              {truncateAddress(contract.storage_address)}
-            </span>
+          </button>
+          <span
+            className="col-start-2 row-start-2 flex min-w-0 items-center text-[10px] font-mono text-gray-500"
+            title={contract.storage_address}
+          >
+            <span className="truncate">{truncateAddress(contract.storage_address)}</span>
+            <CopyButton value={contract.storage_address} className="-my-1 p-1" />
           </span>
-          <span className="shrink-0 text-[10px] text-gray-500">
+        </div>
+        <span className="flex shrink-0 flex-col items-end whitespace-nowrap text-right text-[10px] text-gray-500">
+          <span>
             {contract.counts.sstore_events} {contract.counts.sstore_events === 1 ? 'write' : 'writes'} · {contract.counts.slots_written} {contract.counts.slots_written === 1 ? 'slot' : 'slots'}
-            {contract.counts.reverted_writes > 0 && (
-              <> · {contract.counts.reverted_writes} reverted {contract.counts.reverted_writes === 1 ? 'write' : 'writes'}</>
-            )}
-            {!contract.layout_available && <> · raw slots</>}
           </span>
-        </button>
-        <span className="ml-2 shrink-0">
+          {(contract.counts.reverted_writes > 0 || !contract.layout_available) && (
+            <span className="text-[9px] text-gray-400">
+              {contract.counts.reverted_writes > 0 && (
+                <>{contract.counts.reverted_writes} reverted {contract.counts.reverted_writes === 1 ? 'write' : 'writes'}</>
+              )}
+              {contract.counts.reverted_writes > 0 && !contract.layout_available && <> · </>}
+              {!contract.layout_available && <>raw slots</>}
+            </span>
+          )}
+        </span>
+        <span className="shrink-0">
           <EtherscanLink
             href={getAddressExplorerUrl(chain, contract.storage_address)}
             title="View contract"
@@ -149,12 +162,25 @@ function Timeline({
 
   return (
     <div className="border-t border-gray-300">
+      <div
+        className={cn(
+          'grid gap-3 border-b border-gray-200 py-1 text-[9px] font-medium uppercase tracking-wide text-gray-400',
+          showContract
+            ? 'grid-cols-[4rem_minmax(8rem,12rem)_minmax(10rem,1fr)_minmax(12rem,1.4fr)]'
+            : 'grid-cols-[4rem_minmax(10rem,1fr)_minmax(12rem,1.4fr)]'
+        )}
+      >
+        <span>Step</span>
+        {showContract && <span>Contract</span>}
+        <span>Variable</span>
+        <span>Value diff</span>
+      </div>
       {entries.map(({ contract, slot, event, ordinal }) => (
         <div
           key={`${contract.storage_address}:${slot.slot}:${event.step}:${ordinal}`}
           data-testid="timeline-event"
           className={cn(
-            'grid gap-3 border-b border-gray-200 py-2 text-xs',
+            'grid gap-3 border-b border-gray-200 py-1.5 text-xs',
             showContract
               ? 'grid-cols-[4rem_minmax(8rem,12rem)_minmax(10rem,1fr)_minmax(12rem,1.4fr)]'
               : 'grid-cols-[4rem_minmax(10rem,1fr)_minmax(12rem,1.4fr)]'
@@ -174,10 +200,13 @@ function Timeline({
           <div className="truncate font-mono text-gray-900" title={slot.variable_path || slot.slot}>
             {slot.variable_path || slot.variable_name || truncateHash(slot.slot, 7)}
           </div>
-          <div className="min-w-0 font-mono">
-            <span className="break-all text-gray-400">{eventValue(event, 'before')}</span>
-            <span className="mx-1 text-gray-400">→</span>
-            <span className="break-all text-gray-900">{eventValue(event, 'after')}</span>
+          <div className="min-w-0 overflow-hidden font-mono">
+            <ValueDiff
+              before={eventValue(event, 'before')}
+              after={eventValue(event, 'after')}
+              beforeClassName="truncate text-gray-400"
+              afterClassName="truncate text-gray-900"
+            />
             {event.frame_outcome === 'reverted' && (
               <span className="ml-2 text-[9px] uppercase tracking-wide text-amber-600">
                 reverted
@@ -350,6 +379,11 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
 
       {view === 'grouped' ? (
         <div className="border-t border-gray-300">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto_1.5rem] gap-x-3 border-b border-gray-200 px-0 py-1 text-[9px] font-medium uppercase tracking-wide text-gray-400">
+            <span className="pl-5">Contract</span>
+            <span className="text-right">Activity</span>
+            <span aria-hidden="true" />
+          </div>
           {filteredContracts.map((contract) => (
             <ContractSection
               key={contract.storage_address}

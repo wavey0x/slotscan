@@ -47,15 +47,22 @@ export function SlotHistoryTable({
 
   return (
     <div>
-      <table className="w-full">
+      <table className="w-full table-fixed">
+        <colgroup>
+          <col className="w-5" />
+          <col className="w-[38%]" />
+          <col />
+          <col className="w-14" />
+          {executionOrderAvailable && <col className="w-14" />}
+        </colgroup>
         <thead>
           <tr className="border-b border-gray-200">
             <th className="w-5 px-1 py-1"></th>
-            <th className="w-48 px-1 py-1 text-left text-[9px] font-medium uppercase tracking-wide text-gray-400">Variable</th>
-            <th className="px-1 py-1 text-left text-[9px] font-medium uppercase tracking-wide text-gray-400">Value</th>
-            <th className="w-8 px-1 py-1 text-left text-[9px] font-medium uppercase tracking-wide text-gray-400">Slot</th>
+            <th className="px-1 py-1 text-left text-[9px] font-medium uppercase tracking-wide text-gray-400">Variable</th>
+            <th className="px-1 py-1 text-left text-[9px] font-medium uppercase tracking-wide text-gray-400">Value diff</th>
+            <th className="px-1 py-1 text-left text-[9px] font-medium uppercase tracking-wide text-gray-400">Slot</th>
             {executionOrderAvailable && (
-              <th className="w-10 px-1 py-1 text-right text-[9px] font-medium uppercase tracking-wide text-gray-400">
+              <th className="px-1 py-1 text-right text-[9px] font-medium uppercase tracking-wide text-gray-400">
                 Step
               </th>
             )}

@@ -29,6 +29,7 @@ import {
 import { HoverCell } from '@/components/ui/HoverCell';
 import { HoverCard, HoverCardSection, HoverCardDivider, HoverCardRow } from '@/components/ui/HoverCard';
 import { Tooltip } from '@/components/ui/Tooltip';
+import { ValueDiff } from './ValueDiff';
 
 interface SlotRowProps {
   slot: SlotChangeResponse;
@@ -156,10 +157,12 @@ const PackedFieldRow = ({
         </div>
       </td>
 
-      {/* Value column: stacked before/after using flexbox */}
+      {/* Value column: before/after share a right edge; arrow has its own cell */}
       <td className="px-1 py-0.5 align-top">
-        <div className="flex flex-col">
-          <div className="text-xs font-mono leading-tight flex items-center gap-1 text-gray-300">
+        <ValueDiff
+          beforeClassName="text-gray-300"
+          afterClassName={isFinalZero ? 'text-gray-300' : 'text-gray-900'}
+          before={
             <HoverCell
               display={initialDisplay}
               {...makeHoverProps(field.before.value_decoded, initialEncoded)}
@@ -167,10 +170,8 @@ const PackedFieldRow = ({
               colorClass="text-xs font-mono text-gray-300"
               forceActions
             />
-            <span className="text-gray-400">→</span>
-          </div>
-          <div className={cn('text-xs font-mono leading-tight',
-            isFinalZero ? 'text-gray-300' : 'text-gray-900')}>
+          }
+          after={
             <HoverCell
               display={finalDisplay}
               {...makeHoverProps(field.after.value_decoded, finalEncoded)}
@@ -178,8 +179,8 @@ const PackedFieldRow = ({
               colorClass={cn('text-xs font-mono', isFinalZero ? 'text-gray-300' : 'text-gray-900')}
               forceActions
             />
-          </div>
-        </div>
+          }
+        />
       </td>
 
       {/* Slot column - only show on first field if no struct header */}
@@ -280,12 +281,12 @@ const InterimPackedChangeRows = ({
                   <span className="text-gray-400">{field.type_label}</span>{' '}
                   <span className="text-gray-600">{field.name}</span>
                 </span>
-                {/* Before → After values */}
-                <span className="flex items-center gap-1">
-                  <span className="text-gray-300">{beforeDisplay}</span>
-                  <span className="text-gray-400">→</span>
-                  <span className={isAfterZero ? 'text-gray-300' : 'text-gray-700'}>{afterDisplay}</span>
-                </span>
+                <ValueDiff
+                  before={beforeDisplay}
+                  after={afterDisplay}
+                  beforeClassName="text-gray-300"
+                  afterClassName={isAfterZero ? 'text-gray-300' : 'text-gray-700'}
+                />
               </div>
             </td>
 
@@ -701,8 +702,10 @@ export function SlotRow({
               const isFinalZero = finalValue === '0' || finalValue === 'false' || isZeroValue(slot.after.value_encoded, afterDecoded);
 
               return (
-                <div className="flex flex-col">
-                  <div className="text-xs font-mono leading-tight flex items-center gap-1 text-gray-300">
+                <ValueDiff
+                  beforeClassName="text-gray-300"
+                  afterClassName={isFinalZero ? 'text-gray-300' : 'text-gray-900'}
+                  before={
                     <HoverCell
                       display={initialValue}
                       {...makeHoverProps(beforeDecoded, slot.before.value_encoded)}
@@ -710,9 +713,8 @@ export function SlotRow({
                       colorClass="text-xs font-mono text-gray-300"
                       forceActions
                     />
-                    <span className="text-gray-400">→</span>
-                  </div>
-                  <div className={cn('text-xs font-mono leading-tight', isFinalZero ? 'text-gray-300' : 'text-gray-900')}>
+                  }
+                  after={
                     <HoverCell
                       display={finalValue}
                       {...makeHoverProps(afterDecoded, slot.after.value_encoded)}
@@ -720,8 +722,8 @@ export function SlotRow({
                       colorClass={cn('text-xs font-mono', isFinalZero ? 'text-gray-300' : 'text-gray-900')}
                       forceActions
                     />
-                  </div>
-                </div>
+                  }
+                />
               );
             })()}
           </td>
@@ -789,25 +791,26 @@ export function SlotRow({
               </div>
             </td>
             <td className="pl-3 py-0.5 align-top">
-              <div className="flex flex-col">
-                <div className="text-xs font-mono leading-tight flex items-center gap-1 text-gray-300">
+              <ValueDiff
+                beforeClassName="text-gray-300"
+                afterClassName={isZeroValue(change.after.value_encoded, change.after.value_decoded) ? 'text-gray-300' : 'text-gray-900'}
+                before={
                   <HoverCell
                     display={oldVal}
                     {...makeHoverProps(change.before.value_decoded, change.before.value_encoded)}
                     chainId={chainId}
                     colorClass="text-xs font-mono text-gray-300"
                   />
-                  <span className="text-gray-400">→</span>
-                </div>
-                <div className={cn('text-xs font-mono leading-tight', isZeroValue(change.after.value_encoded, change.after.value_decoded) ? 'text-gray-300' : 'text-gray-900')}>
+                }
+                after={
                   <HoverCell
                     display={newVal}
                     {...makeHoverProps(change.after.value_decoded, change.after.value_encoded)}
                     chainId={chainId}
                     colorClass={cn('text-xs font-mono', isZeroValue(change.after.value_encoded, change.after.value_decoded) ? 'text-gray-300' : 'text-gray-900')}
                   />
-                </div>
-              </div>
+                }
+              />
             </td>
             <td className="px-1 py-0.5 align-top" />
             {showStep && (
