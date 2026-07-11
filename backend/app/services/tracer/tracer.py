@@ -832,13 +832,14 @@ class TransactionAnalysisService:
                             encoding = base_match.get("encoding")
                             key_type = base_match.get("key_type")
                             value_type = base_match.get("value_type")
-                            field_name, field_type = self.slot_resolver.resolve_struct_field(
-                                base_var, struct_offset, layout
+                            field_name, field_type = self.slot_resolver.resolve_match_struct_field(
+                                base_match, struct_offset, layout
                             )
                             variable_path = (
                                 f"{base_path}.{field_name}" if base_path else field_name
                             )
                             if field_type:
+                                value_type = field_type.id
                                 try:
                                     old_bytes = bytes.fromhex(old_value[2:])
                                     new_bytes = bytes.fromhex(new_value[2:])

@@ -280,6 +280,133 @@ class MappingSlotTests(unittest.TestCase):
         self.assertEqual(matches[0][0], 2)
         self.assertLessEqual(resolver.calls, 2)
 
+    def test_nested_mapping_inside_mapping_struct_resolves_inner_struct_field(self):
+        uint_type = StorageType("t_uint256", "uint256", "value", "inplace", 32)
+        bool_type = StorageType("t_bool", "bool", "value", "inplace", 1)
+        method_type = StorageType(
+            "t_struct_MethodConstraint",
+            "struct MethodConstraint",
+            "struct",
+            "inplace",
+            128,
+            members=[
+                StorageVariable("enabled", 0, 0, 1, bool_type.id, bool_type.label),
+                StorageVariable(
+                    "lastExecutionTimestamp",
+                    3,
+                    0,
+                    32,
+                    uint_type.id,
+                    uint_type.label,
+                ),
+            ],
+        )
+        methods_mapping = StorageType(
+            "t_mapping_bytes4_method",
+            "mapping(bytes4 => MethodConstraint)",
+            "mapping",
+            "mapping",
+            32,
+            key_type="t_bytes4",
+            value_type=method_type.id,
+        )
+        policy_type = StorageType(
+            "t_struct_PolicyItem",
+            "struct PolicyItem",
+            "struct",
+            "inplace",
+            64,
+            members=[
+                StorageVariable(
+                    "methods",
+                    1,
+                    0,
+                    32,
+                    methods_mapping.id,
+                    methods_mapping.label,
+                ),
+            ],
+        )
+        policy_mapping = StorageType(
+            "t_mapping_address_policy",
+            "mapping(address => PolicyItem)",
+            "mapping",
+            "mapping",
+            32,
+            key_type="t_address",
+            value_type=policy_type.id,
+        )
+        variable = StorageVariable(
+            "policy", 9, 0, 32, policy_mapping.id, policy_mapping.label
+        )
+        layout = StorageLayout(
+            "borgCore",
+            [variable],
+            {
+                uint_type.id: uint_type,
+                bool_type.id: bool_type,
+                method_type.id: method_type,
+                methods_mapping.id: methods_mapping,
+                policy_type.id: policy_type,
+                policy_mapping.id: policy_mapping,
+            },
+        )
+
+        owner = "0x" + "11" * 20
+        selector = bytes.fromhex("8d80ff0a")
+        outer_preimage = encode(["address", "uint256"], [owner, 9])
+        policy_hash = int.from_bytes(Web3.keccak(outer_preimage), "big")
+        methods_slot = policy_hash + 1
+        inner_preimage = selector.ljust(32, b"\x00") + methods_slot.to_bytes(32, "big")
+        method_hash = int.from_bytes(Web3.keccak(inner_preimage), "big")
+        target_slot = method_hash + 3
+        lookup = {
+            f"0x{policy_hash:064x}": "0x" + outer_preimage.hex(),
+            f"0x{method_hash:064x}": "0x" + inner_preimage.hex(),
+        }
+
+        resolver = SlotResolver()
+        matches = list(
+            resolver.find_struct_offset_matches(target_slot, layout, lookup)
+        )
+
+        self.assertEqual(len(matches), 1)
+        offset, base_match = matches[0]
+        self.assertEqual(offset, 3)
+        self.assertEqual(
+            base_match["path"],
+            f"policy[{owner}].methods[0x{selector.hex()}]",
+        )
+        field_name, field_type = resolver.resolve_match_struct_field(
+            base_match,
+            offset,
+            layout,
+        )
+        self.assertEqual(field_name, "lastExecutionTimestamp")
+        self.assertIs(field_type, uint_type)
+
+        tracer = TransactionTracer(object(), Settings(), TypeDecoder())
+        decoded = tracer._decode_changes(
+            [
+                (
+                    f"0x{target_slot:064x}",
+                    f"0x{1779904547:064x}",
+                    f"0x{1780454411:064x}",
+                    20869,
+                    3523,
+                )
+            ],
+            layout,
+            lookup,
+        )
+        self.assertEqual(len(decoded), 1)
+        self.assertEqual(
+            decoded[0].variable_path,
+            f"policy[{owner}].methods[0x{selector.hex()}].lastExecutionTimestamp",
+        )
+        self.assertEqual(decoded[0].value_type, uint_type.id)
+        self.assertEqual(decoded[0].new_decoded.decoded, 1780454411)
+
 
 class PackedArrayLayoutTests(unittest.TestCase):
     def setUp(self):

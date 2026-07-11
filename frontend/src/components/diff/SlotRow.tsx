@@ -657,7 +657,7 @@ export function SlotRow({
                 {/* Simple mapping variable name */}
                 {slot.is_mapping && !slot.struct_definition?.name && slot.variable_name && (
                   <span className="text-xs font-mono leading-tight block">
-                    <span className="text-gray-900 font-medium">{slot.variable_name}</span>
+                    <span className="text-gray-900 font-medium">{variableDisplayName}</span>
                   </span>
                 )}
                 {/* Struct field member */}
@@ -666,9 +666,11 @@ export function SlotRow({
                     <span className="text-gray-300 mr-1 select-none">└</span>
                     <span>
                       <span className="text-gray-400">
-                        {slot.struct_definition.members.find(m => m.name === slot.struct_field)?.type_label}
+                        {slot.struct_definition.members.find(m => m.name === slot.struct_field)?.type_label
+                          || slot.value_type
+                          || slot.type_label}
                       </span>{' '}
-                      <span className="text-gray-900 font-medium">{slot.struct_field}</span>
+                      <span className="text-gray-900 font-medium">{variableDisplayName}</span>
                     </span>
                   </span>
                 ) : slot.is_mapping && !slot.struct_definition?.name && slot.value_type ? (

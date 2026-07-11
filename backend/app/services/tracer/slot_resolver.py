@@ -65,13 +65,45 @@ class SlotPathResolver:
         elif var_type.kind == "struct":
             struct_type = var_type
 
+        return self._resolve_type_struct_field(struct_type, struct_offset, layout)
+
+    def resolve_match_struct_field(
+        self,
+        match: dict,
+        struct_offset: int,
+        layout: StorageLayout,
+    ) -> tuple[str | None, StorageType | None]:
+        """Resolve a field relative to the value type at a proven path.
+
+        A match can already point through one or more mapping/struct layers.
+        Prefer its current decoded value type instead of restarting from the
+        top-level variable, which would interpret the offset against the wrong
+        struct.
+        """
+        current_type = match.get("decode_type")
+        if current_type and current_type.kind == "struct":
+            return self._resolve_type_struct_field(
+                current_type,
+                struct_offset,
+                layout,
+            )
+
+        variable = match.get("variable")
+        if variable:
+            return self.resolve_struct_field(variable, struct_offset, layout)
+
+        return None, None
+
+    @staticmethod
+    def _resolve_type_struct_field(
+        struct_type: StorageType | None,
+        struct_offset: int,
+        layout: StorageLayout,
+    ) -> tuple[str | None, StorageType | None]:
         if struct_type and struct_type.members:
             for member in struct_type.members:
                 if member.slot == struct_offset:
-                    member_type = layout.get_type(member.type_id)
-                    if member_type and member_type.kind == "struct" and member_type.members:
-                        return member.name, member_type
-                    return member.name, member_type
+                    return member.name, layout.get_type(member.type_id)
 
         return None, None
 
@@ -325,18 +357,44 @@ class SlotPathResolver:
             ):
                 base_variable = base_match.get("variable")
                 base_key = base_match.get("key", "?")
-                outer_decoded_key = self.decode_mapping_key(candidate_key_hex)
+                field_name, field_type = self.resolve_match_struct_field(
+                    base_match,
+                    offset,
+                    layout,
+                )
+                if not field_name or not field_type or field_type.encoding != "mapping":
+                    continue
+                nested_key = self.decode_mapping_key(
+                    candidate_key_hex,
+                    field_type.key_type,
+                )
+                base_path = base_match.get("path") or (
+                    f"{base_variable.name}[{base_key}]" if base_variable else None
+                )
+                value_type = (
+                    layout.get_type(field_type.value_type)
+                    if field_type.value_type
+                    else None
+                )
+                combined_key = f"{base_key}, {nested_key}"
                 return {
                     "variable": base_variable,
                     "base_slot": base_match.get("base_slot"),
-                    "key": base_key,
-                    "path": f"{base_variable.name}[{base_key}]+{offset}" if base_variable else None,
+                    "key": combined_key,
+                    "path": (
+                        f"{base_path}.{field_name}[{nested_key}]"
+                        if base_path
+                        else None
+                    ),
                     "encoding": "mapping",
-                    "key_type": base_match.get("key_type"),
-                    "value_type": base_match.get("value_type"),
-                    "decode_type": base_match.get("decode_type"),
-                    "struct_offset": offset,
-                    "outer_key": outer_decoded_key,
+                    "key_type": field_type.key_type,
+                    "value_type": field_type.value_type,
+                    "decode_type": value_type,
+                    "remaining_mapping_type": (
+                        value_type
+                        if value_type and value_type.encoding == "mapping"
+                        else None
+                    ),
                 }
 
         # Check for struct offset: slot might be base_hash + offset
@@ -416,8 +474,8 @@ class SlotPathResolver:
             base_variable = base_match.get("variable") if base_match else None
             if not base_variable:
                 continue
-            field_name, _ = self.resolve_struct_field(
-                base_variable,
+            field_name, _ = self.resolve_match_struct_field(
+                base_match,
                 offset,
                 layout,
             )

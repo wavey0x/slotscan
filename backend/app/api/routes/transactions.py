@@ -466,8 +466,29 @@ def _group_changes_by_slot(
 
         # Cache the variable's type lookup to avoid repeated regex-based synthesis
         first_var_type = None
+        resolved_value_type = None
         if layout and first.variable:
             first_var_type = layout.get_type(first.variable.type_id)
+            if first.value_type:
+                resolved_value_type = layout.get_type(first.value_type)
+        response_type_label = (
+            resolved_value_type.label
+            if resolved_value_type
+            else first.variable.label if first.variable else None
+        )
+        response_type_kind = (
+            resolved_value_type.kind
+            if resolved_value_type
+            else first_var_type.kind if first_var_type else None
+        )
+        if resolved_value_type:
+            response_value_type = _clean_type_label(resolved_value_type.label)
+        elif first.is_mapping and first.variable and layout:
+            response_value_type = _get_final_value_type(first.variable, layout)
+        else:
+            response_value_type = (
+                _clean_value_type(first.value_type) if first.value_type else None
+            )
 
         # Build interim changes list
         interim_changes = [
@@ -763,8 +784,8 @@ def _group_changes_by_slot(
                 variable_path=first.variable_path,
                 resolved_paths=resolved_paths,
                 type_label=_normalize_contract_label(
-                    first.variable.label if first.variable else None,
-                    first_var_type.kind if first_var_type else None
+                    response_type_label,
+                    response_type_kind,
                 ) if first.variable else None,
                 params=params,
                 mapping_base_slot=first.mapping_base_slot,
@@ -773,11 +794,7 @@ def _group_changes_by_slot(
                 array_index=first.array_index,
                 encoding=first.encoding,
                 # Use the fully-unwrapped final value type for mappings
-                value_type=(
-                    _get_final_value_type(first.variable, layout)
-                    if (first.is_mapping and first.variable and layout)
-                    else _clean_value_type(first.value_type) if first.value_type else None
-                ),
+                value_type=response_value_type,
                 # Summary values: before (initial) and after (final)
                 before=ValuePair(
                     value_encoded=summary_before,
