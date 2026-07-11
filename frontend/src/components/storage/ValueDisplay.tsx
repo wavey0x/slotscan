@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { CopyButton } from '@/components/ui/CopyButton';
 import { cn } from '@/lib/utils';
 
 interface ValueDisplayProps {
@@ -15,14 +16,7 @@ export function ValueDisplay({
   rawValue,
   className,
 }: ValueDisplayProps) {
-  const [copied, setCopied] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
-
-  const copyValue = async () => {
-    await navigator.clipboard.writeText(rawValue);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   const displayValue = showRaw ? rawValue : value;
 
@@ -35,12 +29,11 @@ export function ValueDisplay({
       >
         {displayValue}
       </button>
-      <button
-        onClick={copyValue}
-        className="opacity-0 group-hover:opacity-100 text-xs text-gray-500 hover:text-gray-900"
-      >
-        {copied ? 'copied' : 'copy'}
-      </button>
+      <CopyButton
+        value={rawValue}
+        label="Copy value"
+        className="opacity-0 group-hover:opacity-100 focus:opacity-100"
+      />
     </div>
   );
 }

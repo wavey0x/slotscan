@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { Check, Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface CopyButtonProps {
@@ -10,42 +11,9 @@ interface CopyButtonProps {
   label?: string;
 }
 
-function CopyIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 14 14"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      className={className}
-    >
-      <rect x="4.5" y="4.5" width="8" height="8" />
-      <path d="M9.5 4.5V1.5H1.5V9.5H4.5" />
-    </svg>
-  );
-}
-
-function CheckIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 14 14"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="square"
-      className={className}
-    >
-      <path d="M2 7L5.5 10.5L12 4" />
-    </svg>
-  );
-}
-
 export function CopyButton({ value, className, size = 'sm', label = 'Copy' }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
+  const iconSize = size === 'md' ? 14 : 12;
 
   const handleCopy = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -71,15 +39,15 @@ export function CopyButton({ value, className, size = 'sm', label = 'Copy' }: Co
       onClick={handleCopy}
       aria-label={copied ? 'Copied' : label}
       className={cn(
-        'p-1 text-gray-400 hover:text-gray-900 transition-colors',
+        'inline-flex h-5 w-5 shrink-0 items-center justify-center text-gray-400 transition-colors hover:text-gray-900 focus-visible:text-gray-900 focus-visible:outline-none',
         className
       )}
       title={copied ? 'Copied!' : label}
     >
       {copied ? (
-        <CheckIcon className="text-green" />
+        <Check size={iconSize} strokeWidth={1.5} className="text-green" />
       ) : (
-        <CopyIcon />
+        <Copy size={iconSize} strokeWidth={1.25} />
       )}
     </button>
   );
