@@ -1,16 +1,16 @@
-import { Container } from '@/components/layout/Container';
+import { PageFrame } from '@/components/layout/PageFrame';
 import { SearchForm } from '@/components/search/SearchForm';
 import { RecentSearches } from '@/components/search/RecentSearches';
 
 export default function HomePage() {
   return (
-    <Container>
+    <PageFrame variant="form">
       <div className="flex flex-col items-center justify-center min-h-[50vh]">
-        <h1 className="text-2xl font-light mb-1 text-gray-900">SlotScan</h1>
-        <p className="text-sm text-gray-500 mb-8">Ethereum Storage Analyzer</p>
+        <h1 className="mb-2 text-xl font-medium text-gray-900">Inspect Ethereum storage</h1>
+        <p className="mb-8 text-center text-xs text-gray-500">Enter a contract address or transaction hash.</p>
         <SearchForm />
-        <RecentSearches className="mt-12 w-full max-w-lg" />
+        <RecentSearches className="mt-12 w-full" />
       </div>
-    </Container>
+    </PageFrame>
   );
 }

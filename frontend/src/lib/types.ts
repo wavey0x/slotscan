@@ -159,24 +159,6 @@ export interface SlotChangeResponse {
   changes: StorageChangeResponse[];
 }
 
-export interface TransactionDiffResponse {
-  chain_id: number;
-  address: string;
-  tx_hash: string;
-  block_number: number;
-  slots: SlotChangeResponse[];
-  is_complete: boolean;
-  is_verified: boolean;
-  trace_unavailable: boolean;
-  contract_name: string | null;
-  layout_available: boolean;
-  execution_order_available: boolean; // True if step values are real EVM execution order
-  frame_outcomes_available: boolean;
-  write_old_values_available: boolean;
-  final_state_values_available: boolean;
-  trace_step_count: number | null;
-}
-
 export interface TransactionCapabilitiesResponse {
   write_history_complete: boolean;
   values_complete: boolean;

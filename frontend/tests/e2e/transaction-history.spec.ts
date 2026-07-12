@@ -5,8 +5,8 @@ const RESTORED_TX = '0x7fe79d06862f71a5809babfadac1c9a204b09dfbb8c40ac725d23b9ba
 const REVERTED_WRITES_TX = '0x561dd631cb9eabc2ba595ca4410fd26ca3e6183d2b8ba4f55bbf4c4b9c742ae2';
 const SOURCE_LAYOUT_TX = '0x3353c2009d984e15a2dd909d09f56f2833cfa99129fa834ea6eaf9349f14cd60';
 const NESTED_STRUCT_MAPPING_TX = '0x8e37bdd5003c883a684cd6c944c5fac24cc7f29b15ef23c5f6d7adf41c222f82';
-const MULTI_KEY_MAPPING_ADDRESS = '0xb45ad160634c528Cc3D2926d9807104FA3157305';
-const MULTI_KEY_MAPPING_TX = '0xb93506af8f1a39f6a31e2d34f5f6a262c2799fef6e338640f42ab8737ed3d8a4';
+const GNOSIS_SAFE_ADDRESS = '0x16388463d60ffe0661cf7f1f31a7d658ac790ff7';
+const LIDO_ADDRESS = '0xae7ab96520de3a18e5e111b5eaab095312d7fe84';
 
 test('home search accepts a transaction hash and opens transaction-wide history', async ({ page }) => {
   await page.goto('/');
@@ -20,7 +20,7 @@ test('home search accepts a transaction hash and opens transaction-wide history'
   for (const label of ['Transaction', 'Block', 'From', 'To']) {
     await expect(page.getByText(label, { exact: true }).first()).toBeVisible();
   }
-  await expect(page.getByRole('button', { name: 'Timeline' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Grouped' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('checkbox')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Net effects' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Restored' })).toHaveCount(0);
@@ -33,14 +33,14 @@ test('all writes remain visible without interpretive classification controls', a
   await expect(page.getByRole('heading', { name: 'Transaction storage history' })).toBeVisible();
   await expect(page.getByTestId('summary-writes').getByText('5', { exact: true })).toBeVisible();
   await expect(page.getByTestId('summary-slots').getByText('4', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Timeline' })).toHaveAttribute('aria-pressed', 'true');
-  for (const step of ['719', '777', '920', '1432', '1496']) {
+  await expect(page.getByRole('button', { name: 'Grouped' })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByTestId('contract-toggle').click();
+  for (const step of ['719', '777', '920', '1432']) {
     await expect(page.getByText(step, { exact: true })).toBeVisible();
   }
 
-  await page.getByRole('button', { name: 'Grouped' }).click();
-  await page.getByTestId('contract-toggle').click();
   await page.getByRole('button', { name: 'Expand write history' }).click();
+  await expect(page.getByText('1496', { exact: true })).toBeVisible();
   await expect(page.getByText('1/2')).toBeVisible();
   await expect(page.getByText('2/2')).toBeVisible();
   await expect(page.getByText('restored', { exact: true })).toHaveCount(0);
@@ -142,6 +142,7 @@ test('nested mappings inside mapping structs show the full resolved path', async
   );
 
   await page.getByRole('button', { name: 'Timeline' }).click();
+  await expect(page).toHaveURL(new RegExp(`/${NESTED_STRUCT_MAPPING_TX}\\?.*view=timeline`));
   const timelineVariable = page.getByTestId('keyed-variable-path');
   await expect(timelineVariable.getByTestId('keyed-variable-primary')).toHaveText('lastExecutionTimestamp');
   await expect(timelineVariable.getByTestId('keyed-variable-key-line')).toHaveCount(2);
@@ -149,18 +150,20 @@ test('nested mappings inside mapping structs show the full resolved path', async
 
 test('multi-key mappings stay compact and copy their complete path', async ({ page }) => {
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
-  await page.goto(`/1/${MULTI_KEY_MAPPING_ADDRESS}?tx=${MULTI_KEY_MAPPING_TX}`);
+  await page.goto(`/1/tx/${SOURCE_LAYOUT_TX}?focus=${LIDO_ADDRESS}`);
 
-  await expect(page.getByRole('heading', { name: 'State Changes' })).toBeVisible();
-  const keyedVariables = page.getByTestId('keyed-variable-path');
-  await expect(keyedVariables).toHaveCount(9);
+  await expect(page.getByRole('heading', { name: 'Transaction storage history' })).toBeVisible();
+  const lidoSection = page.getByRole('heading', { name: 'Lido' }).locator('xpath=ancestor::section');
+  await expect(lidoSection.getByTestId('contract-toggle')).toHaveAttribute('aria-expanded', 'true');
+  const keyedVariables = lidoSection.getByTestId('keyed-variable-path');
+  await expect(keyedVariables).toHaveCount(3);
 
-  const allowance = keyedVariables.filter({ hasText: 'allowance' }).first();
-  await expect(allowance.getByTestId('keyed-variable-primary')).toHaveText('allowance');
-  await expect(allowance.getByText('0xd8e8...6982', { exact: true })).toBeVisible();
-  await expect(allowance.getByText('0x0079...a1f7', { exact: true })).toBeVisible();
+  const allowance = keyedVariables.filter({ hasText: 'allowances' }).first();
+  await expect(allowance.getByTestId('keyed-variable-primary')).toHaveText('allowances');
+  await expect(allowance.getByText('0x470e...7435', { exact: true })).toBeVisible();
+  await expect(allowance.getByText('0x889e...f9b1', { exact: true })).toBeVisible();
   await expect(allowance.getByText('uint256', { exact: true })).toBeVisible();
-  await expect(allowance).not.toContainText('0xd8e8544e0c808641b9b89dfb285b5655bd5b6982');
+  await expect(allowance).not.toContainText('0x470e0e048f85cfd72eef325895e02c8d297e7435');
 
   const keyLines = allowance.getByTestId('keyed-variable-key-line');
   await expect(keyLines).toHaveCount(2);
@@ -171,13 +174,24 @@ test('multi-key mappings stay compact and copy their complete path', async ({ pa
   expect(secondKeyBox!.y).toBeGreaterThan(firstKeyBox!.y);
   expect(Math.abs(secondKeyBox!.x - firstKeyBox!.x)).toBeLessThan(1);
 
-  const balance = keyedVariables.filter({ hasText: 'balanceOf' }).first();
-  await expect(balance.getByTestId('keyed-variable-key-line')).toHaveCount(0);
-  await expect(balance.getByTestId('keyed-variable-primary')).toContainText('balanceOf[0x4606...d87f]');
+  const shares = keyedVariables.filter({ hasText: 'shares' }).first();
+  await expect(shares.getByTestId('keyed-variable-key-line')).toHaveCount(0);
+  await expect(shares.getByTestId('keyed-variable-primary')).toContainText('shares[0x470e...7435]');
 
   const copy = allowance.getByRole('button', { name: 'Copy full path' });
   await copy.click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(
-    'allowance[0xd8e8544e0c808641b9b89dfb285b5655bd5b6982][0x0079885e248b572cdc4559a8b156745e2d8ea1f7]',
+    'allowances[0x470e0e048f85cfd72eef325895e02c8d297e7435][0x889edc2edab5f40e902b864ad4d7ade8e412f9b1]',
   );
+});
+
+test('legacy contract transaction URLs redirect to the complete focused report', async ({ page }) => {
+  await page.goto(`/1/${GNOSIS_SAFE_ADDRESS}?tx=${SOURCE_LAYOUT_TX}`);
+  await expect(page).toHaveURL(`/1/tx/${SOURCE_LAYOUT_TX}?focus=${GNOSIS_SAFE_ADDRESS}`);
+  await expect(page.getByTestId('contract-toggle')).toHaveCount(13);
+  const safeSection = page.getByRole('heading', { name: 'GnosisSafe' }).locator('xpath=ancestor::section');
+  await expect(safeSection.getByTestId('contract-toggle')).toHaveAttribute('aria-expanded', 'true');
+
+  await page.goto(`/1/${GNOSIS_SAFE_ADDRESS}/tx/${SOURCE_LAYOUT_TX}`);
+  await expect(page).toHaveURL(`/1/tx/${SOURCE_LAYOUT_TX}?focus=${GNOSIS_SAFE_ADDRESS}`);
 });

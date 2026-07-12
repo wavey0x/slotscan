@@ -1,13 +1,22 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { SlotHistoryTable } from '@/components/diff/DiffTable';
 import { KeyedVariablePath } from '@/components/diff/KeyedVariablePath';
 import { ValueDiff } from '@/components/diff/ValueDiff';
+import {
+  StorageTable,
+  StorageTableColumns,
+  StorageTableHeader,
+  storageCellClass,
+} from '@/components/diff/StorageTable';
+import { TransactionHeader } from '@/components/transaction/TransactionHeader';
+import { DataQuality } from '@/components/transaction/DataQuality';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { Input } from '@/components/ui/Input';
 import { Loading } from '@/components/ui/Loading';
-import { getAddressExplorerUrl, getBlockExplorerUrl, getTxExplorerUrl } from '@/lib/constants';
+import { getAddressExplorerUrl } from '@/lib/constants';
 import { useTransactionStorageHistory } from '@/lib/hooks/useTransactionStorageHistory';
 import {
   ContractHistoryResponse,
@@ -17,6 +26,7 @@ import {
 import {
   cn,
   formatDecodedValue,
+  formatSlotShort,
   truncateAddress,
   truncateHash,
 } from '@/lib/utils';
@@ -54,21 +64,37 @@ function eventValue(event: StorageChangeResponse, side: 'before' | 'after') {
     : formatDecodedValue(pair.value_decoded);
 }
 
+function contractErrorMessage(message: string): string {
+  if (message.toLowerCase().includes('historical resolution')) {
+    return 'Variable resolution is incomplete; raw slot history is shown.';
+  }
+  if (message.toLowerCase().includes('layout')) {
+    return 'The storage layout is incomplete; unresolved slots are shown raw.';
+  }
+  return 'Some storage evidence could not be resolved; raw slot history is shown.';
+}
+
 function ContractSection({
   contract,
   chain,
   forceOpen,
+  defaultOpen,
   executionOrderAvailable,
   isComplete,
 }: {
   contract: ContractHistoryResponse;
   chain: string;
   forceOpen: boolean;
+  defaultOpen: boolean;
   executionOrderAvailable: boolean;
   isComplete: boolean;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(defaultOpen);
   const expanded = isOpen || forceOpen;
+
+  useEffect(() => {
+    if (defaultOpen) setIsOpen(true);
+  }, [defaultOpen]);
 
   return (
     <section id={`owner-${contract.storage_address.slice(2)}`} className="scroll-mt-16 border-b border-gray-300">
@@ -143,10 +169,8 @@ function ContractSection({
               ))}
             </div>
           )}
-          {contract.errors.map((message) => (
-            <div key={message} className="mb-1 text-[10px] text-amber-600">
-              {message}; showing raw history
-            </div>
+          {Array.from(new Set(contract.errors.map(contractErrorMessage))).map((message) => (
+            <div key={message} className="mb-1 text-[10px] text-amber-600">{message}</div>
           ))}
           <SlotHistoryTable
             chainId={chain}
@@ -175,76 +199,94 @@ function Timeline({
   }
 
   return (
-    <div className="border-t border-gray-300">
-      <div
-        className={cn(
-          'grid gap-3 border-b border-gray-200 py-1 text-[9px] font-medium uppercase tracking-wide text-gray-400',
-          showContract
-            ? 'grid-cols-[4rem_minmax(8rem,12rem)_minmax(10rem,1fr)_minmax(12rem,1.4fr)]'
-            : 'grid-cols-[4rem_minmax(10rem,1fr)_minmax(12rem,1.4fr)]'
-        )}
-      >
-        <span>Step</span>
-        {showContract && <span>Contract</span>}
-        <span>Variable</span>
-        <span>Value diff</span>
-      </div>
-      {entries.map(({ contract, slot, event, ordinal }) => (
-        <div
-          key={`${contract.storage_address}:${slot.slot}:${event.step}:${ordinal}`}
-          data-testid="timeline-event"
-          className={cn(
-            'grid gap-3 border-b border-gray-200 py-1.5 text-xs',
-            showContract
-              ? 'grid-cols-[4rem_minmax(8rem,12rem)_minmax(10rem,1fr)_minmax(12rem,1.4fr)]'
-              : 'grid-cols-[4rem_minmax(10rem,1fr)_minmax(12rem,1.4fr)]'
-          )}
-        >
-          <div className="font-mono text-gray-400">{event.step ?? '—'}</div>
-          {showContract && (
-            <a
-              href={getAddressExplorerUrl(chain, contract.storage_address)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="truncate text-gray-700 hover:underline"
-            >
-              {contract.name || truncateAddress(contract.storage_address)}
-            </a>
-          )}
-          {slot.variable_path?.includes('[') ? (
-            <KeyedVariablePath
-              path={slot.variable_path}
-              typeLabel={slot.value_type || slot.type_label}
-              chainId={chain}
-            />
-          ) : (
-            <div className="truncate font-mono text-gray-900" title={slot.variable_path || slot.slot}>
-              {slot.variable_path || slot.variable_name || truncateHash(slot.slot, 7)}
-            </div>
-          )}
-          <div className="min-w-0 overflow-hidden font-mono">
-            <ValueDiff
-              before={eventValue(event, 'before')}
-              after={eventValue(event, 'after')}
-              beforeClassName="truncate text-gray-400"
-              afterClassName="truncate text-gray-900"
-            />
-            {event.frame_outcome === 'reverted' && (
-              <span className="ml-2 text-[9px] uppercase tracking-wide text-amber-600">
-                reverted
-              </span>
+    <StorageTable>
+      <StorageTableColumns showContract={showContract} />
+      <StorageTableHeader showContract={showContract} />
+      <tbody>
+        {entries.map(({ contract, slot, event, ordinal }) => (
+          <tr
+            key={`${contract.storage_address}:${slot.slot}:${event.step}:${ordinal}`}
+            data-testid="timeline-event"
+            className="border-b border-gray-200 text-xs hover:bg-gray-50"
+          >
+            {showContract && (
+              <td className={storageCellClass}>
+                <a
+                  href={getAddressExplorerUrl(chain, contract.storage_address)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block truncate text-gray-700 hover:underline"
+                  title={contract.storage_address}
+                >
+                  {contract.name || truncateAddress(contract.storage_address)}
+                </a>
+              </td>
             )}
-          </div>
-        </div>
-      ))}
-    </div>
+            <td className={storageCellClass}>
+              {slot.variable_path?.includes('[') ? (
+                <KeyedVariablePath
+                  path={slot.variable_path}
+                  typeLabel={slot.value_type || slot.type_label}
+                  chainId={chain}
+                />
+              ) : (
+                <div className="truncate font-mono text-gray-900" title={slot.variable_path || slot.slot}>
+                  {slot.variable_path || slot.variable_name || truncateHash(slot.slot, 7)}
+                </div>
+              )}
+            </td>
+            <td className={`${storageCellClass} min-w-0 overflow-hidden font-mono`}>
+              <ValueDiff
+                before={eventValue(event, 'before')}
+                after={eventValue(event, 'after')}
+                beforeClassName="truncate text-gray-400"
+                afterClassName="truncate text-gray-900"
+              />
+              {event.frame_outcome === 'reverted' && (
+                <div className="mt-0.5 text-[9px] uppercase tracking-wide text-amber-600">
+                  reverted
+                </div>
+              )}
+            </td>
+            <td className={`${storageCellClass} font-mono text-gray-500`} title={slot.slot}>
+              {formatSlotShort(slot.slot)}
+            </td>
+            <td className={`${storageCellClass} font-mono text-gray-400`}>
+              {event.step ?? '—'}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </StorageTable>
   );
 }
 
 export function TransactionStorageExplorer({ chain, txHash }: TransactionStorageExplorerProps) {
   const { data, isLoading, error } = useTransactionStorageHistory(chain, txHash);
-  const [selectedView, setSelectedView] = useState<ViewMode | null>(null);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [search, setSearch] = useState('');
+  const viewParam = searchParams.get('view');
+  const requestedView: ViewMode = viewParam === 'timeline' ? 'timeline' : 'grouped';
+  const focusParam = searchParams.get('focus')?.toLowerCase() || null;
+
+  useEffect(() => {
+    if (!data || !focusParam) return;
+    const focused = data.contracts.find(
+      (contract) => contract.storage_address.toLowerCase() === focusParam
+    );
+    if (!focused) return;
+    requestAnimationFrame(() => {
+      document.getElementById(`owner-${focused.storage_address.slice(2)}`)?.scrollIntoView({ block: 'start' });
+    });
+  }, [data, focusParam]);
+
+  const selectView = (mode: ViewMode) => {
+    const next = new URLSearchParams(searchParams.toString());
+    next.set('view', mode);
+    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+  };
 
   const filteredContracts = useMemo(() => {
     if (!data) return [];
@@ -285,7 +327,7 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
   }, [data, search]);
 
   if (isLoading) {
-    return <Loading messages={['Loading transaction trace', 'Replaying storage writes', 'Resolving storage owners', 'Decoding slot histories']} subtitle="Large transactions can take up to two minutes" />;
+    return <Loading message="Analyzing transaction" subtitle="Large traces may take up to two minutes." />;
   }
   if (error) {
     return <div className="border border-gray-300 p-5 text-red">Failed to analyze transaction: {(error as Error).message}</div>;
@@ -305,103 +347,24 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
   ].filter(Boolean) as string[];
 
   const singleContract = data.contracts.length === 1 ? data.contracts[0] : null;
-  const defaultView: ViewMode = singleContract && data.capabilities.execution_order_available
+  const view: ViewMode = requestedView === 'timeline' && data.capabilities.execution_order_available
     ? 'timeline'
     : 'grouped';
-  const view = selectedView || defaultView;
   const showSearch = data.summary.slots_written > 15 || data.contracts.length > 3;
-  const fromAddress = data.from_address;
-  const toAddress = data.to_address || data.created_contract;
-
   return (
     <div>
-      <header className="mb-5">
-        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-          <h1 className="text-lg font-medium text-gray-900">Transaction storage history</h1>
-          <span className={cn(
-            'text-[9px] uppercase tracking-wide',
-            data.status === 'success' ? 'text-gray-500' : 'text-amber-600'
-          )}>
-            {data.status}
-          </span>
-        </div>
-        <dl className="grid grid-cols-1 gap-x-5 gap-y-2 border-y border-gray-300 py-2.5 sm:grid-cols-2 md:grid-cols-[minmax(13rem,1.5fr)_minmax(7rem,.65fr)_minmax(7rem,.8fr)_minmax(7rem,.8fr)]">
-          <div className="min-w-0">
-            <dt className="text-[9px] uppercase tracking-wide text-gray-400">Transaction</dt>
-            <dd className="mt-0.5 flex min-w-0 items-center gap-0.5 text-xs font-mono text-gray-900">
-              <a
-                href={getTxExplorerUrl(chain, data.tx_hash)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="truncate hover:underline"
-                title={data.tx_hash}
-              >
-                {truncateHash(data.tx_hash, 10)}
-              </a>
-              <CopyButton value={data.tx_hash} />
-            </dd>
-          </div>
-          <div>
-            <dt className="text-[9px] uppercase tracking-wide text-gray-400">Block</dt>
-            <dd className="mt-0.5 flex items-center gap-0.5 text-xs font-mono text-gray-900">
-              <a
-                href={getBlockExplorerUrl(chain, data.block_number)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hover:underline"
-              >
-                {data.block_number.toLocaleString()}
-              </a>
-            </dd>
-          </div>
-          <div className="min-w-0">
-            <dt className="text-[9px] uppercase tracking-wide text-gray-400">From</dt>
-            <dd className="mt-0.5 truncate text-xs font-mono text-gray-700">
-              {fromAddress ? (
-                <a href={getAddressExplorerUrl(chain, fromAddress)} target="_blank" rel="noopener noreferrer" className="hover:underline" title={fromAddress}>
-                  {truncateAddress(fromAddress)}
-                </a>
-              ) : '—'}
-            </dd>
-          </div>
-          <div className="min-w-0">
-            <dt className="text-[9px] uppercase tracking-wide text-gray-400">To</dt>
-            <dd className="mt-0.5 truncate text-xs font-mono text-gray-700">
-              {toAddress ? (
-                <a href={getAddressExplorerUrl(chain, toAddress)} target="_blank" rel="noopener noreferrer" className="hover:underline" title={toAddress}>
-                  {truncateAddress(toAddress)}
-                </a>
-              ) : '—'}
-            </dd>
-          </div>
-        </dl>
+      <TransactionHeader chain={chain} data={data} />
+      {singleContract && !singleContract.layout_available && (
+        <div className="-mt-4 mb-5 text-[10px] uppercase tracking-wide text-gray-500">Raw slots</div>
+      )}
 
-        <dl className="mt-3 flex flex-wrap items-center gap-x-7 gap-y-1">
-          <div data-testid="summary-contracts" className="flex items-baseline gap-1.5">
-            <dt className="text-[9px] uppercase tracking-wide text-gray-400">Contracts</dt>
-            <dd className="text-sm font-medium text-gray-900">{data.summary.storage_owners}</dd>
-          </div>
-          <div data-testid="summary-writes" className="flex items-baseline gap-1.5">
-            <dt className="text-[9px] uppercase tracking-wide text-gray-400">Writes</dt>
-            <dd className="text-sm text-gray-700">{data.summary.sstore_events}</dd>
-          </div>
-          <div data-testid="summary-slots" className="flex items-baseline gap-1.5">
-            <dt className="text-[9px] uppercase tracking-wide text-gray-400">Slots</dt>
-            <dd className="text-sm text-gray-700">{data.summary.slots_written}</dd>
-          </div>
-          {singleContract && !singleContract.layout_available && (
-            <span className="text-[9px] uppercase tracking-wide text-gray-400">Raw slots</span>
-          )}
-        </dl>
-      </header>
-
-      {warnings.length > 0 && <div className="mb-5 border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">{warnings.join(' ')}</div>}
+      <DataQuality warnings={warnings} />
 
       <div className="mb-7 flex flex-wrap items-center gap-2 border-y border-gray-300 py-3">
         {(['grouped', 'timeline'] as ViewMode[]).map((mode) => (
           <button
             key={mode}
-            onClick={() => setSelectedView(mode)}
+            onClick={() => selectView(mode)}
             disabled={mode === 'timeline' && !data.capabilities.execution_order_available}
             aria-pressed={view === mode}
             className={cn(
@@ -435,6 +398,7 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
               contract={contract}
               chain={chain}
               forceOpen={Boolean(search.trim())}
+              defaultOpen={focusParam === contract.storage_address.toLowerCase()}
               executionOrderAvailable={data.capabilities.execution_order_available}
               isComplete={data.is_complete}
             />

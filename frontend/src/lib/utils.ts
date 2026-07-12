@@ -61,24 +61,28 @@ function tryParseBigInt(value: string): bigint | null {
   return null;
 }
 
-const RECENT_SEARCHES_KEY = 'slotscan_recent_searches';
+const RECENT_SEARCHES_KEY = 'slotscan_recent_inspections_v2';
 const MAX_RECENT = 5;
 
-export interface RecentSearch {
+export interface RecentInspection {
   chain: string;
-  address: string;
-  blockOrTx?: string;
+  kind: 'contract' | 'transaction';
+  value: string;
   name?: string;
   timestamp: number;
 }
 
-export function saveRecentSearch(search: Omit<RecentSearch, 'timestamp'>) {
+export function saveRecentInspection(item: Omit<RecentInspection, 'timestamp'>) {
   try {
-    const existing = getRecentSearches();
+    const existing = getRecentInspections();
     const filtered = existing.filter(
-      (s) => !(s.chain === search.chain && s.address === search.address)
+      (candidate) => !(
+        candidate.chain === item.chain
+        && candidate.kind === item.kind
+        && candidate.value.toLowerCase() === item.value.toLowerCase()
+      )
     );
-    const updated = [{ ...search, timestamp: Date.now() }, ...filtered].slice(
+    const updated = [{ ...item, timestamp: Date.now() }, ...filtered].slice(
       0,
       MAX_RECENT
     );
@@ -88,7 +92,7 @@ export function saveRecentSearch(search: Omit<RecentSearch, 'timestamp'>) {
   }
 }
 
-export function getRecentSearches(): RecentSearch[] {
+export function getRecentInspections(): RecentInspection[] {
   try {
     const stored = localStorage.getItem(RECENT_SEARCHES_KEY);
     return stored ? JSON.parse(stored) : [];
@@ -97,7 +101,7 @@ export function getRecentSearches(): RecentSearch[] {
   }
 }
 
-export function clearRecentSearches() {
+export function clearRecentInspections() {
   try {
     localStorage.removeItem(RECENT_SEARCHES_KEY);
   } catch {
@@ -107,64 +111,17 @@ export function clearRecentSearches() {
 
 export function updateRecentSearchName(chain: string, address: string, name: string) {
   try {
-    const existing = getRecentSearches();
-    const updated = existing.map((s) =>
-      s.chain === chain && s.address.toLowerCase() === address.toLowerCase()
-        ? { ...s, name }
-        : s
+    const existing = getRecentInspections();
+    const updated = existing.map((item) =>
+      item.kind === 'contract'
+      && item.chain === chain
+      && item.value.toLowerCase() === address.toLowerCase()
+        ? { ...item, name }
+        : item
     );
     localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated));
   } catch {
     // localStorage not available
-  }
-}
-
-// Recent transactions per contract
-const RECENT_TX_KEY = 'slotscan_recent_tx';
-const MAX_RECENT_TX = 5;
-
-export interface RecentTransaction {
-  txHash: string;
-  blockNumber?: number;
-  timestamp: number;
-}
-
-function getRecentTxKey(chain: string, address: string): string {
-  return `${RECENT_TX_KEY}_${chain}_${address.toLowerCase()}`;
-}
-
-export function saveRecentTransaction(chain: string, address: string, txHash: string, blockNumber?: number) {
-  try {
-    const key = getRecentTxKey(chain, address);
-    const existing = getRecentTransactions(chain, address);
-    const filtered = existing.filter((t) => t.txHash.toLowerCase() !== txHash.toLowerCase());
-    const updated = [{ txHash, blockNumber, timestamp: Date.now() }, ...filtered].slice(0, MAX_RECENT_TX);
-    localStorage.setItem(key, JSON.stringify(updated));
-  } catch {
-    // localStorage not available
-  }
-}
-
-export function updateRecentTransactionBlock(chain: string, address: string, txHash: string, blockNumber: number) {
-  try {
-    const key = getRecentTxKey(chain, address);
-    const existing = getRecentTransactions(chain, address);
-    const updated = existing.map((t) =>
-      t.txHash.toLowerCase() === txHash.toLowerCase() ? { ...t, blockNumber } : t
-    );
-    localStorage.setItem(key, JSON.stringify(updated));
-  } catch {
-    // localStorage not available
-  }
-}
-
-export function getRecentTransactions(chain: string, address: string): RecentTransaction[] {
-  try {
-    const key = getRecentTxKey(chain, address);
-    const stored = localStorage.getItem(key);
-    return stored ? JSON.parse(stored) : [];
-  } catch {
-    return [];
   }
 }
 

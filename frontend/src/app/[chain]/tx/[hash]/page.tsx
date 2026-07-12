@@ -1,4 +1,4 @@
-import { Container } from '@/components/layout/Container';
+import { PageFrame } from '@/components/layout/PageFrame';
 import { TransactionStorageExplorer } from '@/components/transaction/TransactionStorageExplorer';
 
 interface TransactionPageProps {
@@ -7,8 +7,8 @@ interface TransactionPageProps {
 
 export default function TransactionPage({ params }: TransactionPageProps) {
   return (
-    <Container>
+    <PageFrame>
       <TransactionStorageExplorer chain={params.chain} txHash={params.hash} />
-    </Container>
+    </PageFrame>
   );
 }

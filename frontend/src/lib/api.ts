@@ -4,7 +4,6 @@ import type {
   SlotValueResponse,
   StorageLayoutResponse,
   StorageSnapshotResponse,
-  TransactionDiffResponse,
   TransactionStorageHistoryResponse,
 } from './types';
 
@@ -96,14 +95,6 @@ export async function fetchStorage(
     params.set('mapping_keys', JSON.stringify(mappingKeys));
   }
   return fetchAPI(`${API_BASE}/storage/${chainId}/${address}?${params}`);
-}
-
-export async function fetchTxDiff(
-  chainId: string,
-  address: string,
-  txHash: string
-): Promise<TransactionDiffResponse> {
-  return fetchAPI(`${API_BASE}/tx/${chainId}/${address}/${txHash}`);
 }
 
 export async function fetchTransactionStorageHistory(

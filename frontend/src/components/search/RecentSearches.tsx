@@ -2,67 +2,64 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { getRecentSearches, RecentSearch, truncateAddress, truncateHash, clearRecentSearches } from '@/lib/utils';
 import { getChainName } from '@/lib/constants';
+import {
+  clearRecentInspections,
+  cn,
+  getRecentInspections,
+  RecentInspection,
+  truncateAddress,
+  truncateHash,
+} from '@/lib/utils';
 
 interface RecentSearchesProps {
   className?: string;
 }
 
 export function RecentSearches({ className }: RecentSearchesProps) {
-  const [searches, setSearches] = useState<RecentSearch[]>([]);
+  const [items, setItems] = useState<RecentInspection[]>([]);
 
   useEffect(() => {
-    setSearches(getRecentSearches());
+    setItems(getRecentInspections());
   }, []);
 
-  if (searches.length === 0) return null;
-
-  const handleClear = () => {
-    clearRecentSearches();
-    setSearches([]);
-  };
+  if (items.length === 0) return null;
 
   return (
-    <div className={className}>
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-xs text-gray-500 uppercase tracking-wide">Recent</span>
+    <section className={cn('w-full', className)}>
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="text-[10px] uppercase tracking-wide text-gray-500">Recent</h2>
         <button
-          onClick={handleClear}
-          className="text-xs text-gray-500 hover:text-gray-900"
+          type="button"
+          onClick={() => {
+            clearRecentInspections();
+            setItems([]);
+          }}
+          className="text-[10px] text-gray-500 hover:text-gray-900"
         >
           Clear
         </button>
       </div>
-      <div className="border border-gray-300 divide-y divide-gray-300">
-        {searches.map((search, i) => {
-          let href = `/${search.chain}/${search.address}`;
-          if (search.blockOrTx) {
-            const param = search.blockOrTx.startsWith('0x') ? 'tx' : 'block';
-            href += `?${param}=${search.blockOrTx}`;
-          }
-
-          return (
-            <Link
-              key={i}
-              href={href}
-              className="block px-3 py-2 hover:bg-gray-100 no-underline hover:no-underline"
-            >
-              <div className="text-sm text-gray-900">
-                {search.name ? (
-                  <>{search.name} <span className="text-gray-400 font-mono text-xs">({truncateAddress(search.address)})</span></>
-                ) : (
-                  <span className="font-mono">{truncateAddress(search.address)}</span>
-                )}
-              </div>
-              <div className="text-xs text-gray-500">
-                {getChainName(search.chain)}
-                {search.blockOrTx && ` · ${search.blockOrTx.startsWith('0x') ? `TX ${truncateHash(search.blockOrTx)}` : `Block ${search.blockOrTx}`}`}
-              </div>
-            </Link>
-          );
-        })}
+      <div className="border-y border-gray-300">
+        {items.map((item) => (
+          <Link
+            key={`${item.kind}:${item.chain}:${item.value.toLowerCase()}`}
+            href={item.kind === 'transaction' ? `/${item.chain}/tx/${item.value}` : `/${item.chain}/${item.value}`}
+            className="flex items-center justify-between gap-4 border-b border-gray-200 px-2 py-2 text-xs no-underline last:border-b-0 hover:bg-gray-100 hover:no-underline"
+          >
+            <span className="min-w-0 truncate text-gray-900">
+              {item.kind === 'contract' && item.name
+                ? item.name
+                : item.kind === 'contract'
+                  ? truncateAddress(item.value)
+                  : truncateHash(item.value, 10)}
+            </span>
+            <span className="shrink-0 text-[10px] text-gray-500">
+              {item.kind === 'transaction' ? 'Transaction' : 'Contract'} · {getChainName(item.chain)}
+            </span>
+          </Link>
+        ))}
       </div>
-    </div>
+    </section>
   );
 }

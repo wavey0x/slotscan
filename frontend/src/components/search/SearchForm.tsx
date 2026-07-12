@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
-import { isAddress, saveRecentSearch } from "@/lib/utils";
+import { inspectionPath } from "@/lib/navigation";
+import { saveRecentInspection } from "@/lib/utils";
 
 export function SearchForm() {
   const router = useRouter();
@@ -16,18 +17,17 @@ export function SearchForm() {
     setError("");
 
     const value = address.trim();
-    if (/^0x[a-fA-F0-9]{64}$/.test(value)) {
-      router.push(`/1/tx/${value}`);
-      return;
-    }
-
-    if (!isAddress(value)) {
+    const destination = inspectionPath(value);
+    if (!destination) {
       setError("Enter a contract address or transaction hash");
       return;
     }
-
-    saveRecentSearch({ chain: "1", address: value });
-    router.push(`/1/${value}`);
+    saveRecentInspection({
+      chain: "1",
+      kind: value.length === 66 ? "transaction" : "contract",
+      value,
+    });
+    router.push(destination);
   };
 
   return (
