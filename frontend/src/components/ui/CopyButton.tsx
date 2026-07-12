@@ -37,7 +37,7 @@ export function CopyButton({ value, className, size = 'sm', label = 'Copy' }: Co
     <button
       type="button"
       onClick={handleCopy}
-      aria-label={copied ? 'Copied' : label}
+      aria-label={label}
       className={cn(
         'inline-flex h-5 w-5 shrink-0 items-center justify-center text-gray-400 transition-colors hover:text-gray-900 focus-visible:text-gray-900 focus-visible:outline-none',
         className
@@ -49,6 +49,9 @@ export function CopyButton({ value, className, size = 'sm', label = 'Copy' }: Co
       ) : (
         <Copy size={iconSize} strokeWidth={1.25} />
       )}
+      <span className="sr-only" role="status" aria-live="polite">
+        {copied ? 'Copied' : ''}
+      </span>
     </button>
   );
 }

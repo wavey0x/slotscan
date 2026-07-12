@@ -5,7 +5,7 @@ import { EntityHeader } from '@/components/layout/EntityHeader';
 import { LayoutTable } from '@/components/layout/LayoutTable';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { Loading } from '@/components/ui/Loading';
-import { Toggle } from '@/components/ui/Toggle';
+import { ViewSwitch } from '@/components/ui/ViewSwitch';
 import { APIError } from '@/lib/api';
 import { getAddressExplorerUrl, getBlockExplorerUrl } from '@/lib/constants';
 import { useContract } from '@/lib/hooks/useContract';
@@ -134,7 +134,15 @@ export function ContractPage({ chain, address }: ContractPageProps) {
                 <span>{layout.variables.length} variables</span>
               </div>
             </div>
-            <Toggle label="HEX" checked={showHex} onChange={setShowHex} />
+            <ViewSwitch
+              label="Values"
+              value={showHex ? 'hex' : 'decoded'}
+              options={[
+                { value: 'decoded', label: 'Decoded' },
+                { value: 'hex', label: 'Hex' },
+              ]}
+              onChange={(value) => setShowHex(value === 'hex')}
+            />
           </div>
           <LayoutTable chainId={chain} address={address} layout={layout} showHex={showHex} />
         </section>

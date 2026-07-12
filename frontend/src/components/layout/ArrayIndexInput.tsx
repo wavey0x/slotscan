@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { HoverCell } from '@/components/ui/HoverCell';
 import { StorageTypeResponse, ComputedSlotLookup } from '@/lib/types';
 import { fetchSlotValue } from '@/lib/api';
 import {
@@ -11,7 +10,7 @@ import {
   computeStaticArraySlot,
   slotToHex,
 } from '@/lib/slot-utils';
-import { cn, truncateSlot } from '@/lib/utils';
+import { LookupResultsTable } from './LookupResultsTable';
 
 interface ArrayIndexInputProps {
   baseSlot: number;
@@ -22,33 +21,6 @@ interface ArrayIndexInputProps {
   address: string;
   lookups: ComputedSlotLookup[];
   onLookup: (lookup: ComputedSlotLookup) => void;
-}
-
-function formatDecodedValue(value: unknown, rawValue?: string): string {
-  if (value !== null && value !== undefined) {
-    if (typeof value === 'boolean') return value ? 'true' : 'false';
-    if (typeof value === 'bigint') return value.toString();
-    if (typeof value === 'number') return value.toLocaleString();
-    if (typeof value === 'string') {
-      if (value === '0x0000000000000000000000000000000000000000') return '0x0...0';
-      return value;
-    }
-    if (typeof value === 'object') return JSON.stringify(value);
-    return String(value);
-  }
-  // Fall back to raw value interpretation
-  if (rawValue) {
-    // Check if all zeros
-    if (rawValue === '0x' + '0'.repeat(64)) return '0';
-    // Try to interpret as uint256
-    try {
-      const bigVal = BigInt(rawValue);
-      return bigVal.toString();
-    } catch {
-      return rawValue;
-    }
-  }
-  return '-';
 }
 
 export function ArrayIndexInput({
@@ -168,66 +140,12 @@ export function ArrayIndexInput({
 
       {error && <p className="text-red text-xs">{error}</p>}
 
-      {/* Lookup results */}
-      {lookups.length > 0 && (
-        <div className="mt-4">
-          <div className="text-[10px] uppercase tracking-wide text-gray-500 font-medium mb-2">
-            Lookup History
-          </div>
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-gray-200">
-                <th className="text-left py-1.5 px-1 text-gray-500 font-medium w-20">
-                  Index
-                </th>
-                <th className="text-left py-1.5 px-1 text-gray-500 font-medium">
-                  Slot
-                </th>
-                <th className="text-left py-1.5 px-1 text-gray-500 font-medium">
-                  Value
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {lookups.map((lookup, idx) => {
-                const isZero =
-                  lookup.rawValue === '0x' + '0'.repeat(64) ||
-                  lookup.decodedValue === 0 ||
-                  lookup.decodedValue === '0' ||
-                  lookup.decodedValue === '0x0000000000000000000000000000000000000000';
-
-                return (
-                  <tr key={idx} className="border-b border-gray-100">
-                    <td className="py-1.5 px-1">
-                      <span className="font-mono text-gray-700">
-                        [{lookup.index}]
-                      </span>
-                    </td>
-                    <td className="py-1.5 px-1">
-                      <HoverCell
-                        display={truncateSlot(lookup.computedSlot)}
-                        value={lookup.computedSlot}
-                        colorClass="font-mono text-gray-500"
-                      />
-                    </td>
-                    <td className="py-1.5 px-1">
-                      <HoverCell
-                        display={formatDecodedValue(lookup.decodedValue, lookup.rawValue)}
-                        value={lookup.rawValue}
-                        chainId={chainId}
-                        colorClass={cn(
-                          'font-mono',
-                          isZero ? 'text-gray-300' : 'text-gray-900'
-                        )}
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <LookupResultsTable
+        lookups={lookups}
+        chainId={chainId}
+        keyLabel="Index"
+        renderKey={(lookup) => `[${lookup.index}]`}
+      />
     </div>
   );
 }

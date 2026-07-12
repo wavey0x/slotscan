@@ -3,7 +3,7 @@
 import { ReactNode } from 'react';
 import { cn, isAddress, isTxHash } from '@/lib/utils';
 import { CopyButton } from './CopyButton';
-import { Tooltip } from './Tooltip';
+import { DetailPopover } from './DetailPopover';
 
 interface HoverCellProps {
   /** Display value (truncated) */
@@ -20,6 +20,8 @@ interface HoverCellProps {
   colorClass?: string;
   /** Force actions to be visible even when display === value */
   forceActions?: boolean;
+  /** Accessible label for the copy action */
+  copyLabel?: string;
 }
 
 function getEtherscanUrl(chainId: string | number, value: string): string | null {
@@ -55,6 +57,7 @@ export function HoverCell({
   className,
   colorClass = 'text-gray-900',
   forceActions = false,
+  copyLabel = 'Copy value',
 }: HoverCellProps) {
   const etherscanUrl = chainId ? getEtherscanUrl(chainId, value) : null;
   const showActions = forceActions || display !== value;
@@ -64,10 +67,10 @@ export function HoverCell({
   );
 
   return (
-    <Tooltip content={tooltipContent} position="top" delay={300}>
+    <DetailPopover content={tooltipContent} delay={300}>
       <span
         className={cn(
-          'group/cell relative inline-block cursor-default',
+          'group/cell inline-flex max-w-full items-center cursor-default',
           className
         )}
       >
@@ -86,11 +89,11 @@ export function HoverCell({
           </span>
         )}
         {showActions && (
-          <span className="absolute left-full top-1/2 -translate-y-1/2 ml-0.5 opacity-0 group-hover/cell:opacity-100 flex items-center gap-0.5 bg-white/90 transition-opacity z-10">
-            <CopyButton value={value} />
+          <span className="ml-0.5 flex shrink-0 items-center">
+            <CopyButton value={value} label={copyLabel} />
           </span>
         )}
       </span>
-    </Tooltip>
+    </DetailPopover>
   );
 }

@@ -195,3 +195,42 @@ test('legacy contract transaction URLs redirect to the complete focused report',
   await page.goto(`/1/${GNOSIS_SAFE_ADDRESS}/tx/${SOURCE_LAYOUT_TX}`);
   await expect(page).toHaveURL(`/1/tx/${SOURCE_LAYOUT_TX}?focus=${GNOSIS_SAFE_ADDRESS}`);
 });
+
+test('storage evidence remains contained and operable at narrow widths', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/1/tx/${SOURCE_LAYOUT_TX}?focus=${LIDO_ADDRESS}`);
+
+  const lidoSection = page.getByRole('heading', { name: 'Lido' }).locator('xpath=ancestor::section');
+  const toggle = lidoSection.getByTestId('contract-toggle');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await toggle.focus();
+  await page.keyboard.press('Enter');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await page.keyboard.press('Enter');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+  const scroller = lidoSection.getByTestId('data-table-scroll');
+  await expect(scroller).toBeVisible();
+  expect(await scroller.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+  const overflowing = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>('body *'))
+    .filter((element) => (
+      !element.closest('[data-testid="data-table-scroll"]')
+      && element.getBoundingClientRect().right > window.innerWidth + 1
+    ))
+    .map((element) => `${element.tagName.toLowerCase()}.${element.className}`)
+    .slice(0, 10));
+  expect(overflowing).toEqual([]);
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).overflowX)).toBe('hidden');
+});
+
+test('storage detail disclosure supports focus and Escape', async ({ page }) => {
+  await page.goto(`/1/tx/${NESTED_STRUCT_MAPPING_TX}`);
+  await page.getByPlaceholder('Search contract, address, slot, or variable').fill('lastExecutionTimestamp');
+
+  const variable = page.getByTestId('keyed-variable-path');
+  const disclosure = variable.locator('xpath=ancestor::*[@tabindex="0"][1]');
+  await disclosure.focus();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});

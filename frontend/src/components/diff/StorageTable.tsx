@@ -1,5 +1,5 @@
 import { ReactNode } from 'react';
-import { cn } from '@/lib/utils';
+import { DataTable, dataTableCellClass, dataTableHeadCellClass } from '@/components/ui/DataTable';
 
 interface StorageTableProps {
   children: ReactNode;
@@ -12,15 +12,9 @@ interface StorageTableColumnsProps {
   showStep?: boolean;
 }
 
-const headerCell = 'px-2 py-1.5 text-left text-[10px] font-medium uppercase tracking-wide text-gray-400';
-
 export function StorageTable({ children, className }: StorageTableProps) {
   return (
-    <div className="max-w-full overflow-x-auto">
-      <table className={cn('w-full min-w-[44rem] table-fixed border-collapse', className)}>
-        {children}
-      </table>
-    </div>
+    <DataTable className={className}>{children}</DataTable>
   );
 }
 
@@ -50,14 +44,14 @@ export function StorageTableHeader({
     <thead>
       <tr className="border-b border-gray-300">
         {showExpand && <th aria-label="Row actions" className="w-6 px-1 py-1.5" />}
-        {showContract && <th className={headerCell}>Contract</th>}
-        <th className={headerCell}>Variable</th>
-        <th className={headerCell}>Value diff</th>
-        <th className={headerCell}>Slot</th>
-        {showStep && <th className={headerCell}>Step</th>}
+        {showContract && <th className={dataTableHeadCellClass}>Contract</th>}
+        <th className={dataTableHeadCellClass}>Variable</th>
+        <th className={dataTableHeadCellClass}>Value diff</th>
+        <th className={dataTableHeadCellClass}>Slot</th>
+        {showStep && <th className={dataTableHeadCellClass}>Step</th>}
       </tr>
     </thead>
   );
 }
 
-export const storageCellClass = 'px-2 py-1.5 align-top';
+export const storageCellClass = dataTableCellClass;

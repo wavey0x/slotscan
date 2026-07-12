@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { StorageLayoutResponse, SlotValueResponse } from '@/lib/types';
 import { LayoutRow } from './LayoutRow';
 import { useStorage } from '@/lib/hooks/useStorage';
+import { DataTable, dataTableHeadCellClass } from '@/components/ui/DataTable';
 
 interface LayoutTableProps {
   chainId: string;
@@ -36,7 +37,7 @@ export function LayoutTable({
 
   return (
     <div>
-      <table className="w-full table-fixed">
+      <DataTable minWidth="40rem">
         <colgroup>
           <col className="w-6" />
           <col className="w-[100px]" />
@@ -46,17 +47,17 @@ export function LayoutTable({
         </colgroup>
         <thead>
           <tr className="border-b border-gray-300">
-            <th className="px-1 pt-2 pb-1"></th>
-            <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase">
+            <th className="px-2 py-1.5"></th>
+            <th className={dataTableHeadCellClass}>
               Name
             </th>
-            <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase">
+            <th className={dataTableHeadCellClass}>
               Type
             </th>
-            <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase">
+            <th className={dataTableHeadCellClass}>
               Slot
             </th>
-            <th className="text-left px-1 pt-2 pb-1 text-[10px] font-medium text-gray-500 uppercase">
+            <th className={dataTableHeadCellClass}>
               Value
             </th>
           </tr>
@@ -75,7 +76,7 @@ export function LayoutTable({
             />
           ))}
         </tbody>
-      </table>
+      </DataTable>
 
       {layout.variables.length === 0 && (
         <div className="py-8 text-center text-gray-500 border-t border-gray-100">

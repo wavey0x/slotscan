@@ -9,10 +9,14 @@
 
   html {
     font-size: 15px;
+    max-width: 100%;
+    overflow-x: hidden;
   }
 
   body {
     @apply bg-white text-gray-700 font-mono antialiased;
+    max-width: 100%;
+    overflow-x: hidden;
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -55,8 +59,11 @@
   }
 }
 
-@keyframes blink {
-  0%, 20% { opacity: 0; }
-  50% { opacity: 1; }
-  80%, 100% { opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

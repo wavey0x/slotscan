@@ -192,6 +192,7 @@ export const LayoutRow = memo(function LayoutRow({
                   : formatDecodedValue(slotValue.value_decoded)}
               </span>
               <CopyButton
+                label={`Copy ${variable.name} value`}
                 value={
                   showHex
                     ? slotValue.value_encoded
