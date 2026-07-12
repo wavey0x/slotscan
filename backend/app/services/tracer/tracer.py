@@ -455,6 +455,50 @@ class TransactionAnalysisService:
         padded = hex_part.zfill(64)
         return "0x" + padded.lower()
 
+    @staticmethod
+    def _vyper_layout_evidence_conflicts(
+        layout: StorageLayout,
+        raw_changes: list[tuple[str, str | None, str, int | None, int]],
+        preimage_lookup: dict[str, str],
+    ) -> list[int]:
+        """Find observed Vyper mapping bases that contradict an inferred layout."""
+        if layout.language != "Vyper" or not any(
+            variable.provenance == "source_inference"
+            for variable in layout.variables
+        ):
+            return []
+
+        mapping_slots = {
+            variable.slot
+            for variable in layout.variables
+            if (
+                (variable_type := layout.types.get(variable.type_id))
+                and variable_type.encoding == "mapping"
+            )
+        }
+        layout_end = max(
+            (
+                variable.slot + max(1, (variable.size + 31) // 32)
+                for variable in layout.variables
+            ),
+            default=0,
+        )
+        conflicts: set[int] = set()
+        for slot, *_ in raw_changes:
+            preimage = preimage_lookup.get(slot.lower())
+            if not preimage:
+                continue
+            encoded = preimage[2:] if preimage.startswith("0x") else preimage
+            if len(encoded) != 128:
+                continue
+            try:
+                base_slot = int(encoded[:64], 16)
+            except ValueError:
+                continue
+            if base_slot < layout_end and base_slot not in mapping_slots:
+                conflicts.add(base_slot)
+        return sorted(conflicts)
+
     def _decode_changes(
         self,
         raw_changes: list[tuple[str, str | None, str, int | None, int]],
@@ -463,12 +507,26 @@ class TransactionAnalysisService:
     ) -> list[StorageChange]:
         """Convert raw slot changes to decoded StorageChange objects."""
         decoded_changes = []
+        preimage_lookup = preimage_lookup or {}
+        if layout:
+            conflicting_bases = self._vyper_layout_evidence_conflicts(
+                layout,
+                raw_changes,
+                preimage_lookup,
+            )
+            if conflicting_bases:
+                logger.warning(
+                    "Rejecting inferred Vyper layout %s: observed mapping base slots %s "
+                    "contradict the inferred layout",
+                    layout.contract_name,
+                    conflicting_bases,
+                )
+                layout = None
         layout_index = LayoutIndex(layout) if layout else None
         decoder = self.decoder.bound(layout.types) if layout else self.decoder.bound({})
         dynamic_array_index = self.slot_resolver.build_dynamic_array_index(layout) if layout else {}
         dynamic_bytes_index = self.slot_resolver.build_dynamic_bytes_index(layout) if layout else {}
         static_array_index = self.slot_resolver.build_static_array_index(layout) if layout else {}
-        preimage_lookup = preimage_lookup or {}
 
         # Build mapping-to-array index
         mapping_to_array_index: dict[int, dict] = {}

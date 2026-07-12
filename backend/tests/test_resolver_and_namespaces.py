@@ -87,8 +87,8 @@ total_debt: uint256
 total_idle: uint256
 """
         layout = NamespaceStorageParser().parse_vyper_storage(
-            {"YearnV3Vault.vy": source},
-            "YearnV3Vault",
+            {"ModernVault.vy": source},
+            "ModernVault",
         )
 
         self.assertIsNotNone(layout)
@@ -116,6 +116,78 @@ total_idle: uint256
         self.assertTrue(
             all(variable.provenance == "source_inference" for variable in layout.variables)
         )
+
+    def test_vyper_immutables_do_not_shift_storage_or_mapping_resolution(self):
+        source = """
+# @version 0.3.7
+
+struct StrategyParams:
+    activation: uint256
+    last_report: uint256
+    current_debt: uint256
+    max_debt: uint256
+
+enum Roles:
+    ADD_STRATEGY_MANAGER
+    DEBT_MANAGER
+
+@external
+@nonreentrant("lock")
+def deposit():
+    pass
+
+MAX_QUEUE: constant(uint256) = 10
+ASSET: immutable(address)
+DECIMALS: immutable(uint256)
+FACTORY: public(immutable(address))
+strategies: public(HashMap[address, StrategyParams])
+default_queue: public(DynArray[address, MAX_QUEUE])
+use_default_queue: public(bool)
+balance_of: HashMap[address, uint256]
+allowance: public(HashMap[address, HashMap[address, uint256]])
+total_supply: public(uint256)
+total_debt: uint256
+total_idle: uint256
+minimum_total_idle: public(uint256)
+deposit_limit: public(uint256)
+accountant: public(address)
+deposit_limit_module: public(address)
+withdraw_limit_module: public(address)
+roles: public(HashMap[address, Roles])
+open_roles: public(HashMap[Roles, bool])
+role_manager: public(address)
+future_role_manager: public(address)
+name: public(String[64])
+symbol: public(String[32])
+"""
+        layout = NamespaceStorageParser().parse_vyper_storage(
+            {"ImmutableVault.vy": source},
+            "ImmutableVault",
+        )
+        slots = {variable.name: variable.slot for variable in layout.variables}
+
+        self.assertEqual(layout.language, "Vyper")
+        self.assertNotIn("ASSET", slots)
+        self.assertNotIn("DECIMALS", slots)
+        self.assertNotIn("FACTORY", slots)
+        self.assertEqual(slots["strategies"], 1)
+        self.assertEqual(slots["withdraw_limit_module"], 23)
+        self.assertEqual(slots["roles"], 24)
+        self.assertEqual(slots["role_manager"], 26)
+        self.assertEqual(slots["future_role_manager"], 27)
+        self.assertEqual(slots["name"], 28)
+        self.assertEqual(slots["symbol"], 31)
+
+        account = "0x" + "11" * 20
+        preimage = encode(["uint256", "address"], [24, account])
+        slot = "0x" + Web3.keccak(preimage).hex()
+        match = SlotResolver().try_match_slot_from_preimage(
+            slot,
+            "0x" + preimage.hex(),
+            layout,
+            {slot: "0x" + preimage.hex()},
+        )
+        self.assertEqual(match["path"], f"roles[{account}]")
 
     def test_legacy_vyper_layout_matches_compiler_allocation(self):
         source = """
@@ -528,7 +600,8 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
                         "num_bytes": 20,
                     }
                 },
-                "resolver_version": 3,
+                "resolver_version": 4,
+                "language": "Vyper",
             },
         )
 
@@ -575,9 +648,12 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
             )],
             types={value_type.id: value_type},
             resolver_version=2,
+            language="Vyper",
         )
         self.assertFalse(ContractResolver._cache_layout_is_usable(layout))
         layout.resolver_version = 3
+        self.assertFalse(ContractResolver._cache_layout_is_usable(layout))
+        layout.resolver_version = 4
         self.assertTrue(ContractResolver._cache_layout_is_usable(layout))
 
     def test_v2_solidity_source_inference_cache_is_preserved(self):
@@ -601,8 +677,12 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
             )],
             types={value_type.id: value_type},
             resolver_version=2,
+            language="Solidity",
         )
 
+        self.assertTrue(ContractResolver._cache_layout_is_usable(layout))
+
+        layout.resolver_version = 3
         self.assertTrue(ContractResolver._cache_layout_is_usable(layout))
 
         layout.resolver_version = 1

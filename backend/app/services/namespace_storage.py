@@ -563,6 +563,7 @@ class NamespaceStorageParser:
             contract_name=namespace.struct_name,
             variables=variables,
             types=types,
+            language="Solidity",
         )
 
     @staticmethod
@@ -792,6 +793,7 @@ class NamespaceStorageParser:
             contract_name=" + ".join(names),
             variables=variables,
             types=types,
+            language="Solidity",
         )
 
     @staticmethod
@@ -854,6 +856,7 @@ class NamespaceStorageParser:
             contract_name="unstructured storage",
             variables=variables,
             types=types,
+            language="Solidity",
         )
 
     @staticmethod
@@ -1044,6 +1047,7 @@ class NamespaceStorageParser:
             contract_name=contract_name,
             variables=variables,
             types=types,
+            language="Solidity",
         )
 
     @staticmethod
@@ -1051,6 +1055,16 @@ class NamespaceStorageParser:
         normalized = type_name.strip()
         if normalized.startswith("public(") and normalized.endswith(")"):
             return normalized[7:-1].strip()
+        return normalized
+
+    @classmethod
+    def _vyper_storage_type(cls, raw_type: str) -> Optional[str]:
+        """Return the allocated type, or ``None`` for code-only declarations."""
+        normalized = raw_type.strip()
+        while normalized.startswith("public(") and normalized.endswith(")"):
+            normalized = normalized[7:-1].strip()
+        if normalized.startswith(("constant(", "immutable(")):
+            return None
         return normalized
 
     def parse_vyper_storage(
@@ -1278,19 +1292,20 @@ class NamespaceStorageParser:
             if not match:
                 continue
             variable_name, raw_type = match.groups()
-            if raw_type.startswith("constant(") or variable_name in {
+            storage_type = self._vyper_storage_type(raw_type)
+            if storage_type is None or variable_name in {
                 "event", "struct", "enum", "interface",
                 "implements", "exports", "initializes", "uses",
             }:
                 continue
-            type_id, slots = ensure_type(raw_type)
+            type_id, slots = ensure_type(storage_type)
             variables.append(StorageVariable(
                 name=variable_name,
                 slot=slot,
                 offset=0,
                 size=slots * 32,
                 type_id=type_id,
-                label=self._unwrap_vyper_public(raw_type),
+                label=storage_type,
                 provenance="source_inference",
                 confidence="inferred",
             ))
@@ -1301,4 +1316,5 @@ class NamespaceStorageParser:
             contract_name=contract_name,
             variables=variables,
             types=types,
+            language="Vyper",
         )

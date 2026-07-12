@@ -219,6 +219,66 @@ class MappingSlotTests(unittest.TestCase):
 
         self.assertEqual(match["path"], f"allowance[{owner}][{spender}]")
 
+    def test_inferred_vyper_layout_is_rejected_when_trace_mapping_base_disagrees(self):
+        value_type = StorageType("Roles", "Roles", "value", "inplace", 32)
+        mapping_type = StorageType(
+            "HashMap[address, Roles]",
+            "HashMap[address, Roles]",
+            "mapping",
+            "mapping",
+            32,
+            key_type="address",
+            value_type=value_type.id,
+        )
+        variable = StorageVariable(
+            "roles",
+            27,
+            0,
+            32,
+            mapping_type.id,
+            mapping_type.label,
+            provenance="source_inference",
+            confidence="inferred",
+        )
+        layout = StorageLayout(
+            "ModernVault",
+            [variable],
+            {value_type.id: value_type, mapping_type.id: mapping_type},
+            language="Vyper",
+        )
+        account = "0x" + "11" * 20
+        preimage = encode(["uint256", "address"], [24, account])
+        slot = "0x" + Web3.keccak(preimage).hex()
+        raw_changes = [(slot, "0x" + "00" * 32, "0x" + "01" * 32, 1, 1)]
+        lookup = {slot: "0x" + preimage.hex()}
+
+        self.assertEqual(
+            TransactionTracer._vyper_layout_evidence_conflicts(
+                layout,
+                raw_changes,
+                lookup,
+            ),
+            [24],
+        )
+        tracer = TransactionTracer(None, Settings(), TypeDecoder())
+        self.assertIsNone(
+            tracer._decode_changes(raw_changes, layout, lookup)[0].variable_path
+        )
+
+        variable.slot = 24
+        self.assertEqual(
+            TransactionTracer._vyper_layout_evidence_conflicts(
+                layout,
+                raw_changes,
+                lookup,
+            ),
+            [],
+        )
+        self.assertEqual(
+            tracer._decode_changes(raw_changes, layout, lookup)[0].variable_path,
+            f"roles[{account}]",
+        )
+
     def test_struct_offset_search_does_not_scan_every_observed_preimage(self):
         value_type = StorageType("t_uint256", "uint256", "value", "inplace", 32)
         struct_type = StorageType(

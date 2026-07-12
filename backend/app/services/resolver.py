@@ -43,7 +43,7 @@ EIP1967_BEACON_SLOT = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582
 BEACON_IMPL_SELECTOR = "0x5c60da1b"
 
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
-LAYOUT_RESOLVER_VERSION = 3
+LAYOUT_RESOLVER_VERSION = 4
 
 # EIP-1167 Minimal Proxy bytecode patterns
 # Standard: 363d3d373d3d3d363d73<address>5af43d82803e903d91602b57fd5bf3
@@ -219,6 +219,7 @@ class ContractResolver:
                         contract_name=verification.name or "",
                         variables=[],
                         types={},
+                        language=language,
                     )
                 if not parsed_layout.variables:
                     conventional_layout = self.namespace_parser.parse_standard_storage(
@@ -262,6 +263,8 @@ class ContractResolver:
         if parsed_layout and not parsed_layout.variables:
             parsed_layout = None
         if parsed_layout:
+            if verification:
+                parsed_layout.language = language
             parsed_layout.resolver_version = LAYOUT_RESOLVER_VERSION
 
         # Build result - use bytecode cache metadata if verification was skipped
@@ -343,20 +346,24 @@ class ContractResolver:
         ):
             return True
 
-        # Resolver v3 corrected only Vyper source inference. Its inferred type
-        # IDs are the source spellings themselves (for example ``uint256`` or
-        # ``HashMap[...]``), while Solidity inference uses normalized ``t_*``
-        # IDs. Keep valid v2 Solidity layouts instead of needlessly discarding
-        # verified names and paths when Sourcify does not cover the address.
-        if layout.resolver_version == LAYOUT_RESOLVER_VERSION - 1:
+        # Resolver versions 3 and 4 corrected only Vyper source inference.
+        # Preserve compatible Solidity layouts instead of discarding verified
+        # names when Sourcify does not cover the address. New layouts carry an
+        # explicit language; legacy rows fall back to their stable type-ID
+        # distinction (Vyper source spellings versus Solidity ``t_*`` IDs).
+        if layout.resolver_version >= 2:
             inferred = [
                 variable
                 for variable in layout.variables
                 if variable.provenance == "source_inference"
             ]
-            is_vyper_source_layout = bool(inferred) and any(
-                not variable.type_id.startswith("t_")
-                for variable in inferred
+            is_vyper_source_layout = layout.language == "Vyper" or (
+                layout.language is None
+                and bool(inferred)
+                and any(
+                    not variable.type_id.startswith("t_")
+                    for variable in inferred
+                )
             )
             return bool(layout.variables) and not is_vyper_source_layout
 
@@ -595,6 +602,7 @@ class ContractResolver:
             }.values()),
             types=merged_types,
             resolver_version=LAYOUT_RESOLVER_VERSION,
+            language=standard_layout.language or namespace_layout.language,
         )
 
     async def _fetch_verification(

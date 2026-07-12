@@ -282,6 +282,10 @@ class TransactionHistoryService:
             variables=list(variables.values()),
             types=types,
             resolver_version=max(layout.resolver_version for layout in layouts),
+            language=next(
+                (layout.language for layout in layouts if layout.language),
+                None,
+            ),
         )
 
     @staticmethod

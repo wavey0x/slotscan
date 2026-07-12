@@ -447,6 +447,7 @@ class LayoutParser:
             contract_name=contract_name,
             variables=variables,
             types=types,
+            language="Solidity",
         )
 
     def _parse_types(self, raw_types: dict) -> dict[str, StorageType]:
@@ -844,6 +845,7 @@ class LayoutParser:
             contract_name=contract_name,
             variables=variables,
             types=types,
+            language="Vyper",
         )
 
     def _get_vyper_type_size(self, type_str: str, n_slots: int) -> int:
