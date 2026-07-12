@@ -15,7 +15,7 @@ export function TransactionHeader({
   const toAddress = data.to_address || data.created_contract;
 
   return (
-    <header className="mb-5">
+    <header className="mb-4 border-b border-gray-300 pb-4">
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
         <h1 className="text-lg font-medium text-gray-900">Transaction storage history</h1>
         <span className={cn(

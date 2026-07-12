@@ -132,7 +132,7 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
 
       <DataQuality warnings={warnings} />
 
-      <div className="mb-7 flex flex-wrap items-center gap-2 border-y border-gray-300 py-3">
+      <div className="mb-5 flex flex-wrap items-center gap-2 border-b border-gray-300 pb-3">
         <ViewSwitch
           label="View"
           value={view}
@@ -153,7 +153,7 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
       </div>
 
       {view === 'grouped' ? (
-        <div className="border-t border-gray-300">
+        <div>
           <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 border-b border-gray-200 px-0 py-1 text-[9px] font-medium uppercase tracking-wide text-gray-400">
             <span className="pl-5">Contract</span>
             <span className="text-right">Activity</span>

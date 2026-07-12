@@ -5,7 +5,7 @@ export function MetadataGrid({ children, className }: { children: ReactNode; cla
   return (
     <dl
       className={cn(
-        'grid grid-cols-1 gap-x-5 gap-y-2 border-y border-gray-300 py-2.5 sm:grid-cols-2 lg:grid-cols-4',
+        'grid grid-cols-1 gap-x-5 gap-y-2 sm:grid-cols-2 lg:grid-cols-4',
         className
       )}
     >
