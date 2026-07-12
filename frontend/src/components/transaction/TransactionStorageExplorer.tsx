@@ -135,6 +135,7 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
       <div className="mb-5 flex flex-wrap items-center gap-2 border-b border-gray-300 pb-3">
         <ViewSwitch
           label="View"
+          showLabel={false}
           value={view}
           options={[
             { value: 'grouped', label: 'Grouped' },

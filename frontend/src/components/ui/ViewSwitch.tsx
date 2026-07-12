@@ -5,15 +5,17 @@ export function ViewSwitch<T extends string>({
   value,
   options,
   onChange,
+  showLabel = true,
 }: {
   label: string;
   value: T;
   options: readonly { value: T; label: string; disabled?: boolean }[];
   onChange: (value: T) => void;
+  showLabel?: boolean;
 }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="text-[10px] uppercase tracking-wide text-gray-400">{label}</span>
+      {showLabel && <span className="text-[10px] uppercase tracking-wide text-gray-400">{label}</span>}
       <div className="inline-flex border border-gray-300" role="group" aria-label={label}>
         {options.map((option) => (
           <button
