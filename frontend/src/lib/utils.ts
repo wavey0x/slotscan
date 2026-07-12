@@ -23,6 +23,10 @@ export function truncateHash(hash: string, chars = 8): string {
   return `${hash.slice(0, chars + 2)}...${hash.slice(-chars)}`;
 }
 
+export function truncateTxHash(hash: string): string {
+  return truncateHash(hash, 6);
+}
+
 export function formatSlot(slot: string): string {
   if (!slot.startsWith('0x')) return slot;
   try {

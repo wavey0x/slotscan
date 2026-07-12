@@ -29,7 +29,7 @@ export function StorageTableColumns({
       {showContract && <col className="w-[22%]" />}
       <col className={showContract ? 'w-[30%]' : 'w-[38%]'} />
       <col />
-      <col className="w-20" />
+      <col className="w-28" />
       {showStep && <col className="w-16" />}
     </colgroup>
   );

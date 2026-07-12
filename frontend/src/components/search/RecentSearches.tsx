@@ -9,7 +9,7 @@ import {
   getRecentInspections,
   RecentInspection,
   truncateAddress,
-  truncateHash,
+  truncateTxHash,
 } from '@/lib/utils';
 
 interface RecentSearchesProps {
@@ -52,7 +52,7 @@ export function RecentSearches({ className }: RecentSearchesProps) {
                 ? item.name
                 : item.kind === 'contract'
                   ? truncateAddress(item.value)
-                  : truncateHash(item.value, 10)}
+                  : truncateTxHash(item.value)}
             </span>
             <span className="shrink-0 text-[10px] text-gray-500">
               {item.kind === 'transaction' ? 'Transaction' : 'Contract'} · {getChainName(item.chain)}

@@ -15,6 +15,7 @@ import {
 } from '@/lib/types';
 
 type ViewMode = 'grouped' | 'timeline';
+type ValueMode = 'decoded' | 'hex';
 
 interface TransactionStorageExplorerProps {
   chain: string;
@@ -41,6 +42,8 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
   const [search, setSearch] = useState('');
   const viewParam = searchParams.get('view');
   const requestedView: ViewMode = viewParam === 'timeline' ? 'timeline' : 'grouped';
+  const valueMode: ValueMode = searchParams.get('values') === 'hex' ? 'hex' : 'decoded';
+  const showHex = valueMode === 'hex';
   const focusParam = searchParams.get('focus')?.toLowerCase() || null;
 
   useEffect(() => {
@@ -58,6 +61,14 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
     const next = new URLSearchParams(searchParams.toString());
     next.set('view', mode);
     router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+  };
+
+  const selectValueMode = (mode: ValueMode) => {
+    const next = new URLSearchParams(searchParams.toString());
+    if (mode === 'hex') next.set('values', 'hex');
+    else next.delete('values');
+    const query = next.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   };
 
   const filteredContracts = useMemo(() => {
@@ -143,6 +154,16 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
           ]}
           onChange={selectView}
         />
+        <ViewSwitch
+          label="Values"
+          showLabel={false}
+          value={valueMode}
+          options={[
+            { value: 'decoded', label: 'Decoded' },
+            { value: 'hex', label: 'Hex' },
+          ]}
+          onChange={selectValueMode}
+        />
         {showSearch && (
           <Input
             value={search}
@@ -168,12 +189,13 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
               defaultOpen={focusParam === contract.storage_address.toLowerCase()}
               executionOrderAvailable={data.capabilities.execution_order_available}
               isComplete={data.is_complete}
+              showHex={showHex}
             />
           ))}
           {filteredContracts.length === 0 && <div className="border border-gray-300 p-8 text-center text-gray-500">No writes match the search</div>}
         </div>
       ) : (
-        <Timeline entries={timeline} chain={chain} showContract={!singleContract} />
+        <Timeline entries={timeline} chain={chain} showContract={!singleContract} showHex={showHex} />
       )}
     </div>
   );

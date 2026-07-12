@@ -45,7 +45,7 @@ export function storageKeyDisplay(key: string | null): { display: string; full: 
   return { display: key, full: key };
 }
 
-function slotDisplay(slotHex: string, showHex: boolean): string {
+export function slotReferenceDisplay(slotHex: string, showHex: boolean): string {
   try {
     const value = BigInt(slotHex);
     if (!showHex && value <= BigInt(999)) return value.toString();
@@ -88,7 +88,7 @@ export function deriveSlotDisplay(slot: SlotChangeResponse, showHex: boolean) {
     variableLabel,
     hasKeyedVariablePath: Boolean(slot.variable_path?.includes('[')),
     resolvedLeafType,
-    slotNumber: slotDisplay(slot.slot, showHex),
+    slotNumber: slotReferenceDisplay(slot.slot, showHex),
     firstStep: slot.changes[0]?.step ?? null,
     changedPackedFields,
     showPackedAsTree,

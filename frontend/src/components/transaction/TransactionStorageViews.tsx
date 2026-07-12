@@ -8,7 +8,8 @@ import { ValueDiff } from '@/components/diff/ValueDiff';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { getAddressExplorerUrl } from '@/lib/constants';
 import { ContractHistoryResponse, SlotChangeResponse, StorageChangeResponse } from '@/lib/types';
-import { cn, formatDecodedValue, formatSlotShort, truncateAddress, truncateHash } from '@/lib/utils';
+import { cn, formatDecodedValue, truncateAddress, truncateHash } from '@/lib/utils';
+import { slotReferenceDisplay } from '@/components/diff/slotDisplay';
 
 export interface TimelineEntry {
   contract: ContractHistoryResponse;
@@ -17,8 +18,9 @@ export interface TimelineEntry {
   ordinal: number;
 }
 
-function eventValue(event: StorageChangeResponse, side: 'before' | 'after') {
+function eventValue(event: StorageChangeResponse, side: 'before' | 'after', showHex: boolean) {
   const pair = event[side];
+  if (showHex) return pair.value_encoded ?? 'unknown';
   return pair.value_decoded === null || pair.value_decoded === undefined
     ? pair.value_encoded ?? 'unknown'
     : formatDecodedValue(pair.value_decoded);
@@ -41,6 +43,7 @@ export function ContractSection({
   defaultOpen,
   executionOrderAvailable,
   isComplete,
+  showHex,
 }: {
   contract: ContractHistoryResponse;
   chain: string;
@@ -48,6 +51,7 @@ export function ContractSection({
   defaultOpen: boolean;
   executionOrderAvailable: boolean;
   isComplete: boolean;
+  showHex: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const expanded = isOpen || forceOpen;
@@ -105,14 +109,14 @@ export function ContractSection({
             </div>
           )}
           {Array.from(new Set(contract.errors.map(contractErrorMessage))).map((message) => <div key={message} className="mb-1 text-[10px] text-amber-600">{message}</div>)}
-          <SlotHistoryTable chainId={chain} slots={contract.slots} showHex={false} executionOrderAvailable={executionOrderAvailable} isComplete={isComplete} />
+          <SlotHistoryTable chainId={chain} slots={contract.slots} showHex={showHex} executionOrderAvailable={executionOrderAvailable} isComplete={isComplete} />
         </div>
       )}
     </section>
   );
 }
 
-export function Timeline({ entries, chain, showContract }: { entries: TimelineEntry[]; chain: string; showContract: boolean }) {
+export function Timeline({ entries, chain, showContract, showHex }: { entries: TimelineEntry[]; chain: string; showContract: boolean; showHex: boolean }) {
   if (entries.length === 0) return <div className="border border-gray-300 p-8 text-center text-gray-500">No writes match the search</div>;
 
   return (
@@ -137,11 +141,15 @@ export function Timeline({ entries, chain, showContract }: { entries: TimelineEn
               )}
             </td>
             <td className={`${storageCellClass} min-w-0 overflow-hidden font-mono`}>
-              <ValueDiff before={eventValue(event, 'before')} after={eventValue(event, 'after')} beforeClassName="truncate text-gray-400" afterClassName="truncate text-gray-900" />
+              <ValueDiff before={eventValue(event, 'before', showHex)} after={eventValue(event, 'after', showHex)} beforeClassName="truncate text-gray-400" afterClassName="truncate text-gray-900" />
               {event.frame_outcome === 'reverted' && <div className="mt-0.5 text-[9px] uppercase tracking-wide text-amber-600">reverted</div>}
             </td>
-            <td className={`${storageCellClass} font-mono text-gray-500`} title={slot.slot}>{formatSlotShort(slot.slot)}</td>
-            <td className={`${storageCellClass} font-mono text-gray-400`}>{event.step ?? '—'}</td>
+            <td className={`${storageCellClass} min-w-0 font-mono text-gray-500`} title={slot.slot}>
+              <span data-testid="slot-reference" className="block truncate">{slotReferenceDisplay(slot.slot, false)}</span>
+            </td>
+            <td className={`${storageCellClass} overflow-hidden whitespace-nowrap font-mono text-gray-400`} data-testid="step-reference">
+              {event.step ?? '—'}
+            </td>
           </tr>
         ))}
       </tbody>

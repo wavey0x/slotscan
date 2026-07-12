@@ -21,10 +21,11 @@ test('home search accepts a transaction hash and opens transaction-wide history'
     await expect(page.getByText(label, { exact: true }).first()).toBeVisible();
   }
   await expect(page.getByRole('button', { name: 'Grouped' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Decoded' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('link', { name: '0x711899...d9c1d3' })).toBeVisible();
   await expect(page.getByRole('checkbox')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Net effects' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Restored' })).toHaveCount(0);
-  await expect(page.getByText('HEX', { exact: true })).toHaveCount(0);
 });
 
 test('all writes remain visible without interpretive classification controls', async ({ page }) => {
@@ -57,6 +58,16 @@ test('reverted child writes remain grouped and in the global timeline', async ({
   await page.getByRole('button', { name: 'Timeline' }).click();
   await expect(page.getByTestId('timeline-event')).toHaveCount(386);
   await expect(page.getByText('reverted', { exact: true }).first()).toBeVisible();
+  const firstTimelineRow = page.getByTestId('timeline-event').first();
+  const slotBox = await firstTimelineRow.getByTestId('slot-reference').boundingBox();
+  const stepBox = await firstTimelineRow.getByTestId('step-reference').boundingBox();
+  expect(slotBox).not.toBeNull();
+  expect(stepBox).not.toBeNull();
+  expect(slotBox!.x + slotBox!.width).toBeLessThanOrEqual(stepBox!.x);
+  await page.getByRole('button', { name: 'Hex' }).click();
+  await expect(page).toHaveURL(new RegExp('values=hex'));
+  await expect(page.getByRole('button', { name: 'Hex' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(firstTimelineRow.getByTestId('value-before')).toContainText('0x');
 });
 
 test('verified sources recover proxy, namespace, legacy, and Vyper variable names', async ({ page }) => {

@@ -2,7 +2,7 @@ import { CopyButton } from '@/components/ui/CopyButton';
 import { MetadataGrid, MetadataItem, MetricList } from '@/components/ui/Metadata';
 import { getAddressExplorerUrl, getBlockExplorerUrl, getTxExplorerUrl } from '@/lib/constants';
 import { TransactionStorageHistoryResponse } from '@/lib/types';
-import { cn, truncateAddress, truncateHash } from '@/lib/utils';
+import { cn, truncateAddress, truncateTxHash } from '@/lib/utils';
 
 export function TransactionHeader({
   chain,
@@ -36,7 +36,7 @@ export function TransactionHeader({
               className="truncate"
               title={data.tx_hash}
             >
-              {truncateHash(data.tx_hash, 10)}
+              {truncateTxHash(data.tx_hash)}
             </a>
             <CopyButton value={data.tx_hash} label="Copy transaction hash" />
           </span>
