@@ -123,9 +123,16 @@ test('nested mappings inside mapping structs show the full resolved path', async
 
   const primaryBox = await variable.getByTestId('keyed-variable-primary').boundingBox();
   const contextBox = await variable.getByTestId('keyed-variable-context').boundingBox();
+  const nestedKeyLines = variable.getByTestId('keyed-variable-key-line');
+  await expect(nestedKeyLines).toHaveCount(2);
+  const policyLineBox = await nestedKeyLines.nth(0).boundingBox();
+  const methodsLineBox = await nestedKeyLines.nth(1).boundingBox();
   expect(primaryBox).not.toBeNull();
   expect(contextBox).not.toBeNull();
+  expect(policyLineBox).not.toBeNull();
+  expect(methodsLineBox).not.toBeNull();
   expect(contextBox!.y).toBeGreaterThan(primaryBox!.y);
+  expect(methodsLineBox!.y).toBeGreaterThan(policyLineBox!.y);
 
   const copy = variable.getByRole('button', { name: 'Copy full path' });
   await expect(copy).toBeVisible();
@@ -133,6 +140,11 @@ test('nested mappings inside mapping structs show the full resolved path', async
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(
     'policy[0x40a2accbd92bca938b02010e17a5b8929b49130d].methods[0x8d80ff0a].lastExecutionTimestamp',
   );
+
+  await page.getByRole('button', { name: 'Timeline' }).click();
+  const timelineVariable = page.getByTestId('keyed-variable-path');
+  await expect(timelineVariable.getByTestId('keyed-variable-primary')).toHaveText('lastExecutionTimestamp');
+  await expect(timelineVariable.getByTestId('keyed-variable-key-line')).toHaveCount(2);
 });
 
 test('multi-key mappings stay compact and copy their complete path', async ({ page }) => {
@@ -144,10 +156,24 @@ test('multi-key mappings stay compact and copy their complete path', async ({ pa
   await expect(keyedVariables).toHaveCount(9);
 
   const allowance = keyedVariables.filter({ hasText: 'allowance' }).first();
+  await expect(allowance.getByTestId('keyed-variable-primary')).toHaveText('allowance');
   await expect(allowance.getByText('0xd8e8...6982', { exact: true })).toBeVisible();
   await expect(allowance.getByText('0x0079...a1f7', { exact: true })).toBeVisible();
   await expect(allowance.getByText('uint256', { exact: true })).toBeVisible();
   await expect(allowance).not.toContainText('0xd8e8544e0c808641b9b89dfb285b5655bd5b6982');
+
+  const keyLines = allowance.getByTestId('keyed-variable-key-line');
+  await expect(keyLines).toHaveCount(2);
+  const firstKeyBox = await keyLines.nth(0).boundingBox();
+  const secondKeyBox = await keyLines.nth(1).boundingBox();
+  expect(firstKeyBox).not.toBeNull();
+  expect(secondKeyBox).not.toBeNull();
+  expect(secondKeyBox!.y).toBeGreaterThan(firstKeyBox!.y);
+  expect(Math.abs(secondKeyBox!.x - firstKeyBox!.x)).toBeLessThan(1);
+
+  const balance = keyedVariables.filter({ hasText: 'balanceOf' }).first();
+  await expect(balance.getByTestId('keyed-variable-key-line')).toHaveCount(0);
+  await expect(balance.getByTestId('keyed-variable-primary')).toContainText('balanceOf[0x4606...d87f]');
 
   const copy = allowance.getByRole('button', { name: 'Copy full path' });
   await copy.click();

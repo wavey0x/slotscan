@@ -70,31 +70,55 @@ function abbreviateKey(key: string): string {
   return key;
 }
 
-function Segment({ segment, chainId }: { segment: PathSegment; chainId: string }) {
+function Key({ value, chainId }: { value: string; chainId: string }) {
+  return (
+    <span className="whitespace-nowrap">
+      [
+      {isAddress(value) ? (
+        <a
+          href={getAddressExplorerUrl(chainId, value)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hover:text-gray-700 hover:underline"
+          title={value}
+        >
+          {abbreviateKey(value)}
+        </a>
+      ) : (
+        <span title={value}>{abbreviateKey(value)}</span>
+      )}
+      ]
+    </span>
+  );
+}
+
+function InlineSegment({ segment, chainId }: { segment: PathSegment; chainId: string }) {
   return (
     <span className="whitespace-nowrap">
       <span>{segment.name}</span>
       {segment.keys.map((key, index) => (
-        <span key={`${key}:${index}`}>
-          [
-          {isAddress(key) ? (
-            <a
-              href={getAddressExplorerUrl(chainId, key)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-gray-700 hover:underline"
-              title={key}
-            >
-              {abbreviateKey(key)}
-            </a>
-          ) : (
-            <span title={key}>{abbreviateKey(key)}</span>
-          )}
-          ]
-        </span>
+        <Key key={`${key}:${index}`} value={key} chainId={chainId} />
       ))}
     </span>
   );
+}
+
+interface PathLine {
+  name: string | null;
+  key: string | null;
+  separator: boolean;
+}
+
+function segmentLines(segment: PathSegment, separator: boolean): PathLine[] {
+  if (segment.keys.length === 0) {
+    return [{ name: segment.name, key: null, separator }];
+  }
+
+  return segment.keys.map((key, index) => ({
+    name: index === 0 ? segment.name : null,
+    key,
+    separator: separator && index === 0,
+  }));
 }
 
 export function KeyedVariablePath({ path, typeLabel, chainId }: KeyedVariablePathProps) {
@@ -102,8 +126,17 @@ export function KeyedVariablePath({ path, typeLabel, chainId }: KeyedVariablePat
   const segments = splitPath(fullPath).map(parseSegment);
   const finalSegment = segments.at(-1) ?? { name: fullPath, keys: [] };
   const hasLeafField = finalSegment.keys.length === 0 && segments.length > 1;
-  const primary = hasLeafField ? finalSegment.name : null;
   const context = segments.slice(0, -1);
+  const keyCount = segments.reduce((count, segment) => count + segment.keys.length, 0);
+  const stackKeys = keyCount > 1;
+  const stackedLines = stackKeys
+    ? [
+        ...context.flatMap((segment, index) => segmentLines(segment, index > 0)),
+        ...(!hasLeafField
+          ? finalSegment.keys.map((key) => ({ name: null, key, separator: false }))
+          : []),
+      ]
+    : [];
 
   return (
     <div className="min-w-0 font-mono leading-tight" data-testid="keyed-variable-path">
@@ -113,7 +146,9 @@ export function KeyedVariablePath({ path, typeLabel, chainId }: KeyedVariablePat
           data-testid="keyed-variable-primary"
           title={fullPath}
         >
-          {primary ?? <Segment segment={finalSegment} chainId={chainId} />}
+          {hasLeafField || stackKeys
+            ? finalSegment.name
+            : <InlineSegment segment={finalSegment} chainId={chainId} />}
         </span>
         <CopyButton
           value={fullPath}
@@ -121,7 +156,30 @@ export function KeyedVariablePath({ path, typeLabel, chainId }: KeyedVariablePat
           className="-my-1 ml-0.5 shrink-0 p-1 text-gray-400"
         />
       </div>
-      {(context.length > 0 || typeLabel) && (
+      {stackKeys ? (
+        <div
+          className="mt-0.5 space-y-0 text-[10px] text-gray-400"
+          data-testid="keyed-variable-context"
+        >
+          {stackedLines.map((line, index) => (
+            <div
+              key={`${line.name}:${line.key}:${index}`}
+              className="flex min-w-0 items-baseline gap-x-1 pl-2"
+              data-testid={line.key ? 'keyed-variable-key-line' : undefined}
+            >
+              {line.separator && <span aria-hidden="true">›</span>}
+              {line.name && <span>{line.name}</span>}
+              {line.key && <Key value={line.key} chainId={chainId} />}
+              {index === stackedLines.length - 1 && typeLabel && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span>{typeLabel}</span>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (context.length > 0 || typeLabel) && (
         <div
           className="mt-0.5 flex flex-wrap items-baseline gap-x-1 text-[10px] text-gray-400"
           data-testid="keyed-variable-context"
@@ -129,7 +187,7 @@ export function KeyedVariablePath({ path, typeLabel, chainId }: KeyedVariablePat
           {context.map((segment, index) => (
             <span key={`${segment.name}:${index}`} className="contents">
               {index > 0 && <span aria-hidden="true">›</span>}
-              <Segment segment={segment} chainId={chainId} />
+              <InlineSegment segment={segment} chainId={chainId} />
             </span>
           ))}
           {context.length > 0 && typeLabel && <span aria-hidden="true">·</span>}
