@@ -1,12 +1,19 @@
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from eth_abi import encode
 from web3 import Web3
 
 from app.config import Settings
-from app.models.domain import VerificationResult
+from app.models.domain import (
+    StorageLayout,
+    StorageType,
+    StorageVariable,
+    VerificationResult,
+)
 from app.services.namespace_storage import NamespaceStorageParser
 from app.services.resolver import ContractResolver
+from app.services.tracer.slot_resolver import SlotResolver
 
 
 ADDRESS = "0x" + "11" * 20
@@ -109,6 +116,163 @@ total_idle: uint256
         self.assertTrue(
             all(variable.provenance == "source_inference" for variable in layout.variables)
         )
+
+    def test_legacy_vyper_layout_matches_compiler_allocation(self):
+        source = """
+# @version 0.2.16
+implements: ERC20
+
+struct Reward:
+    token: address
+    distributor: address
+    period_finish: uint256
+    rate: uint256
+    last_update: uint256
+    integral: uint256
+
+MAX_REWARDS: constant(uint256) = 8
+
+SDT: public(address)
+voting_escrow: public(address)
+veBoost_proxy: public(address)
+staking_token: public(address)
+decimal_staking_token: public(uint256)
+balanceOf: public(HashMap[address, uint256])
+totalSupply: public(uint256)
+allowance: public(HashMap[address, HashMap[address, uint256]])
+name: public(String[64])
+symbol: public(String[32])
+working_balances: public(HashMap[address, uint256])
+working_supply: public(uint256)
+integrate_checkpoint_of: public(HashMap[address, uint256])
+reward_count: public(uint256)
+reward_tokens: public(address[MAX_REWARDS])
+reward_data: public(HashMap[address, Reward])
+rewards_receiver: public(HashMap[address, address])
+reward_integral_for: public(HashMap[address, HashMap[address, uint256]])
+claim_data: HashMap[address, HashMap[address, uint256]]
+admin: public(address)
+future_admin: public(address)
+claimer: public(address)
+initialized: public(bool)
+
+@external
+@nonreentrant("lock")
+def one():
+    pass
+
+@external
+@nonreentrant("lock")
+def two():
+    pass
+
+@external
+@nonreentrant("lock")
+def three():
+    pass
+
+@external
+@nonreentrant("lock")
+def four():
+    pass
+
+@external
+@nonreentrant("lock")
+def five():
+    pass
+
+@external
+@nonreentrant("lock")
+def six():
+    pass
+
+@external
+@nonreentrant("lock")
+def seven():
+    pass
+"""
+        layout = NamespaceStorageParser().parse_vyper_storage(
+            {"Vyper_contract.vy": source},
+            "Vyper_contract",
+        )
+
+        self.assertIsNotNone(layout)
+        slots = {variable.name: variable.slot for variable in layout.variables}
+        self.assertNotIn("implements", slots)
+        self.assertEqual(
+            [variable.slot for variable in layout.variables if variable.name == "nonreentrant.lock"],
+            list(range(7)),
+        )
+        self.assertEqual(slots["SDT"], 7)
+        self.assertEqual(slots["balanceOf"], 12)
+        self.assertEqual(slots["name"], 15)
+        self.assertEqual(slots["symbol"], 19)
+        self.assertEqual(slots["working_balances"], 22)
+        self.assertEqual(slots["integrate_checkpoint_of"], 24)
+        self.assertEqual(slots["reward_tokens"], 26)
+        self.assertEqual(slots["reward_data"], 34)
+        self.assertEqual(slots["reward_integral_for"], 36)
+        self.assertEqual(slots["claim_data"], 37)
+        self.assertEqual(slots["initialized"], 41)
+        reward_tokens_type = layout.get_type(
+            layout.get_variable_by_name("reward_tokens").type_id
+        )
+        self.assertEqual(reward_tokens_type.array_length, 8)
+
+        user = "0x" + "11" * 20
+        reward_token = "0x" + "22" * 20
+        resolver = SlotResolver()
+
+        balance_preimage = encode(["uint256", "address"], [12, user])
+        balance_slot = "0x" + Web3.keccak(balance_preimage).hex()
+        balance_lookup = {balance_slot: "0x" + balance_preimage.hex()}
+        balance_match = resolver.try_match_slot_from_preimage(
+            balance_slot,
+            balance_lookup[balance_slot],
+            layout,
+            balance_lookup,
+        )
+        self.assertEqual(balance_match["path"], f"balanceOf[{user}]")
+
+        outer_preimage = encode(["uint256", "address"], [36, reward_token])
+        outer_hash = Web3.keccak(outer_preimage)
+        outer_slot = "0x" + outer_hash.hex()
+        inner_preimage = encode(["bytes32", "address"], [outer_hash, user])
+        inner_slot = "0x" + Web3.keccak(inner_preimage).hex()
+        nested_lookup = {
+            outer_slot: "0x" + outer_preimage.hex(),
+            inner_slot: "0x" + inner_preimage.hex(),
+        }
+        nested_match = resolver.try_match_slot_from_preimage(
+            inner_slot,
+            nested_lookup[inner_slot],
+            layout,
+            nested_lookup,
+        )
+        self.assertEqual(
+            nested_match["path"],
+            f"reward_integral_for[{reward_token}][{user}]",
+        )
+
+        reward_preimage = encode(["uint256", "address"], [34, reward_token])
+        reward_base = Web3.keccak(reward_preimage)
+        reward_base_slot = "0x" + reward_base.hex()
+        reward_lookup = {reward_base_slot: "0x" + reward_preimage.hex()}
+        offset_matches = list(
+            resolver.find_struct_offset_matches(
+                int.from_bytes(reward_base, "big") + 4,
+                layout,
+                reward_lookup,
+            )
+        )
+        self.assertEqual(len(offset_matches), 1)
+        offset, base_match = offset_matches[0]
+        field_name, _ = resolver.resolve_match_struct_field(
+            base_match,
+            offset,
+            layout,
+        )
+        self.assertEqual(field_name, "last_update")
 
     def test_keccak_minus_one_namespace_preserves_packed_member_offsets(self):
         source = """
@@ -364,7 +528,7 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
                         "num_bytes": 20,
                     }
                 },
-                "resolver_version": 2,
+                "resolver_version": 3,
             },
         )
 
@@ -389,6 +553,32 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
         metadata = await resolver.resolve(1, ADDRESS, block_number=123)
         self.assertEqual(repo.lookup[2], 123)
         self.assertEqual(metadata.storage_layout.contract_name, "Cached")
+
+    def test_v2_source_inference_cache_is_invalidated(self):
+        value_type = StorageType(
+            "uint256",
+            "uint256",
+            "value",
+            "inplace",
+            32,
+        )
+        layout = StorageLayout(
+            contract_name="LegacyVyper",
+            variables=[StorageVariable(
+                "value",
+                0,
+                0,
+                32,
+                value_type.id,
+                value_type.label,
+                provenance="source_inference",
+            )],
+            types={value_type.id: value_type},
+            resolver_version=2,
+        )
+        self.assertFalse(ContractResolver._cache_layout_is_usable(layout))
+        layout.resolver_version = 3
+        self.assertTrue(ContractResolver._cache_layout_is_usable(layout))
 
 
 if __name__ == "__main__":

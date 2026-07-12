@@ -1069,6 +1069,16 @@ class NamespaceStorageParser:
         )
         if not source:
             return None
+        version_match = re.search(
+            r"^\s*#\s*@version[^\n]*?(\d+)\.(\d+)\.(\d+)",
+            source,
+            flags=re.MULTILINE,
+        )
+        vyper_version = (
+            tuple(int(part) for part in version_match.groups())
+            if version_match
+            else None
+        )
         source = self._strip_comments(source)
         source = re.sub(r"#[^\n]*", "", source)
         integer_constants = {
@@ -1151,10 +1161,16 @@ class NamespaceStorageParser:
                     array_length=maximum_value,
                 )
                 return type_name, slots
-            array_match = re.fullmatch(r"(.+)\[(\d+)\]", type_name)
+            array_match = re.fullmatch(
+                r"(.+)\[([A-Za-z_]\w*|[0-9][0-9_]*)\]",
+                type_name,
+            )
             if array_match and not type_name.startswith(("String[", "Bytes[")):
                 element_id, element_slots = ensure_type(array_match.group(1).strip())
-                length = int(array_match.group(2))
+                length_token = array_match.group(2)
+                length = integer_constants.get(length_token)
+                if length is None:
+                    length = int(length_token.replace("_", ""), 0)
                 slots = length * element_slots
                 types[type_name] = StorageType(
                     id=type_name,
@@ -1196,7 +1212,14 @@ class NamespaceStorageParser:
                 return type_name, max(1, slot)
             bounded_match = re.fullmatch(r"(?:String|Bytes)\[(\d+)\]", type_name)
             if bounded_match:
-                slots = 1 + (int(bounded_match.group(1)) + 31) // 32
+                # Vyper before 0.3.0 reserved two metadata words before the
+                # bounded payload. Newer compilers reserve one.
+                metadata_slots = (
+                    2
+                    if vyper_version is not None and vyper_version < (0, 3, 0)
+                    else 1
+                )
+                slots = metadata_slots + (int(bounded_match.group(1)) + 31) // 32
                 types[type_name] = StorageType(
                     id=type_name,
                     label=type_name,
@@ -1221,7 +1244,18 @@ class NamespaceStorageParser:
 
         variables: list[StorageVariable] = []
         slot = 0
-        locks = sorted(set(re.findall(r"@nonreentrant\([\"']([^\"']+)[\"']\)", source)))
+        lock_occurrences = re.findall(
+            r"@nonreentrant\([\"']([^\"']+)[\"']\)",
+            source,
+        )
+        # Through Vyper 0.3.0, each decorated function reserved its own word,
+        # even when several functions reused the same lock key. Vyper 0.3.1
+        # switched to one shared word per key.
+        locks = (
+            lock_occurrences
+            if vyper_version is not None and vyper_version <= (0, 3, 0)
+            else list(dict.fromkeys(lock_occurrences))
+        )
         lock_type_id, _ = ensure_type("uint256")
         for lock in locks:
             variables.append(StorageVariable(
@@ -1245,7 +1279,8 @@ class NamespaceStorageParser:
                 continue
             variable_name, raw_type = match.groups()
             if raw_type.startswith("constant(") or variable_name in {
-                "event", "struct", "enum", "interface"
+                "event", "struct", "enum", "interface",
+                "implements", "exports", "initializes", "uses",
             }:
                 continue
             type_id, slots = ensure_type(raw_type)
