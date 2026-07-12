@@ -336,12 +336,31 @@ class ContractResolver:
             return bool(layout.variables)
         # Exact compiler-produced variables do not change when the enrichment
         # resolver changes. Preserve those valuable layouts (notably historical
-        # Vyper layouts) while forcing old source-inferred/empty layouts through
-        # the new source pipeline.
-        return bool(layout.variables) and all(
+        # Vyper layouts).
+        if bool(layout.variables) and all(
             variable.provenance == "compiler_layout"
             for variable in layout.variables
-        )
+        ):
+            return True
+
+        # Resolver v3 corrected only Vyper source inference. Its inferred type
+        # IDs are the source spellings themselves (for example ``uint256`` or
+        # ``HashMap[...]``), while Solidity inference uses normalized ``t_*``
+        # IDs. Keep valid v2 Solidity layouts instead of needlessly discarding
+        # verified names and paths when Sourcify does not cover the address.
+        if layout.resolver_version == LAYOUT_RESOLVER_VERSION - 1:
+            inferred = [
+                variable
+                for variable in layout.variables
+                if variable.provenance == "source_inference"
+            ]
+            is_vyper_source_layout = bool(inferred) and any(
+                not variable.type_id.startswith("t_")
+                for variable in inferred
+            )
+            return bool(layout.variables) and not is_vyper_source_layout
+
+        return False
 
     async def _hydrate_compiler_inputs(self, metadata: ContractMetadata) -> None:
         """Restore sources/settings retained with the raw compiler artifact."""

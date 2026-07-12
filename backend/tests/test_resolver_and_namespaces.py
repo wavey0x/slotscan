@@ -554,7 +554,7 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repo.lookup[2], 123)
         self.assertEqual(metadata.storage_layout.contract_name, "Cached")
 
-    def test_v2_source_inference_cache_is_invalidated(self):
+    def test_v2_vyper_source_inference_cache_is_invalidated(self):
         value_type = StorageType(
             "uint256",
             "uint256",
@@ -579,6 +579,34 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(ContractResolver._cache_layout_is_usable(layout))
         layout.resolver_version = 3
         self.assertTrue(ContractResolver._cache_layout_is_usable(layout))
+
+    def test_v2_solidity_source_inference_cache_is_preserved(self):
+        value_type = StorageType(
+            "t_uint256",
+            "uint256",
+            "value",
+            "inplace",
+            32,
+        )
+        layout = StorageLayout(
+            contract_name="borgCore",
+            variables=[StorageVariable(
+                "nativeCooldown",
+                0,
+                0,
+                32,
+                value_type.id,
+                value_type.label,
+                provenance="source_inference",
+            )],
+            types={value_type.id: value_type},
+            resolver_version=2,
+        )
+
+        self.assertTrue(ContractResolver._cache_layout_is_usable(layout))
+
+        layout.resolver_version = 1
+        self.assertFalse(ContractResolver._cache_layout_is_usable(layout))
 
 
 if __name__ == "__main__":
