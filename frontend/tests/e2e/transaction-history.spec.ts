@@ -7,6 +7,7 @@ const SOURCE_LAYOUT_TX = '0x3353c2009d984e15a2dd909d09f56f2833cfa99129fa834ea6ea
 const NESTED_STRUCT_MAPPING_TX = '0x8e37bdd5003c883a684cd6c944c5fac24cc7f29b15ef23c5f6d7adf41c222f82';
 const GNOSIS_SAFE_ADDRESS = '0x16388463d60ffe0661cf7f1f31a7d658ac790ff7';
 const LIDO_ADDRESS = '0xae7ab96520de3a18e5e111b5eaab095312d7fe84';
+const TETHER_ADDRESS = '0xdac17f958d2ee523a2206206994597c13d831ec7';
 
 test('home search accepts a transaction hash and opens transaction-wide history', async ({ page }) => {
   await page.goto('/');
@@ -24,6 +25,10 @@ test('home search accepts a transaction hash and opens transaction-wide history'
   await expect(page.getByRole('button', { name: 'Grouped' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('button', { name: 'Decoded' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('link', { name: '0x711899...d9c1d3' })).toBeVisible();
+  const tetherSection = page.getByRole('heading', { name: 'TetherToken' }).locator('xpath=ancestor::section');
+  await expect(tetherSection.getByRole('link', { name: '0xdac1...1ec7' })).toHaveAttribute('href', `/1/${TETHER_ADDRESS}`);
+  await expect(tetherSection.getByRole('link', { name: 'View contract on Etherscan' })).toHaveAttribute('href', `https://etherscan.io/address/${TETHER_ADDRESS}`);
+  await expect(tetherSection.getByRole('link', { name: 'View contract on Etherscan' })).toHaveAttribute('target', '_blank');
   await expect(page.getByRole('checkbox')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Net effects' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Restored' })).toHaveCount(0);

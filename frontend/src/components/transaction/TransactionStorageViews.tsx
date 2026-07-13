@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { ExternalLink } from 'lucide-react';
 import { SlotHistoryTable } from '@/components/diff/DiffTable';
 import { KeyedVariablePath } from '@/components/diff/KeyedVariablePath';
 import { StorageTable, StorageTableColumns, StorageTableHeader, storageCellClass } from '@/components/diff/StorageTable';
@@ -78,10 +80,20 @@ export function ContractSection({
             <h2 className="truncate text-sm font-medium text-gray-900">{contract.name || 'Unresolved contract'}</h2>
           </button>
           <span className="col-start-2 row-start-2 flex min-w-0 items-center font-mono text-[10px] text-gray-500" title={contract.storage_address}>
-            <a href={getAddressExplorerUrl(chain, contract.storage_address)} target="_blank" rel="noopener noreferrer" className="truncate hover:underline">
+            <Link href={`/${chain}/${contract.storage_address}`} className="truncate hover:underline">
               {truncateAddress(contract.storage_address)}
-            </a>
+            </Link>
             <CopyButton value={contract.storage_address} label="Copy contract address" className="-my-1 p-1" />
+            <a
+              href={getAddressExplorerUrl(chain, contract.storage_address)}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="View contract on Etherscan"
+              title="View contract on Etherscan"
+              className="-my-1 inline-flex h-5 w-5 shrink-0 items-center justify-center text-gray-400 transition-colors hover:text-gray-900 focus-visible:text-gray-900 focus-visible:outline-none"
+            >
+              <ExternalLink size={12} strokeWidth={1.25} />
+            </a>
           </span>
         </div>
         <span className="flex shrink-0 flex-col items-end whitespace-nowrap text-right text-[10px] text-gray-500">
