@@ -17,7 +17,19 @@ export function TransactionHeader({
   return (
     <header className="mb-4 border-b border-gray-300 pb-4">
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-        <h1 className="text-lg font-medium text-gray-900">Transaction storage history</h1>
+        <div className="flex min-w-0 items-center gap-0.5">
+          <h1 className="min-w-0 truncate font-mono text-lg font-medium text-gray-900">
+            <a
+              href={getTxExplorerUrl(chain, data.tx_hash)}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={data.tx_hash}
+            >
+              {truncateTxHash(data.tx_hash)}
+            </a>
+          </h1>
+          <CopyButton value={data.tx_hash} label="Copy transaction hash" />
+        </div>
         <span className={cn(
           'text-[10px] uppercase tracking-wide',
           data.status === 'success' ? 'text-gray-500' : 'text-amber-600'
@@ -26,21 +38,7 @@ export function TransactionHeader({
         </span>
       </div>
 
-      <MetadataGrid>
-        <MetadataItem label="Transaction">
-          <span className="flex min-w-0 items-center gap-0.5">
-            <a
-              href={getTxExplorerUrl(chain, data.tx_hash)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="truncate"
-              title={data.tx_hash}
-            >
-              {truncateTxHash(data.tx_hash)}
-            </a>
-            <CopyButton value={data.tx_hash} label="Copy transaction hash" />
-          </span>
-        </MetadataItem>
+      <MetadataGrid className="lg:grid-cols-3">
         <MetadataItem label="Block">
           <a href={getBlockExplorerUrl(chain, data.block_number)} target="_blank" rel="noopener noreferrer">
             {data.block_number.toLocaleString()}

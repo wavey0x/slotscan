@@ -187,10 +187,10 @@ The global lookup accepts a transaction hash from anywhere, so the contract page
 The transaction page becomes the only storage-history report.
 
 ```text
-Transaction storage history                                      SUCCESS
+0x8e37…22f82 [copy]                                           SUCCESS
 
-TRANSACTION                 BLOCK          FROM          TO
-0x8e37…22f82 [copy]          25,233,936     0x1b5f…d271  0xfeb4…ff52
+BLOCK                       FROM           TO
+25,233,936                  0x1b5f…d271    0xfeb4…ff52
 
 CONTRACTS 8        WRITES 71        SLOTS 52
 

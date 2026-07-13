@@ -14,10 +14,11 @@ test('home search accepts a transaction hash and opens transaction-wide history'
   await page.getByRole('button', { name: 'Analyze Storage' }).click();
 
   await expect(page).toHaveURL(`/1/tx/${SIMPLE_TX}`);
-  await expect(page.getByRole('heading', { name: 'Transaction storage history' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '0x711899...d9c1d3' })).toBeVisible();
+  await expect(page.getByText('Transaction storage history', { exact: true })).toHaveCount(0);
   await expect(page.getByTestId('summary-writes').getByText('2', { exact: true })).toBeVisible();
   await expect(page.getByTestId('summary-slots').getByText('2', { exact: true })).toBeVisible();
-  for (const label of ['Transaction', 'Block', 'From', 'To']) {
+  for (const label of ['Block', 'From', 'To']) {
     await expect(page.getByText(label, { exact: true }).first()).toBeVisible();
   }
   await expect(page.getByRole('button', { name: 'Grouped' })).toHaveAttribute('aria-pressed', 'true');
@@ -31,7 +32,7 @@ test('home search accepts a transaction hash and opens transaction-wide history'
 test('all writes remain visible without interpretive classification controls', async ({ page }) => {
   await page.goto(`/1/tx/${RESTORED_TX}`);
 
-  await expect(page.getByRole('heading', { name: 'Transaction storage history' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '0x7fe79d...2b7cac' })).toBeVisible();
   await expect(page.getByTestId('summary-writes').getByText('5', { exact: true })).toBeVisible();
   await expect(page.getByTestId('summary-slots').getByText('4', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Grouped' })).toHaveAttribute('aria-pressed', 'true');
@@ -50,7 +51,7 @@ test('all writes remain visible without interpretive classification controls', a
 test('reverted child writes remain grouped and in the global timeline', async ({ page }) => {
   await page.goto(`/1/tx/${REVERTED_WRITES_TX}`);
 
-  await expect(page.getByRole('heading', { name: 'Transaction storage history' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '0x561dd6...742ae2' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Grouped' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByPlaceholder('Search contract, address, slot, or variable')).toBeVisible();
   await expect(page.getByText(/reverted writes?/, { exact: true }).first()).toBeVisible();
@@ -163,7 +164,7 @@ test('multi-key mappings stay compact and copy their complete path', async ({ pa
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.goto(`/1/tx/${SOURCE_LAYOUT_TX}?focus=${LIDO_ADDRESS}`);
 
-  await expect(page.getByRole('heading', { name: 'Transaction storage history' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '0x3353c2...14cd60' })).toBeVisible();
   const lidoSection = page.getByRole('heading', { name: 'Lido' }).locator('xpath=ancestor::section');
   await expect(lidoSection.getByTestId('contract-toggle')).toHaveAttribute('aria-expanded', 'true');
   const keyedVariables = lidoSection.getByTestId('keyed-variable-path');
