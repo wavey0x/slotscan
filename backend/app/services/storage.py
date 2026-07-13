@@ -25,6 +25,7 @@ from app.services.decoder import TypeDecoder
 from app.services.web3_provider import Web3Provider
 from app.services.layout_index import array_packing
 from app.utils.slots import compute_mapping_slot
+from app.utils.vyper import LEGACY_HASHED_STORAGE
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +173,8 @@ class StorageReader:
         slots_to_read = []
         slot_to_var: dict[int, tuple[StorageVariable, Any]] = {}
         mapping_slot_index: dict[int, tuple[StorageVariable, Any]] = {}
-        vyper_string_vars: dict[int, int] = {}  # base_slot -> max_length
+        # declared base slot -> (maximum length, physical length slot)
+        vyper_string_vars: dict[int, tuple[int, int]] = {}
         scheduled_slots: set[int] = set()
         is_complete = True
 
@@ -201,11 +203,28 @@ class StorageReader:
                 # Vyper strings: 1 slot for length + ceil(max_len/32) slots for data
                 num_data_slots = (max_len + 31) // 32
                 total_slots = 1 + num_data_slots
-                vyper_string_vars[var.slot] = max_len
+                string_storage_start = var.slot
+                if layout.storage_scheme == LEGACY_HASHED_STORAGE:
+                    # Vyper <=0.2.12 uses the declaration slot as a salt. The
+                    # length lives at keccak256(base), followed by payload words.
+                    string_storage_start = int.from_bytes(
+                        Web3.keccak(var.slot.to_bytes(32, "big")),
+                        "big",
+                    )
+                vyper_string_vars[var.slot] = (max_len, string_storage_start)
                 for i in range(total_slots):
-                    slot = var.slot + i
+                    slot = string_storage_start + i
                     if not schedule(slot, var, i):
                         break
+            elif (
+                layout.storage_scheme == LEGACY_HASHED_STORAGE
+                and var_type.kind in {"array", "struct"}
+            ):
+                # Legacy Vyper composites descend through hashed roots. Their
+                # declaration salt is not the first data word, and scanning
+                # subsequent slots would return false values and exhaust the
+                # bounded snapshot budget for large arrays.
+                continue
             elif var_type.encoding in ("inplace", "bytes"):
                 num_bytes = var_type.num_bytes or var.size or 32
                 num_slots = max(1, (num_bytes + 31) // 32)
@@ -296,14 +315,14 @@ class StorageReader:
                         continue
 
                     processed_vyper_strings.add(variable.slot)
-                    max_len = vyper_string_vars[variable.slot]
+                    max_len, string_storage_start = vyper_string_vars[variable.slot]
                     num_data_slots = (max_len + 31) // 32
 
                     # Gather length slot and data slots
                     length_slot_value = bytes.fromhex(raw_value[2:])
                     data_slot_values = []
                     for i in range(1, num_data_slots + 1):
-                        data_slot = variable.slot + i
+                        data_slot = string_storage_start + i
                         if data_slot in slot_values:
                             data_slot_values.append(bytes.fromhex(slot_values[data_slot][2:]))
                         else:
@@ -320,7 +339,7 @@ class StorageReader:
                     variable_path = variable.name
                     results.append(
                         SlotValue(
-                            slot=hex(slot),
+                            slot=hex(variable.slot),
                             raw_value=raw_value,
                             variable=variable,
                             decoded_value=decoded,
