@@ -3,6 +3,7 @@ import unittest
 from eth_abi import encode
 from web3 import Web3
 
+from app.api.routes.transactions import _group_changes_by_slot
 from app.models.domain import StorageLayout, StorageType, StorageVariable
 from app.services.layout_index import LayoutIndex, array_packing
 from app.config import Settings
@@ -165,6 +166,177 @@ class MappingSlotTests(unittest.TestCase):
         )
 
         self.assertEqual(match["path"], f"configs[{outer_key}][{inner_key}]")
+
+    def test_nested_mapping_to_struct_array_decodes_votium_incentive_fields(self):
+        address_type = StorageType(
+            "t_address", "address", "value", "inplace", 20
+        )
+        uint_type = StorageType(
+            "t_uint256", "uint256", "value", "inplace", 32
+        )
+        address_array_type = StorageType(
+            "t_array(t_address)dyn_storage",
+            "address[]",
+            "array",
+            "dynamic_array",
+            32,
+            element_type=address_type.id,
+        )
+        member_specs = [
+            ("token", address_type),
+            ("amount", uint_type),
+            ("maxPerVote", uint_type),
+            ("distributed", uint_type),
+            ("recycled", uint_type),
+            ("depositor", address_type),
+            ("excluded", address_array_type),
+        ]
+        incentive_type = StorageType(
+            "t_struct(Incentive)83_storage",
+            "struct Incentive",
+            "struct",
+            "inplace",
+            224,
+            members=[
+                StorageVariable(
+                    name,
+                    slot,
+                    0,
+                    member_type.num_bytes or 32,
+                    member_type.id,
+                    member_type.label,
+                )
+                for slot, (name, member_type) in enumerate(member_specs)
+            ],
+        )
+        incentive_array_type = StorageType(
+            "t_array(t_struct(Incentive)83_storage)dyn_storage",
+            "struct Incentive[]",
+            "array",
+            "dynamic_array",
+            32,
+            element_type=incentive_type.id,
+        )
+        inner_mapping_type = StorageType(
+            "t_mapping(t_address,t_array(t_struct(Incentive)83_storage)dyn_storage)",
+            "mapping(address => struct Incentive[])",
+            "mapping",
+            "mapping",
+            32,
+            key_type=address_type.id,
+            value_type=incentive_array_type.id,
+        )
+        outer_mapping_type = StorageType(
+            "t_mapping(t_uint256,t_mapping(t_address,t_array(t_struct(Incentive)83_storage)dyn_storage))",
+            "mapping(uint256 => mapping(address => struct Incentive[]))",
+            "mapping",
+            "mapping",
+            32,
+            key_type=uint_type.id,
+            value_type=inner_mapping_type.id,
+        )
+        incentives = StorageVariable(
+            "incentives", 15, 0, 32, outer_mapping_type.id, outer_mapping_type.label
+        )
+        layout = StorageLayout(
+            "Votium",
+            [incentives],
+            {
+                storage_type.id: storage_type
+                for storage_type in (
+                    address_type,
+                    uint_type,
+                    address_array_type,
+                    incentive_type,
+                    incentive_array_type,
+                    inner_mapping_type,
+                    outer_mapping_type,
+                )
+            },
+        )
+
+        round_number = 126
+        gauge = "0xaf01d68714e7ea67f43f08b5947e367126b889b1"
+        outer_preimage = encode(["uint256", "uint256"], [round_number, 15])
+        outer_hash = Web3.keccak(outer_preimage)
+        inner_preimage = encode(["address", "bytes32"], [gauge, outer_hash])
+        length_hash = Web3.keccak(inner_preimage)
+        array_preimage = encode(["bytes32"], [length_hash])
+        data_start = int.from_bytes(Web3.keccak(array_preimage), "big")
+        length_slot = "0x" + length_hash.hex()
+        data_start_slot = f"0x{data_start:064x}"
+        lookup = {
+            "0x" + outer_hash.hex(): "0x" + outer_preimage.hex(),
+            length_slot: "0x" + inner_preimage.hex(),
+            data_start_slot: "0x" + array_preimage.hex(),
+        }
+
+        # These are the actual array length/data slots from the reported
+        # transaction, tying the algebraic regression to that production case.
+        self.assertEqual(
+            length_slot,
+            "0x283e5d16b59690bbdd0ba707448646ea51cc76f8918d36a29e5a85ddf32d41cd",
+        )
+        self.assertEqual(
+            data_start_slot,
+            "0x36eac35083b7928db06e30b5d8301b2ef26535cc322c18fe88b6787b3e40faab",
+        )
+
+        raw_changes = [
+            (length_slot, f"0x{0:064x}", f"0x{1:064x}", 1, 1),
+            *[
+                (
+                    f"0x{data_start + slot:064x}",
+                    f"0x{0:064x}",
+                    f"0x{slot + 1:064x}",
+                    slot + 2,
+                    slot + 2,
+                )
+                for slot in range(7)
+            ],
+            # The observed length is one, so the next element must not be
+            # claimed merely because its numeric slot follows the data start.
+            (
+                f"0x{data_start + 7:064x}",
+                f"0x{0:064x}",
+                f"0x{99:064x}",
+                9,
+                9,
+            ),
+        ]
+
+        changes = TransactionTracer(object(), Settings(), TypeDecoder())._decode_changes(
+            raw_changes,
+            layout,
+            lookup,
+        )
+
+        base_path = f"incentives[{round_number}][{gauge}]"
+        self.assertEqual(changes[0].variable_path, base_path)
+        self.assertEqual(
+            [change.variable_path for change in changes[1:8]],
+            [f"{base_path}[0].{name}" for name, _ in member_specs],
+        )
+        self.assertTrue(all(change.variable is incentives for change in changes[:8]))
+        self.assertTrue(all(change.array_index == 0 for change in changes[1:8]))
+        self.assertTrue(
+            all(change.encoding == "mapping_to_array" for change in changes[1:8])
+        )
+        self.assertIsNone(changes[8].variable)
+        self.assertIsNone(changes[8].variable_path)
+
+        slot_responses = _group_changes_by_slot(changes, layout)
+        self.assertEqual(
+            [slot.variable_path for slot in slot_responses[1:8]],
+            [f"{base_path}[0].{name}" for name, _ in member_specs],
+        )
+        self.assertTrue(
+            all(slot.variable_name == "incentives" for slot in slot_responses[:8])
+        )
+        self.assertEqual(
+            [slot.struct_field for slot in slot_responses[1:8]],
+            [name for name, _ in member_specs],
+        )
 
     def test_nested_vyper_mapping_uses_hash_before_key(self):
         value_type = StorageType("uint256", "uint256", "value", "inplace", 32)

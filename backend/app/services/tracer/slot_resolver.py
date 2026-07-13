@@ -163,7 +163,11 @@ class SlotPathResolver:
                     var_type = layout.get_type(variable.type_id) if variable else None
 
                     if var_type and var_type.encoding == "mapping" and var_type.value_type:
-                        value_type = layout.get_type(var_type.value_type)
+                        # The recursive match may already have traversed
+                        # several mapping layers. Continue from its proven
+                        # final value type instead of restarting at the
+                        # top-level mapping's immediate value.
+                        value_type = mapping_match.get("decode_type")
                         value_path = mapping_match.get("path")
                         if value_type and value_type.kind == "struct" and value_type.members:
                             array_member = next(
@@ -201,6 +205,7 @@ class SlotPathResolver:
                                 "element_slots": packing.slots_per_element,
                                 "array_packing": packing,
                                 "data_start_slot": int(slot_hex, 16),
+                                "array_length_slot": inner_slot_normalized,
                             }
             return None
 
@@ -728,20 +733,32 @@ class SlotPathResolver:
         mapping_to_array_index: dict[int, dict],
     ) -> Optional[dict]:
         """Try to match a slot to an element of a mapping-to-array."""
-        for data_start, match_info in mapping_to_array_index.items():
-            if slot_int < data_start:
-                continue
-
-            offset_from_start = slot_int - data_start
+        candidates = sorted(
+            (
+                (slot_int - data_start, data_start, match_info)
+                for data_start, match_info in mapping_to_array_index.items()
+                if data_start <= slot_int
+            ),
+            key=lambda candidate: candidate[0],
+        )
+        for offset_from_start, data_start, match_info in candidates:
             packing = match_info.get("array_packing") or array_packing(
                 match_info.get("element_type")
             )
+            array_length = match_info.get("array_length")
+            if (
+                array_length is not None
+                and offset_from_start >= packing.slot_count(array_length)
+            ):
+                continue
             element_type = match_info.get("element_type")
             variable = match_info.get("variable")
             mapping_key = match_info.get("key", "?")
+            base_path = match_info.get("path") or (
+                f"{variable.name}[{mapping_key}]" if variable else "?"
+            )
 
             if packing.is_packed:
-                var_name = variable.name if variable else "?"
                 return {
                     "variable": variable,
                     "base_slot": match_info.get("base_slot"),
@@ -750,9 +767,9 @@ class SlotPathResolver:
                     "mapping_key": mapping_key,
                     "field_name": None,
                     "element_locations": packing.locations_in_slot(
-                        data_start, slot_int
+                        data_start, slot_int, length=array_length
                     ),
-                    "path": f"{var_name}[{mapping_key}] (packed word)",
+                    "path": f"{base_path} (packed word)",
                     "encoding": "mapping_to_array",
                     "element_type": element_type,
                     "decode_type": element_type,
@@ -768,9 +785,8 @@ class SlotPathResolver:
                         if member.slot == struct_slot_offset:
                             slot_members.append(member)
 
-                var_name = variable.name if variable else "?"
                 if len(slot_members) > 1:
-                    path = f"{var_name}[{mapping_key}][{array_index}]" if struct_slot_offset == 0 else f"{var_name}[{mapping_key}][{array_index}][+{struct_slot_offset}]"
+                    path = f"{base_path}[{array_index}]" if struct_slot_offset == 0 else f"{base_path}[{array_index}][+{struct_slot_offset}]"
                     return {
                         "variable": variable,
                         "base_slot": match_info.get("base_slot"),
@@ -787,7 +803,7 @@ class SlotPathResolver:
                 elif len(slot_members) == 1:
                     field_name = slot_members[0].name
                     field_type = layout.get_type(slot_members[0].type_id)
-                    path = f"{var_name}[{mapping_key}][{array_index}].{field_name}"
+                    path = f"{base_path}[{array_index}].{field_name}"
                     return {
                         "variable": variable,
                         "base_slot": match_info.get("base_slot"),
@@ -801,7 +817,7 @@ class SlotPathResolver:
                         "decode_type": field_type or element_type,
                     }
                 else:
-                    path = f"{var_name}[{mapping_key}][{array_index}][+{struct_slot_offset}]"
+                    path = f"{base_path}[{array_index}][+{struct_slot_offset}]"
                     return {
                         "variable": variable,
                         "base_slot": match_info.get("base_slot"),
@@ -816,7 +832,6 @@ class SlotPathResolver:
                     }
             else:
                 array_index = offset_from_start
-                var_name = variable.name if variable else "?"
                 return {
                     "variable": variable,
                     "base_slot": match_info.get("base_slot"),
@@ -824,7 +839,7 @@ class SlotPathResolver:
                     "struct_slot_offset": 0,
                     "mapping_key": mapping_key,
                     "field_name": None,
-                    "path": f"{var_name}[{mapping_key}][{array_index}]",
+                    "path": f"{base_path}[{array_index}]",
                     "encoding": "mapping_to_array",
                     "element_type": element_type,
                     "decode_type": element_type,

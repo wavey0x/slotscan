@@ -540,6 +540,16 @@ class TransactionAnalysisService:
                     if match and match.get("encoding") == "mapping_to_array":
                         data_start = match.get("data_start_slot")
                         if data_start is not None:
+                            length_slot = match.get("array_length_slot")
+                            observed_lengths = [
+                                int(value, 16)
+                                for raw_slot, old_value, new_value, _, _ in raw_changes
+                                if self._normalize_slot(raw_slot) == length_slot
+                                for value in (old_value, new_value)
+                                if value is not None
+                            ]
+                            if observed_lengths:
+                                match["array_length"] = max(observed_lengths)
                             mapping_to_array_index[data_start] = match
             if mapping_to_array_index:
                 logger.info(f"Built mapping-to-array index with {len(mapping_to_array_index)} entries")
@@ -738,12 +748,25 @@ class TransactionAnalysisService:
                                     if encoding == "mapping_to_array":
                                         stats["mapping_to_array"] += 1
                                         resolution_path = "mapping_to_array"
-                                        array_index = 0
-                                        if variable:
-                                            variable_path = f"{variable.name}[{mapping_key}][0]"
-                                        element_type = preimage_match.get("element_type")
-                                        if element_type:
-                                            decode_type = element_type
+                                        array_match = self.slot_resolver.try_match_mapping_to_array_slot(
+                                            slot_int,
+                                            layout,
+                                            mapping_to_array_index,
+                                        )
+                                        if array_match:
+                                            variable_path = array_match["path"]
+                                            mapping_key = array_match.get("mapping_key")
+                                            array_index = array_match.get("array_index")
+                                            element_type = array_match.get("element_type")
+                                            element_type_id = (
+                                                element_type.id if element_type else None
+                                            )
+                                            decode_type = array_match.get("decode_type")
+                                        else:
+                                            array_index = 0
+                                            element_type = preimage_match.get("element_type")
+                                            if element_type:
+                                                decode_type = element_type
 
                                     if decode_type:
                                         try:
@@ -1112,12 +1135,18 @@ class TransactionAnalysisService:
 
                 variable = candidate_variable
                 element_type = candidate_type
-                locations = packing.locations_in_slot(data_start, slot_int)
+                locations = packing.locations_in_slot(
+                    data_start,
+                    slot_int,
+                    length=(entry.get("array_length") if is_mapping_array else None),
+                )
                 if is_mapping_array:
                     encoding = "mapping_to_array"
                     mapping_key = entry.get("key", "?")
                     mapping_base_slot = entry.get("base_slot")
-                    path_prefix = f"{variable.name}[{mapping_key}]" if variable else None
+                    path_prefix = entry.get("path") or (
+                        f"{variable.name}[{mapping_key}]" if variable else None
+                    )
                 else:
                     encoding = "dynamic_array"
                     path_prefix = variable.name if variable else None
