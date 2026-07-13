@@ -235,7 +235,7 @@ class TransactionHistoryService:
                 chain_id,
                 address,
                 block_number=block_number,
-                sourcify_layout_only=True,
+                sourcify_layout_only=False,
                 follow_proxy=follow_proxy,
             )
 

@@ -1,6 +1,7 @@
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, TestCase
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from app.api.routes.transactions import (
     _group_changes_by_slot,
@@ -289,6 +290,45 @@ class PrestateRecoveryTests(TestCase):
 
 
 class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
+    async def test_historical_resolution_uses_full_verification_fallback(self):
+        service = TransactionHistoryService(
+            tracer=None,
+            web3_provider=_NoopProvider(),
+            settings=Settings(),
+            layout_parser=None,
+            http_client=None,
+        )
+        expected = ContractMetadata(chain_id=1, address=ADDRESS_A)
+        resolver = SimpleNamespace(resolve=AsyncMock(return_value=expected))
+        session_context = AsyncMock()
+        session_context.__aenter__.return_value = object()
+
+        with (
+            patch(
+                "app.services.transaction_history.async_session_factory",
+                return_value=session_context,
+            ),
+            patch(
+                "app.services.transaction_history.ContractResolver",
+                return_value=resolver,
+            ),
+        ):
+            result = await service._resolve_metadata(
+                1,
+                ADDRESS_A,
+                artifact().block_number,
+                follow_proxy=False,
+            )
+
+        self.assertIs(result, expected)
+        resolver.resolve.assert_awaited_once_with(
+            1,
+            ADDRESS_A,
+            block_number=artifact().block_number,
+            sourcify_layout_only=False,
+            follow_proxy=False,
+        )
+
     async def test_shared_artifact_is_loaded_once_and_resolution_degrades_locally(self):
         repository = _CachedArtifactRepository(artifact())
         tracer = TransactionAnalysisService(
