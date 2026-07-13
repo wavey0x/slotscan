@@ -20,6 +20,15 @@ from dataclasses import dataclass
 from web3 import Web3
 
 from app.models.domain import StorageLayout, StorageType, StorageVariable
+from app.utils.vyper import (
+    LEGACY_HASHED_STORAGE,
+    LOCK_AFTER_GLOBALS,
+    LOCK_AFTER_STORAGE,
+    LOCK_FRONT_PER_FUNCTION,
+    LOCK_FRONT_PER_KEY,
+    LOCK_SENTINEL,
+    vyper_storage_policy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1071,6 +1080,7 @@ class NamespaceStorageParser:
         self,
         sources: dict[str, str],
         contract_name: str,
+        compiler_version: str | None = None,
     ) -> Optional[StorageLayout]:
         """Infer a Vyper layout from verified source without compiling it."""
         source = next(
@@ -1093,6 +1103,8 @@ class NamespaceStorageParser:
             if version_match
             else None
         )
+        policy = vyper_storage_policy(compiler_version or vyper_version)
+        legacy_hashed = policy.storage_scheme == LEGACY_HASHED_STORAGE
         source = self._strip_comments(source)
         source = re.sub(r"#[^\n]*", "", source)
         integer_constants = {
@@ -1212,7 +1224,7 @@ class NamespaceStorageParser:
                     field_id, field_slots = ensure_type(field_type_name)
                     members.append(StorageVariable(
                         name=field_name,
-                        slot=slot,
+                        slot=(len(members) if legacy_hashed else slot),
                         offset=0,
                         size=field_slots * 32,
                         type_id=field_id,
@@ -1220,17 +1232,18 @@ class NamespaceStorageParser:
                         provenance="source_inference",
                         confidence="inferred",
                     ))
-                    slot += field_slots
+                    slot += 1 if legacy_hashed else field_slots
                 types[type_name].members = members
                 types[type_name].num_bytes = max(1, slot) * 32
                 return type_name, max(1, slot)
             bounded_match = re.fullmatch(r"(?:String|Bytes)\[(\d+)\]", type_name)
             if bounded_match:
-                # Vyper before 0.3.0 reserved two metadata words before the
-                # bounded payload. Newer compilers reserve one.
-                metadata_slots = (
+                # Hashed-layout Vyper stores length at keccak(base) followed
+                # by payload words. Sequential 0.2.x uses two metadata words;
+                # 0.3.x and newer uses one.
+                metadata_slots = 1 if legacy_hashed else (
                     2
-                    if vyper_version is not None and vyper_version < (0, 3, 0)
+                    if policy.version is not None and policy.version < (0, 3, 0)
                     else 1
                 )
                 slots = metadata_slots + (int(bounded_match.group(1)) + 31) // 32
@@ -1257,34 +1270,20 @@ class NamespaceStorageParser:
             return type_name, 1
 
         variables: list[StorageVariable] = []
-        slot = 0
         lock_occurrences = re.findall(
             r"@nonreentrant\([\"']([^\"']+)[\"']\)",
             source,
         )
-        # Through Vyper 0.3.0, each decorated function reserved its own word,
-        # even when several functions reused the same lock key. Vyper 0.3.1
-        # switched to one shared word per key.
+        unique_locks = list(dict.fromkeys(lock_occurrences))
         locks = (
             lock_occurrences
-            if vyper_version is not None and vyper_version <= (0, 3, 0)
-            else list(dict.fromkeys(lock_occurrences))
+            if policy.lock_scheme == LOCK_FRONT_PER_FUNCTION
+            else unique_locks
         )
         lock_type_id, _ = ensure_type("uint256")
-        for lock in locks:
-            variables.append(StorageVariable(
-                name=f"nonreentrant.{lock}",
-                slot=slot,
-                offset=0,
-                size=32,
-                type_id=lock_type_id,
-                label="uint256",
-                provenance="source_inference",
-                confidence="inferred",
-            ))
-            slot += 1
 
         declaration_pattern = re.compile(r"^([A-Za-z_]\w*)\s*:\s*(.+?)\s*$")
+        declarations: list[tuple[str, str, int, str]] = []
         for line in lines:
             if not line or line[0].isspace():
                 continue
@@ -1299,17 +1298,53 @@ class NamespaceStorageParser:
             }:
                 continue
             type_id, slots = ensure_type(storage_type)
+            declarations.append((variable_name, type_id, slots, storage_type))
+
+        def add_lock(lock: str, slot: int) -> None:
             variables.append(StorageVariable(
-                name=variable_name,
+                name=f"nonreentrant.{lock}",
                 slot=slot,
                 offset=0,
-                size=slots * 32,
+                size=32,
+                type_id=lock_type_id,
+                label="uint256",
+                provenance="source_inference",
+                confidence="inferred",
+            ))
+
+        front_locks = policy.lock_scheme in {
+            LOCK_FRONT_PER_FUNCTION,
+            LOCK_FRONT_PER_KEY,
+        }
+        if front_locks:
+            for lock_slot, lock in enumerate(locks):
+                add_lock(lock, lock_slot)
+
+        state_slot = len(locks) if front_locks else 0
+        for variable_name, type_id, slots, storage_type in declarations:
+            allocated_slots = 1 if legacy_hashed else slots
+            variables.append(StorageVariable(
+                name=variable_name,
+                slot=state_slot,
+                offset=0,
+                size=allocated_slots * 32,
                 type_id=type_id,
                 label=storage_type,
                 provenance="source_inference",
                 confidence="inferred",
             ))
-            slot += slots
+            state_slot += allocated_slots
+
+        if policy.lock_scheme == LOCK_SENTINEL:
+            for offset, lock in enumerate(locks):
+                add_lock(lock, 0xFFFFFF + offset)
+        elif policy.lock_scheme == LOCK_AFTER_GLOBALS:
+            for offset, lock in enumerate(locks):
+                add_lock(lock, len(declarations) + offset)
+        elif policy.lock_scheme == LOCK_AFTER_STORAGE:
+            for offset, lock in enumerate(locks):
+                add_lock(lock, state_slot + offset)
+
         if not variables:
             return None
         return StorageLayout(
@@ -1317,4 +1352,9 @@ class NamespaceStorageParser:
             variables=variables,
             types=types,
             language="Vyper",
+            compiler_version=(
+                compiler_version
+                or (".".join(str(part) for part in vyper_version) if vyper_version else None)
+            ),
+            storage_scheme=policy.storage_scheme,
         )

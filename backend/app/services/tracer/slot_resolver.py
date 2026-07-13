@@ -519,6 +519,211 @@ class SlotPathResolver:
 
         return index
 
+    def build_legacy_vyper_slot_index(
+        self,
+        layout: StorageLayout,
+        preimage_lookup: dict[str, str],
+        target_slots: set[int],
+    ) -> dict[int, dict]:
+        """Resolve pre-0.2.13 Vyper's recursively hashed composites.
+
+        In this compiler era every top-level declaration owns one salt slot.
+        Mappings hash ``parent || key``; arrays, structs, and bounded bytes hash
+        the parent location at every descent and then add an index/member
+        offset.  Trace SHA3 preimages provide proof for each hash edge.
+        """
+        exact: dict[int, dict] = {}
+        descriptors: dict[int, dict] = {}
+
+        def is_materialized(type_info: StorageType) -> bool:
+            return not (
+                type_info.encoding in {"mapping", "bytes"}
+                or type_info.kind in {"struct", "array"}
+            )
+
+        for variable in layout.variables:
+            type_info = layout.get_type(variable.type_id)
+            if type_info is None:
+                continue
+            exact[variable.slot] = {
+                "variable": variable,
+                "path": variable.name,
+                "type_info": type_info,
+                "mapping_base_slot": None,
+                "mapping_keys": [],
+                "is_mapping": False,
+                "array_index": None,
+                "element_type_id": None,
+                "field_name": None,
+                "materialized": is_materialized(type_info),
+            }
+
+        def descriptor_child(base: int, parent: dict, location: int) -> dict | None:
+            delta = location - base
+            if delta < 0:
+                return None
+            parent_type = parent["type_info"]
+            child_type = None
+            path = parent["path"]
+            array_index = parent.get("array_index")
+            element_type_id = parent.get("element_type_id")
+            field_name = None
+
+            if parent_type.kind == "struct" and parent_type.members:
+                member = next(
+                    (member for member in parent_type.members if member.slot == delta),
+                    None,
+                )
+                if member is None:
+                    return None
+                child_type = layout.get_type(member.type_id)
+                path = f"{path}.{member.name}"
+                field_name = member.name
+            elif parent_type.kind == "array" and parent_type.element_type:
+                if parent_type.array_length is not None and delta >= parent_type.array_length:
+                    return None
+                child_type = layout.get_type(parent_type.element_type)
+                path = f"{path}[{delta}]"
+                array_index = delta
+                element_type_id = child_type.id if child_type else parent_type.element_type
+            elif parent_type.encoding == "bytes":
+                max_words = max(1, ((parent_type.num_bytes or 32) + 31) // 32)
+                if delta >= max_words:
+                    return None
+                child_type = (
+                    layout.get_type("uint256")
+                    if delta == 0
+                    else StorageType(
+                        id="bytes32",
+                        label="bytes32",
+                        kind="value",
+                        encoding="inplace",
+                        num_bytes=32,
+                    )
+                )
+                path = f"{path} (length)" if delta == 0 else f"{path} (data {delta - 1})"
+            else:
+                return None
+
+            if child_type is None:
+                return None
+            return {
+                **parent,
+                "path": path,
+                "type_info": child_type,
+                "array_index": array_index,
+                "element_type_id": element_type_id,
+                "field_name": field_name,
+                "materialized": is_materialized(child_type),
+            }
+
+        def resolve_location(location: int) -> dict | None:
+            if location in exact:
+                return exact[location]
+            candidates = []
+            for base, parent in descriptors.items():
+                child = descriptor_child(base, parent, location)
+                if child is not None:
+                    candidates.append((location - base, child))
+            return min(candidates, key=lambda candidate: candidate[0])[1] if candidates else None
+
+        preimages = []
+        for output_hex, preimage in preimage_lookup.items():
+            cleaned = re.sub(r"0x", "", preimage, flags=re.IGNORECASE)
+            if len(cleaned) not in {64, 128} or not re.fullmatch(
+                r"[0-9a-fA-F]+", cleaned
+            ):
+                continue
+            try:
+                output = int(output_hex, 16)
+            except ValueError:
+                continue
+            preimages.append((output, cleaned))
+
+        for _ in range(len(preimages) + 1):
+            changed = False
+            for output, cleaned in preimages:
+                if len(cleaned) == 128 and output not in exact:
+                    parent_location = int(cleaned[:64], 16)
+                    parent = resolve_location(parent_location)
+                    if parent is None or parent["type_info"].encoding != "mapping":
+                        continue
+                    mapping_type = parent["type_info"]
+                    value_type = (
+                        layout.get_type(mapping_type.value_type)
+                        if mapping_type.value_type
+                        else None
+                    )
+                    if value_type is None:
+                        continue
+                    key = self.decode_mapping_key(
+                        "0x" + cleaned[64:128],
+                        mapping_type.key_type,
+                    )
+                    exact[output] = {
+                        **parent,
+                        "path": f"{parent['path']}[{key}]",
+                        "type_info": value_type,
+                        "mapping_base_slot": (
+                            parent.get("mapping_base_slot")
+                            if parent.get("mapping_base_slot") is not None
+                            else parent["variable"].slot
+                        ),
+                        "mapping_keys": [*parent.get("mapping_keys", []), key],
+                        "is_mapping": True,
+                        "materialized": is_materialized(value_type),
+                    }
+                    changed = True
+                elif len(cleaned) == 64 and output not in descriptors:
+                    parent_location = int(cleaned, 16)
+                    parent = resolve_location(parent_location)
+                    if parent is None:
+                        continue
+                    parent_type = parent["type_info"]
+                    if not (
+                        parent_type.kind in {"struct", "array"}
+                        or parent_type.encoding == "bytes"
+                    ):
+                        continue
+                    descriptors[output] = parent
+                    changed = True
+            if not changed:
+                break
+
+        resolved = {}
+        for slot in target_slots:
+            match = resolve_location(slot)
+            # Composite locations are salts for another hash edge, not storage
+            # words themselves. Only scalar leaves (or hashed bytes children)
+            # are safe to expose as resolved writes.
+            if match is None or not match.get("materialized", False):
+                continue
+            type_info = match["type_info"]
+            mapping_keys = match.get("mapping_keys", [])
+            resolved[slot] = {
+                "variable": match["variable"],
+                "path": match["path"],
+                "decode_type": type_info,
+                "mapping_base_slot": match.get("mapping_base_slot"),
+                "mapping_key": ", ".join(mapping_keys) if mapping_keys else None,
+                "is_mapping": match.get("is_mapping", False),
+                "encoding": (
+                    "mapping" if type_info.encoding == "mapping"
+                    else "legacy_vyper_hashed"
+                ),
+                "key_type": (
+                    layout.get_type(match["variable"].type_id).key_type
+                    if match.get("is_mapping")
+                    and layout.get_type(match["variable"].type_id)
+                    else None
+                ),
+                "value_type": type_info.id,
+                "array_index": match.get("array_index"),
+                "element_type_id": match.get("element_type_id"),
+                "field_name": match.get("field_name"),
+            }
+        return resolved
+
     def build_dynamic_bytes_index(
         self,
         layout: StorageLayout,

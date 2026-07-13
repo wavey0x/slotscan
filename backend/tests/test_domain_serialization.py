@@ -4,12 +4,26 @@ from app.models.domain import (
     DecodedValue,
     SlotValue,
     StorageChange,
+    StorageLayout,
     StorageSnapshot,
     TransactionDiff,
 )
 
 
 class DomainSerializationTests(unittest.TestCase):
+    def test_layout_round_trip_preserves_vyper_storage_policy(self):
+        layout = StorageLayout(
+            contract_name="VotingEscrow",
+            variables=[],
+            types={},
+            resolver_version=5,
+            language="Vyper",
+            compiler_version="0.2.4+commit.7949850",
+            storage_scheme="vyper_legacy_hashed",
+        )
+
+        self.assertEqual(StorageLayout.from_dict(layout.to_dict()), layout)
+
     def test_snapshot_round_trip(self):
         snapshot = StorageSnapshot(
             chain_id=1,

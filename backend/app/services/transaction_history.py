@@ -286,6 +286,18 @@ class TransactionHistoryService:
                 (layout.language for layout in layouts if layout.language),
                 None,
             ),
+            compiler_version=next(
+                (
+                    layout.compiler_version
+                    for layout in layouts
+                    if layout.compiler_version
+                ),
+                None,
+            ),
+            storage_scheme=next(
+                (layout.storage_scheme for layout in layouts if layout.storage_scheme),
+                None,
+            ),
         )
 
     @staticmethod

@@ -63,6 +63,8 @@ class StorageLayout:
     types: dict[str, StorageType]
     resolver_version: int = 1
     language: Optional[str] = None
+    compiler_version: Optional[str] = None
+    storage_scheme: Optional[str] = None
 
     def get_variable_by_slot(
         self, slot: int, offset: int = 0
@@ -438,6 +440,8 @@ class StorageLayout:
             "contract_name": self.contract_name,
             "resolver_version": self.resolver_version,
             "language": self.language,
+            "compiler_version": self.compiler_version,
+            "storage_scheme": self.storage_scheme,
             "variables": [asdict(v) for v in self.variables],
             "types": {
                 k: {
@@ -476,6 +480,8 @@ class StorageLayout:
             types=types,
             resolver_version=int(data.get("resolver_version", 1)),
             language=data.get("language"),
+            compiler_version=data.get("compiler_version"),
+            storage_scheme=data.get("storage_scheme"),
         )
 
 

@@ -27,6 +27,7 @@ from app.services.layout_index import array_packing
 from app.services.layout_index import LayoutIndex, StorageLocation, StorageNamespace
 from app.services.tracer.journal import StorageJournal, StorageJournalBuilder
 from app.services.tracer.extractor import TransactionTraceExtractor
+from app.utils.vyper import LEGACY_HASHED_STORAGE
 
 logger = logging.getLogger(__name__)
 
@@ -524,13 +525,37 @@ class TransactionAnalysisService:
                 layout = None
         layout_index = LayoutIndex(layout) if layout else None
         decoder = self.decoder.bound(layout.types) if layout else self.decoder.bound({})
-        dynamic_array_index = self.slot_resolver.build_dynamic_array_index(layout) if layout else {}
-        dynamic_bytes_index = self.slot_resolver.build_dynamic_bytes_index(layout) if layout else {}
-        static_array_index = self.slot_resolver.build_static_array_index(layout) if layout else {}
+        is_legacy_vyper = bool(
+            layout and layout.storage_scheme == LEGACY_HASHED_STORAGE
+        )
+        legacy_vyper_index = (
+            self.slot_resolver.build_legacy_vyper_slot_index(
+                layout,
+                preimage_lookup,
+                {int(change[0], 16) for change in raw_changes},
+            )
+            if layout and is_legacy_vyper
+            else {}
+        )
+        dynamic_array_index = (
+            self.slot_resolver.build_dynamic_array_index(layout)
+            if layout and not is_legacy_vyper
+            else {}
+        )
+        dynamic_bytes_index = (
+            self.slot_resolver.build_dynamic_bytes_index(layout)
+            if layout and not is_legacy_vyper
+            else {}
+        )
+        static_array_index = (
+            self.slot_resolver.build_static_array_index(layout)
+            if layout and not is_legacy_vyper
+            else {}
+        )
 
         # Build mapping-to-array index
         mapping_to_array_index: dict[int, dict] = {}
-        if layout and preimage_lookup:
+        if layout and preimage_lookup and not is_legacy_vyper:
             for slot_hash, preimage in preimage_lookup.items():
                 preimage_clean = preimage[2:] if preimage.startswith("0x") else preimage
                 if len(preimage_clean) == 64:
@@ -565,6 +590,7 @@ class TransactionAnalysisService:
             "dynamic_array": 0,
             "mapping_to_array": 0,
             "dynamic_bytes": 0,
+            "legacy_vyper": 0,
             "heuristic": 0,
         }
 
@@ -584,6 +610,48 @@ class TransactionAnalysisService:
                     slot_int = int(slot_hex, 16)
                 except Exception:
                     slot_int = 0
+
+                legacy_match = legacy_vyper_index.get(slot_int)
+                if legacy_match:
+                    stats["legacy_vyper"] += 1
+                    decode_type = legacy_match["decode_type"]
+                    decode_old_value = old_value or ("0x" + "0" * 64)
+                    try:
+                        old_decoded = decoder.decode(
+                            bytes.fromhex(decode_old_value.removeprefix("0x")),
+                            decode_type,
+                            0,
+                        )
+                        new_decoded = decoder.decode(
+                            bytes.fromhex(new_value.removeprefix("0x")),
+                            decode_type,
+                            0,
+                        )
+                    except Exception:
+                        old_decoded = None
+                        new_decoded = None
+                    if old_value is None:
+                        old_decoded = None
+                    decoded_changes.append(StorageChange(
+                        slot=slot_hex,
+                        mapping_base_slot=legacy_match.get("mapping_base_slot"),
+                        old_value=old_value,
+                        new_value=new_value,
+                        variable=legacy_match["variable"],
+                        variable_path=legacy_match["path"],
+                        old_decoded=old_decoded,
+                        new_decoded=new_decoded,
+                        mapping_key=legacy_match.get("mapping_key"),
+                        is_mapping=legacy_match.get("is_mapping", False),
+                        encoding=legacy_match.get("encoding"),
+                        key_type=legacy_match.get("key_type"),
+                        value_type=legacy_match.get("value_type"),
+                        element_type_id=legacy_match.get("element_type_id"),
+                        array_index=legacy_match.get("array_index"),
+                        change_index=exec_index,
+                        pc=pc,
+                    ))
+                    continue
 
                 packed_array_changes = self._decode_packed_array_change(
                     slot_int=slot_int,
@@ -1049,12 +1117,13 @@ class TransactionAnalysisService:
                         )
                         break
 
-        resolved = stats["layout_direct"] + stats["preimage_lookup"] + stats["struct_offset"] + stats["dynamic_array"] + stats["mapping_to_array"] + stats["dynamic_bytes"]
+        resolved = stats["layout_direct"] + stats["preimage_lookup"] + stats["struct_offset"] + stats["dynamic_array"] + stats["mapping_to_array"] + stats["dynamic_bytes"] + stats["legacy_vyper"]
         logger.info(
             f"Slot resolution: {stats['total']} total, {resolved} resolved "
             f"(layout={stats['layout_direct']}, preimage={stats['preimage_lookup']}, "
             f"struct_offset={stats['struct_offset']}, array={stats['dynamic_array']}, "
-            f"map_to_array={stats['mapping_to_array']}, bytes={stats['dynamic_bytes']}), "
+            f"map_to_array={stats['mapping_to_array']}, bytes={stats['dynamic_bytes']}, "
+            f"legacy_vyper={stats['legacy_vyper']}), "
             f"{stats['heuristic']} heuristic"
         )
         return decoded_changes

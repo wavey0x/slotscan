@@ -8,6 +8,7 @@ import re
 import resource
 import shutil
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
@@ -22,12 +23,13 @@ from app.models.domain import (
     StorageVariable,
 )
 from app.models.errors import CompilationError, LayoutNotFoundError, UnsupportedCompilerVersionError
+from app.utils.vyper import SEQUENTIAL_STORAGE, parse_vyper_version
 
 # Minimum Solidity version that supports --storage-layout output
 MIN_SOLC_VERSION_FOR_LAYOUT = (0, 5, 13)
 
 # Minimum Vyper version that supports -f layout output
-MIN_VYPER_VERSION_FOR_LAYOUT = (0, 3, 0)
+MIN_VYPER_VERSION_FOR_LAYOUT = (0, 2, 16)
 
 logger = logging.getLogger(__name__)
 
@@ -620,7 +622,58 @@ class LayoutParser:
             version=compiler_version,
         )
 
-        layout = self._normalize_vyper_layout(raw_layout, contract_name)
+        layout = self._normalize_vyper_layout(
+            raw_layout,
+            contract_name,
+            compiler_version=compiler_version,
+        )
+        # Vyper's layout output provides authoritative slots but older output
+        # versions expose incomplete type structure (and collapse duplicate
+        # pre-0.3.1 lock names). Enrich those positions with the verified
+        # source schema while retaining compiler slots as the authority.
+        from app.services.namespace_storage import NamespaceStorageParser
+
+        inferred = NamespaceStorageParser().parse_vyper_storage(
+            sources,
+            contract_name,
+            compiler_version,
+        )
+        if inferred:
+            compiled_by_name = {variable.name: variable for variable in layout.variables}
+            name_counts = {
+                name: sum(variable.name == name for variable in inferred.variables)
+                for name in {variable.name for variable in inferred.variables}
+            }
+            enriched_variables = []
+            for variable in inferred.variables:
+                compiled = compiled_by_name.get(variable.name)
+                duplicate_lock = (
+                    variable.name.startswith("nonreentrant.")
+                    and name_counts[variable.name] > 1
+                )
+                if compiled and not duplicate_lock:
+                    enriched_variables.append(replace(
+                        variable,
+                        slot=compiled.slot,
+                        provenance="compiler_layout",
+                        confidence="exact",
+                    ))
+                else:
+                    enriched_variables.append(variable)
+            inferred_names = {variable.name for variable in inferred.variables}
+            enriched_variables.extend(
+                variable
+                for variable in layout.variables
+                if variable.name not in inferred_names
+            )
+            layout = StorageLayout(
+                contract_name=contract_name,
+                variables=enriched_variables,
+                types=inferred.types,
+                language="Vyper",
+                compiler_version=compiler_version,
+                storage_scheme=SEQUENTIAL_STORAGE,
+            )
         standard_input = {
             "language": "Vyper",
             "sources": {
@@ -663,7 +716,7 @@ class LayoutParser:
         if version_tuple < MIN_VYPER_VERSION_FOR_LAYOUT:
             raise UnsupportedCompilerVersionError(
                 normalized_version,
-                min_version="0.3.0 (Vyper)"
+                min_version="0.2.16 (Vyper)"
             )
 
         # Try using vvm first (preferred - handles version management)
@@ -733,6 +786,35 @@ class LayoutParser:
             raise CompilationError(
                 "Vyper compiler not found. Install with: pip install vyper vvm"
             )
+        version_process = await asyncio.create_subprocess_exec(
+            executable,
+            "--version",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                version_process.communicate(),
+                timeout=self.settings.compiler_timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            version_process.kill()
+            await version_process.wait()
+            raise CompilationError("Vyper version check timed out") from exc
+        actual_version = parse_vyper_version(
+            (stdout or stderr).decode("utf-8", errors="replace")
+        )
+        expected_version = parse_vyper_version(normalized_version)
+        if version_process.returncode != 0 or actual_version != expected_version:
+            actual_label = (
+                ".".join(str(part) for part in actual_version)
+                if actual_version
+                else "unknown"
+            )
+            raise CompilationError(
+                "System Vyper version mismatch: requested "
+                f"{normalized_version}, found {actual_label}"
+            )
         async with self._compilation_semaphore:
             return await self._run_vyper_layout(executable, source_content)
 
@@ -801,7 +883,13 @@ class LayoutParser:
             version = version.split("+")[0]
         return version
 
-    def _normalize_vyper_layout(self, raw_layout: dict, contract_name: str) -> StorageLayout:
+    def _normalize_vyper_layout(
+        self,
+        raw_layout: dict,
+        contract_name: str,
+        *,
+        compiler_version: str | None = None,
+    ) -> StorageLayout:
         """
         Convert Vyper storage layout output to our internal StorageLayout format.
 
@@ -846,6 +934,8 @@ class LayoutParser:
             variables=variables,
             types=types,
             language="Vyper",
+            compiler_version=compiler_version,
+            storage_scheme=SEQUENTIAL_STORAGE,
         )
 
     def _get_vyper_type_size(self, type_str: str, n_slots: int) -> int:

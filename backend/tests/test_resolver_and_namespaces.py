@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from eth_abi import encode
 from web3 import Web3
 
@@ -14,12 +14,116 @@ from app.models.domain import (
 from app.services.namespace_storage import NamespaceStorageParser
 from app.services.resolver import ContractResolver
 from app.services.tracer.slot_resolver import SlotResolver
+from app.utils.vyper import (
+    LEGACY_HASHED_STORAGE,
+    LOCK_AFTER_GLOBALS,
+    LOCK_AFTER_STORAGE,
+    LOCK_FRONT_PER_FUNCTION,
+    LOCK_FRONT_PER_KEY,
+    LOCK_SENTINEL,
+    SEQUENTIAL_STORAGE,
+    vyper_storage_policy,
+)
 
 
 ADDRESS = "0x" + "11" * 20
 
 
 class NamespaceParserTests(unittest.TestCase):
+    def test_vyper_storage_policy_has_explicit_compiler_boundaries(self):
+        cases = {
+            "0.2.8": (LEGACY_HASHED_STORAGE, LOCK_SENTINEL, False),
+            "0.2.9": (LEGACY_HASHED_STORAGE, LOCK_AFTER_GLOBALS, False),
+            "0.2.12": (LEGACY_HASHED_STORAGE, LOCK_AFTER_GLOBALS, False),
+            "0.2.13": (SEQUENTIAL_STORAGE, LOCK_AFTER_STORAGE, False),
+            "0.2.14": (SEQUENTIAL_STORAGE, LOCK_AFTER_STORAGE, False),
+            "0.2.15": (SEQUENTIAL_STORAGE, LOCK_FRONT_PER_FUNCTION, False),
+            "0.2.16": (SEQUENTIAL_STORAGE, LOCK_FRONT_PER_FUNCTION, True),
+            "0.3.0": (SEQUENTIAL_STORAGE, LOCK_FRONT_PER_FUNCTION, True),
+            "0.3.1": (SEQUENTIAL_STORAGE, LOCK_FRONT_PER_KEY, True),
+        }
+        for version, expected in cases.items():
+            with self.subTest(version=version):
+                policy = vyper_storage_policy(version)
+                self.assertEqual(
+                    (
+                        policy.storage_scheme,
+                        policy.lock_scheme,
+                        policy.compiler_layout_supported,
+                    ),
+                    expected,
+                )
+
+    def test_vyper_024_uses_hashed_composites_and_sentinel_lock(self):
+        source = """
+# @version 0.2.4
+struct Point:
+    bias: int128
+    slope: int128
+    ts: uint256
+    blk: uint256
+struct LockedBalance:
+    amount: int128
+    end: uint256
+token: public(address)
+supply: public(uint256)
+locked: public(HashMap[address, LockedBalance])
+epoch: public(uint256)
+point_history: public(Point[100000000000000000000000000000])
+user_point_history: public(HashMap[address, Point[1000000000]])
+user_point_epoch: public(HashMap[address, uint256])
+slope_changes: public(HashMap[uint256, int128])
+name: public(String[64])
+@external
+@nonreentrant("lock")
+def one():
+    pass
+@external
+@nonreentrant("lock")
+def two():
+    pass
+"""
+        layout = NamespaceStorageParser().parse_vyper_storage(
+            {"VotingEscrow.vy": source},
+            "VotingEscrow",
+            "0.2.4+commit.7949850",
+        )
+
+        self.assertEqual(layout.storage_scheme, LEGACY_HASHED_STORAGE)
+        self.assertEqual(layout.compiler_version, "0.2.4+commit.7949850")
+        self.assertEqual(
+            {
+                variable.name: variable.slot
+                for variable in layout.variables
+                if not variable.name.startswith("nonreentrant.")
+            },
+            {
+                "token": 0,
+                "supply": 1,
+                "locked": 2,
+                "epoch": 3,
+                "point_history": 4,
+                "user_point_history": 5,
+                "user_point_epoch": 6,
+                "slope_changes": 7,
+                "name": 8,
+            },
+        )
+        locks = [
+            variable
+            for variable in layout.variables
+            if variable.name == "nonreentrant.lock"
+        ]
+        self.assertEqual([variable.slot for variable in locks], [0xFFFFFF])
+        self.assertEqual(layout.get_variable_by_name("point_history").size, 32)
+        point_type = layout.get_type(
+            layout.get_type(layout.get_variable_by_name("point_history").type_id).element_type
+        )
+        self.assertEqual(
+            [(member.name, member.slot) for member in point_type.members],
+            [("bias", 0), ("slope", 1), ("ts", 2), ("blk", 3)],
+        )
+
     def test_inferred_layout_sizes_interface_uint96_and_static_array(self):
         parser = NamespaceStorageParser()
         members = parser.parse_struct_members(
@@ -447,6 +551,51 @@ class _Resolver(ContractResolver):
 
 
 class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_vyper_0216_prefers_exact_compiler_layout(self):
+        class VyperResolver(_Resolver):
+            async def _fetch_verification(self, chain_id, address):
+                return VerificationResult(
+                    source="etherscan",
+                    match_type="full",
+                    name="Vault",
+                    compiler_version="0.2.16+commit.59e1bdd",
+                    sources={"Vault.vy": "# @version 0.2.16\nowner: address\n"},
+                    storage_layout=None,
+                    language="Vyper",
+                )
+
+        value_type = StorageType("address", "address", "value", "inplace", 20)
+        exact_layout = StorageLayout(
+            contract_name="Vault",
+            variables=[StorageVariable(
+                "owner",
+                0,
+                0,
+                20,
+                "address",
+                "address",
+                provenance="compiler_layout",
+                confidence="exact",
+            )],
+            types={"address": value_type},
+        )
+        parser = SimpleNamespace(
+            parse_vyper_with_artifact=AsyncMock(
+                return_value=(exact_layout, SimpleNamespace(fingerprint="exact-vyper"))
+            )
+        )
+        resolver = VyperResolver(object(), Settings(), layout_parser=parser)
+        resolver.namespace_parser.parse_vyper_storage = Mock(
+            side_effect=AssertionError("exact compiler layout must be preferred")
+        )
+
+        metadata = await resolver.resolve(1, ADDRESS)
+
+        parser.parse_vyper_with_artifact.assert_awaited_once()
+        resolver.namespace_parser.parse_vyper_storage.assert_not_called()
+        self.assertEqual(metadata.storage_layout.variables[0].provenance, "compiler_layout")
+        self.assertEqual(metadata.storage_layout.storage_scheme, SEQUENTIAL_STORAGE)
+
     async def test_sourcify_v2_layout_is_parsed_without_sources_or_compilation(self):
         response = SimpleNamespace(
             status_code=200,
@@ -548,15 +697,21 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
         metadata = await resolver.resolve(1, ADDRESS)
         self.assertIsNone(metadata.storage_layout)
 
-    async def test_verified_vyper_source_is_inferred_without_compilation(self):
+    async def test_pre_layout_vyper_source_is_inferred_without_compilation(self):
         class VyperResolver(_Resolver):
             async def _fetch_verification(self, chain_id, address):
                 return VerificationResult(
                     source="sourcify",
                     match_type="full",
                     name="Vault",
-                    compiler_version="0.3.7",
-                    sources={"Vault.vy": "owner: public(address)\ntotal: uint256\n"},
+                    compiler_version="0.2.4",
+                    sources={
+                        "Vault.vy": (
+                            "# @version 0.2.4\n"
+                            "owner: public(address)\n"
+                            "total: uint256\n"
+                        )
+                    },
                     storage_layout=None,
                     language="Vyper",
                 )
@@ -600,8 +755,10 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
                         "num_bytes": 20,
                     }
                 },
-                "resolver_version": 4,
+                "resolver_version": 5,
                 "language": "Vyper",
+                "compiler_version": "0.3.7",
+                "storage_scheme": "vyper_sequential",
             },
         )
 
@@ -654,6 +811,8 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
         layout.resolver_version = 3
         self.assertFalse(ContractResolver._cache_layout_is_usable(layout))
         layout.resolver_version = 4
+        self.assertFalse(ContractResolver._cache_layout_is_usable(layout))
+        layout.resolver_version = 5
         self.assertTrue(ContractResolver._cache_layout_is_usable(layout))
 
     def test_v2_solidity_source_inference_cache_is_preserved(self):

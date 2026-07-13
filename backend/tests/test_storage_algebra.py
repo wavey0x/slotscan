@@ -6,6 +6,7 @@ from web3 import Web3
 from app.api.routes.transactions import _group_changes_by_slot
 from app.models.domain import StorageLayout, StorageType, StorageVariable
 from app.services.layout_index import LayoutIndex, array_packing
+from app.services.namespace_storage import NamespaceStorageParser
 from app.config import Settings
 from app.services.decoder import TypeDecoder
 from app.services.tracer.tracer import TransactionTracer
@@ -15,6 +16,236 @@ from app.utils.slots import compute_mapping_slot, encode_mapping_key
 
 
 class MappingSlotTests(unittest.TestCase):
+    def test_vyper_024_bounded_string_resolves_hashed_length_and_data(self):
+        layout = NamespaceStorageParser().parse_vyper_storage(
+            {"Token.vy": "# @version 0.2.4\nname: public(String[64])\n"},
+            "Token",
+            "0.2.4",
+        )
+        preimage = encode(["uint256"], [0])
+        data_start = int.from_bytes(Web3.keccak(preimage), "big")
+        lookup = {f"0x{data_start:064x}": "0x" + preimage.hex()}
+        raw_changes = [
+            (
+                f"0x{data_start:064x}",
+                "0x" + "00" * 32,
+                f"0x{4:064x}",
+                0,
+                0,
+            ),
+            (
+                f"0x{data_start + 1:064x}",
+                "0x" + "00" * 32,
+                "0x" + b"Test".hex().ljust(64, "0"),
+                1,
+                1,
+            ),
+        ]
+
+        changes = TransactionTracer(object(), Settings(), TypeDecoder())._decode_changes(
+            raw_changes,
+            layout,
+            lookup,
+        )
+
+        self.assertEqual(
+            [change.variable_path for change in changes],
+            ["name (length)", "name (data 0)"],
+        )
+        self.assertEqual(changes[0].new_decoded.decoded, 4)
+        self.assertEqual(changes[1].new_decoded.type_label, "bytes32")
+
+    def test_vyper_024_crv_transfer_resolves_legacy_balance_mapping(self):
+        source = """
+# @version 0.2.4
+name: public(String[64])
+symbol: public(String[32])
+decimals: public(uint256)
+balanceOf: public(HashMap[address, uint256])
+allowances: public(HashMap[address, HashMap[address, uint256]])
+total_supply: public(uint256)
+minter: public(address)
+admin: public(address)
+mining_epoch: public(int128)
+start_epoch_time: public(uint256)
+rate: public(uint256)
+start_epoch_supply: public(uint256)
+"""
+        layout = NamespaceStorageParser().parse_vyper_storage(
+            {"CRV.vy": source},
+            "Vyper_contract",
+            "0.2.4+commit.7949850",
+        )
+        addresses = [
+            "0x8867df8d263077f94ddb5e86c4328fd8d2c0e818",
+            "0xc5184cccf85b81eddc661330acb3e41bd89f34a1",
+        ]
+        expected_slots = [
+            "0x2a6488878e7a00f49b2124abf19b9d69a2b24e46f85aeae123432ab9927bae86",
+            "0x166b3d23a4a6249cce3c0abf0c9267e72f3cb9dce86caa61b487b9c55a7a969c",
+        ]
+        lookup = {
+            slot: "0x" + encode(["uint256", "address"], [3, address]).hex()
+            for slot, address in zip(expected_slots, addresses, strict=True)
+        }
+        raw_changes = [
+            (slot, "0x" + "00" * 32, f"0x{index + 1:064x}", index, index)
+            for index, slot in enumerate(expected_slots)
+        ]
+
+        changes = TransactionTracer(object(), Settings(), TypeDecoder())._decode_changes(
+            raw_changes,
+            layout,
+            lookup,
+        )
+
+        self.assertEqual(
+            [change.variable_path for change in changes],
+            [f"balanceOf[{address}]" for address in addresses],
+        )
+        self.assertTrue(all(change.variable is not None for change in changes))
+
+    def test_vyper_024_voting_escrow_transaction_resolves_all_legacy_paths(self):
+        source = """
+# @version 0.2.4
+struct Point:
+    bias: int128
+    slope: int128
+    ts: uint256
+    blk: uint256
+struct LockedBalance:
+    amount: int128
+    end: uint256
+token: public(address)
+supply: public(uint256)
+locked: public(HashMap[address, LockedBalance])
+epoch: public(uint256)
+point_history: public(Point[100000000000000000000000000000])
+user_point_history: public(HashMap[address, Point[1000000000]])
+user_point_epoch: public(HashMap[address, uint256])
+slope_changes: public(HashMap[uint256, int128])
+controller: public(address)
+transfersEnabled: public(bool)
+name: public(String[64])
+symbol: public(String[32])
+version: public(String[32])
+decimals: public(uint256)
+future_smart_wallet_checker: public(address)
+smart_wallet_checker: public(address)
+admin: public(address)
+future_admin: public(address)
+@external
+@nonreentrant("lock")
+def one():
+    pass
+@external
+@nonreentrant("lock")
+def two():
+    pass
+@external
+@nonreentrant("lock")
+def three():
+    pass
+@external
+@nonreentrant("lock")
+def four():
+    pass
+@external
+@nonreentrant("lock")
+def five():
+    pass
+"""
+        layout = NamespaceStorageParser().parse_vyper_storage(
+            {"VotingEscrow.vy": source},
+            "VotingEscrow",
+            "0.2.4+commit.7949850",
+        )
+        user = "0x490b8c6007ffa5d3728a49c2ee199e51f05d2f7e"
+        lookup = {}
+
+        def hash_preimage(preimage: bytes) -> int:
+            output = int.from_bytes(Web3.keccak(preimage), "big")
+            lookup[f"0x{output:064x}"] = "0x" + preimage.hex()
+            return output
+
+        locked_mapping = hash_preimage(encode(["uint256", "address"], [2, user]))
+        locked_fields = hash_preimage(locked_mapping.to_bytes(32, "big"))
+
+        point_array = hash_preimage(encode(["uint256"], [4]))
+        point_element = point_array + 64026
+        point_fields = hash_preimage(point_element.to_bytes(32, "big"))
+
+        user_history_mapping = hash_preimage(
+            encode(["uint256", "address"], [5, user])
+        )
+        user_history_array = hash_preimage(
+            user_history_mapping.to_bytes(32, "big")
+        )
+        user_history_element = user_history_array + 133
+        user_history_fields = hash_preimage(
+            user_history_element.to_bytes(32, "big")
+        )
+
+        user_epoch = hash_preimage(encode(["uint256", "address"], [6, user]))
+        slope_first = hash_preimage(
+            encode(["uint256", "uint256"], [7, 1908144000])
+        )
+        slope_second = hash_preimage(
+            encode(["uint256", "uint256"], [7, 1909353600])
+        )
+
+        intermediate_index = SlotResolver().build_legacy_vyper_slot_index(
+            layout,
+            lookup,
+            {locked_mapping, point_element, user_history_element},
+        )
+        self.assertEqual(intermediate_index, {})
+
+        slots_and_paths = [
+            (0xFFFFFF, "nonreentrant.lock"),
+            (1, "supply"),
+            (locked_fields, f"locked[{user}].amount"),
+            (locked_fields + 1, f"locked[{user}].end"),
+            (3, "epoch"),
+            (point_fields, "point_history[64026].bias"),
+            (point_fields + 1, "point_history[64026].slope"),
+            (point_fields + 2, "point_history[64026].ts"),
+            (point_fields + 3, "point_history[64026].blk"),
+            (slope_first, "slope_changes[1908144000]"),
+            (slope_second, "slope_changes[1909353600]"),
+            (user_epoch, f"user_point_epoch[{user}]"),
+            (user_history_fields, f"user_point_history[{user}][133].bias"),
+            (user_history_fields + 1, f"user_point_history[{user}][133].slope"),
+            (user_history_fields + 2, f"user_point_history[{user}][133].ts"),
+            (user_history_fields + 3, f"user_point_history[{user}][133].blk"),
+        ]
+        raw_changes = [
+            (
+                f"0x{slot:064x}",
+                "0x" + "00" * 32,
+                f"0x{index + 1:064x}",
+                index,
+                index,
+            )
+            for index, (slot, _) in enumerate(slots_and_paths)
+        ]
+
+        changes = TransactionTracer(object(), Settings(), TypeDecoder())._decode_changes(
+            raw_changes,
+            layout,
+            lookup,
+        )
+
+        self.assertEqual(
+            [change.variable_path for change in changes],
+            [path for _, path in slots_and_paths],
+        )
+        self.assertTrue(all(change.variable is not None for change in changes))
+        self.assertEqual(
+            [slot.variable_path for slot in _group_changes_by_slot(changes, layout)],
+            [path for _, path in slots_and_paths],
+        )
+
     def test_segmented_sha3_memory_words_build_canonical_preimage_lookup(self):
         preimage = encode(["address", "uint256"], ["0x" + "11" * 20, 7])
         segmented = "0x" + preimage[:32].hex() + "0x" + preimage[32:].hex()

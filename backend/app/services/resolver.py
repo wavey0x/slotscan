@@ -16,6 +16,7 @@ from app.services.layout import LayoutParser
 from app.services.namespace_storage import NamespaceStorageParser
 from app.services.web3_provider import Web3Provider
 from app.repositories.compiler_artifacts import CompilerArtifactRepository
+from app.utils.vyper import vyper_storage_policy
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ EIP1967_BEACON_SLOT = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582
 BEACON_IMPL_SELECTOR = "0x5c60da1b"
 
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
-LAYOUT_RESOLVER_VERSION = 4
+LAYOUT_RESOLVER_VERSION = 5
 
 # EIP-1167 Minimal Proxy bytecode patterns
 # Standard: 363d3d373d3d3d363d73<address>5af43d82803e903d91602b57fd5bf3
@@ -185,6 +186,11 @@ class ContractResolver:
                     )
                 else:
                     parsed_layout = StorageLayout.from_dict(verification.storage_layout)
+                if parsed_layout and language == "Vyper":
+                    parsed_layout.compiler_version = verification.compiler_version
+                    parsed_layout.storage_scheme = vyper_storage_policy(
+                        verification.compiler_version
+                    ).storage_scheme
                 if parsed_layout and verification.sources and verification.compiler_version:
                     standard_input = {
                         "language": language,
@@ -252,11 +258,31 @@ class ContractResolver:
             and language == "Vyper"
             and not (parsed_layout and parsed_layout.variables)
         ):
+            policy = vyper_storage_policy(verification.compiler_version)
+            if policy.compiler_layout_supported:
+                try:
+                    parsed_layout, compiler_artifact = (
+                        await self.layout_parser.parse_vyper_with_artifact(
+                            verification.name or "",
+                            verification.sources,
+                            verification.compiler_version or "",
+                        )
+                    )
+                    if self.compiler_artifact_repo:
+                        await self.compiler_artifact_repo.save(compiler_artifact)
+                except Exception as e:
+                    logger.warning(
+                        "Exact Vyper layout unavailable for %s: %s",
+                        verification.compiler_version,
+                        e,
+                    )
             try:
-                parsed_layout = self.namespace_parser.parse_vyper_storage(
-                    verification.sources,
-                    verification.name or "",
-                )
+                if not (parsed_layout and parsed_layout.variables):
+                    parsed_layout = self.namespace_parser.parse_vyper_storage(
+                        verification.sources,
+                        verification.name or "",
+                        verification.compiler_version,
+                    )
             except Exception as e:
                 logger.warning(f"Failed to parse verified Vyper storage: {e}")
 
@@ -265,6 +291,11 @@ class ContractResolver:
         if parsed_layout:
             if verification:
                 parsed_layout.language = language
+                parsed_layout.compiler_version = verification.compiler_version
+                if language == "Vyper" and not parsed_layout.storage_scheme:
+                    parsed_layout.storage_scheme = vyper_storage_policy(
+                        verification.compiler_version
+                    ).storage_scheme
             parsed_layout.resolver_version = LAYOUT_RESOLVER_VERSION
 
         # Build result - use bytecode cache metadata if verification was skipped
@@ -603,6 +634,12 @@ class ContractResolver:
             types=merged_types,
             resolver_version=LAYOUT_RESOLVER_VERSION,
             language=standard_layout.language or namespace_layout.language,
+            compiler_version=(
+                standard_layout.compiler_version or namespace_layout.compiler_version
+            ),
+            storage_scheme=(
+                standard_layout.storage_scheme or namespace_layout.storage_scheme
+            ),
         )
 
     async def _fetch_verification(

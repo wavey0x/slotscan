@@ -7,6 +7,7 @@ from enum import Enum
 from math import ceil
 
 from app.models.domain import StorageLayout, StorageType, StorageVariable
+from app.utils.vyper import LEGACY_HASHED_STORAGE
 
 
 class StorageNamespace(str, Enum):
@@ -146,7 +147,11 @@ class LayoutIndex:
                 continue
 
             packing = None
-            if (
+            if layout.storage_scheme == LEGACY_HASHED_STORAGE:
+                # Pre-0.2.13 Vyper assigns one top-level salt slot to every
+                # declaration and hashes each composite descent.
+                slot_count = 1
+            elif (
                 type_info.encoding == "inplace"
                 and type_info.array_length is not None
                 and type_info.element_type
