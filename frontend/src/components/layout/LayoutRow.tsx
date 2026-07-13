@@ -172,7 +172,7 @@ export const LayoutRow = memo(function LayoutRow({
         </td>
 
         {/* Slot */}
-        <td className="px-1 py-2 text-xs font-mono text-gray-500">
+        <td data-testid="layout-slot" className="break-all px-1 py-2 text-xs font-mono text-gray-500">
           {variable.slot}
         </td>
 

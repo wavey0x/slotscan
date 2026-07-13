@@ -42,7 +42,7 @@ export function LayoutTable({
           <col className="w-6" />
           <col className="w-[100px]" />
           <col className="w-[120px]" />
-          <col className="w-10" />
+          <col className="w-[72px]" />
           <col />
         </colgroup>
         <thead>
