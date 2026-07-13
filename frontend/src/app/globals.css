@@ -3,6 +3,40 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    --color-black: 0 0 0;
+    --color-white: 255 255 255;
+    --color-gray-50: 250 250 250;
+    --color-gray-100: 245 245 245;
+    --color-gray-200: 229 229 229;
+    --color-gray-300: 204 204 204;
+    --color-gray-400: 163 163 163;
+    --color-gray-500: 102 102 102;
+    --color-gray-600: 82 82 82;
+    --color-gray-700: 51 51 51;
+    --color-gray-800: 38 38 38;
+    --color-gray-900: 17 17 17;
+    --color-red: 204 0 0;
+    --color-green: 0 136 0;
+  }
+
+  :root.dark {
+    --color-black: 255 255 255;
+    --color-white: 17 17 17;
+    --color-gray-50: 25 25 25;
+    --color-gray-100: 31 31 31;
+    --color-gray-200: 45 45 45;
+    --color-gray-300: 63 63 63;
+    --color-gray-400: 139 139 139;
+    --color-gray-500: 170 170 170;
+    --color-gray-600: 190 190 190;
+    --color-gray-700: 211 211 211;
+    --color-gray-800: 229 229 229;
+    --color-gray-900: 245 245 245;
+    --color-red: 255 107 107;
+    --color-green: 85 204 102;
+  }
+
   * {
     @apply border-gray-300;
   }
@@ -17,6 +51,7 @@
     @apply bg-white text-gray-700 font-mono antialiased;
     max-width: 100%;
     overflow-x: hidden;
+    transition: background-color 150ms ease, color 150ms ease;
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -51,11 +86,43 @@
   ::-webkit-scrollbar-thumb:hover {
     @apply bg-gray-500;
   }
+
+  input,
+  textarea,
+  select,
+  button {
+    color-scheme: inherit;
+  }
 }
 
 @layer components {
   .tree-line {
     @apply border-l border-gray-300;
+  }
+
+  .theme-logo {
+    transition: filter 150ms ease;
+  }
+
+  .dark .theme-logo {
+    filter: invert(1);
+  }
+
+  /* Detail disclosures intentionally remain dark in both themes. Reset the
+     adaptive palette locally so their existing contrast remains intact. */
+  .detail-popover {
+    --color-black: 0 0 0;
+    --color-white: 255 255 255;
+    --color-gray-50: 250 250 250;
+    --color-gray-100: 245 245 245;
+    --color-gray-200: 229 229 229;
+    --color-gray-300: 204 204 204;
+    --color-gray-400: 163 163 163;
+    --color-gray-500: 102 102 102;
+    --color-gray-600: 82 82 82;
+    --color-gray-700: 51 51 51;
+    --color-gray-800: 38 38 38;
+    --color-gray-900: 17 17 17;
   }
 }
 

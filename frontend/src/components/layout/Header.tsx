@@ -2,6 +2,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import icon from '@/app/icon.svg';
 import { GlobalLookup } from '@/components/search/GlobalLookup';
+import { ThemeToggle } from '@/components/layout/ThemeToggle';
 
 export function Header() {
   return (
@@ -14,11 +15,14 @@ export function Header() {
             width={32}
             height={32}
             priority
-            className="shrink-0"
+            className="theme-logo shrink-0"
           />
           <span>SlotScan</span>
         </Link>
-        <GlobalLookup />
+        <div className="flex min-w-0 items-center justify-end gap-3 sm:w-full sm:max-w-md">
+          <GlobalLookup />
+          <ThemeToggle />
+        </div>
       </div>
     </header>
   );

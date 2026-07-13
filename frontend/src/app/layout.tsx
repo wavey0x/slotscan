@@ -9,6 +9,17 @@ const mono = JetBrains_Mono({
   variable: '--font-mono',
 });
 
+const themeScript = `
+  (() => {
+    let saved = null;
+    try { saved = localStorage.getItem('slotscan-theme'); } catch (_) {}
+    const preference = saved === 'light' || saved === 'dark' ? saved : null;
+    const dark = preference ? preference === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.classList.toggle('dark', dark);
+    document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+  })();
+`;
+
 export const metadata: Metadata = {
   title: 'SlotScan',
   description: 'Ethereum smart contract storage analyzer',
@@ -32,7 +43,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body className={`${mono.variable} font-mono`}>
         <Providers>
           <Header />

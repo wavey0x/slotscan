@@ -124,7 +124,7 @@ export function DetailPopover({
       id={panelId}
       role="dialog"
       className={cn(
-        'fixed z-[99999] border border-gray-600 bg-gray-900 p-3 text-xs text-white',
+        'detail-popover fixed z-[99999] border border-gray-600 bg-gray-900 p-3 text-xs text-white',
         maxWidth,
         contentClassName,
       )}
