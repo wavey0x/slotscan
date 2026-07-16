@@ -108,14 +108,18 @@ export function StructuredValueDiff({
   after,
   beforeClassName = 'text-gray-400',
   afterClassName = 'text-gray-900',
+  showFieldNames = true,
+  showUnchanged = false,
 }: {
   before: Record<string, unknown>;
   after: Record<string, unknown>;
   beforeClassName?: string;
   afterClassName?: string;
+  showFieldNames?: boolean;
+  showUnchanged?: boolean;
 }) {
   const fields = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
-    .filter((field) => !fieldValuesEqual(before[field], after[field]));
+    .filter((field) => showUnchanged || !fieldValuesEqual(before[field], after[field]));
 
   if (fields.length === 0) {
     return <span className="font-mono text-xs text-gray-400">—</span>;
@@ -127,9 +131,14 @@ export function StructuredValueDiff({
         <div
           key={field}
           data-testid="structured-field-change"
-          className="grid min-w-0 grid-cols-[minmax(3.5rem,7rem)_minmax(0,1fr)] gap-x-2"
+          className={cn(
+            'grid min-w-0 gap-x-2',
+            showFieldNames ? 'grid-cols-[minmax(3.5rem,7rem)_minmax(0,1fr)]' : 'grid-cols-1',
+          )}
         >
-          <span className="min-w-0 break-words text-gray-500 [overflow-wrap:anywhere]">{field}</span>
+          {showFieldNames && (
+            <span className="min-w-0 break-words text-gray-500 [overflow-wrap:anywhere]">{field}</span>
+          )}
           <span className="flex min-w-0 flex-wrap items-start gap-x-1">
             <FieldValue value={before[field]} className={beforeClassName} label={`Copy previous ${field}`} />
             <span aria-hidden="true" className="shrink-0 text-gray-400">→</span>

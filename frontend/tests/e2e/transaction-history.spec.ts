@@ -145,6 +145,86 @@ function structuredValueSlot() {
   };
 }
 
+function configStructSlot({
+  slot,
+  member,
+  typeLabel,
+  beforeValue,
+  afterValue,
+  beforeEncoded,
+  afterEncoded,
+  step,
+}: {
+  slot: number;
+  member: string;
+  typeLabel: string;
+  beforeValue: string;
+  afterValue: string;
+  beforeEncoded: string;
+  afterEncoded: string;
+  step: number;
+}) {
+  const before = { value_encoded: beforeEncoded, value_decoded: { [member]: beforeValue } };
+  const after = { value_encoded: afterEncoded, value_decoded: { [member]: afterValue } };
+  const changed = beforeEncoded !== afterEncoded;
+
+  return {
+    slot: `0x${slot.toString(16).padStart(64, '0')}`,
+    slot_decimal: slot.toString(),
+    is_static_slot: true,
+    provenance: 'compiler_layout',
+    confidence: 'exact',
+    namespace: 'persistent',
+    net_changed: changed,
+    classification: changed ? 'net_changed' : 'noop_only',
+    first_write_step: step,
+    last_write_step: step,
+    event_count: 1,
+    state_values_known: true,
+    variable_name: '_defaultConfigData',
+    variable_path: '_defaultConfigData',
+    resolved_paths: [],
+    type_label: 'ConfigData',
+    params: null,
+    mapping_base_slot: null,
+    is_mapping: false,
+    is_dynamic_array: false,
+    array_index: null,
+    encoding: 'inplace',
+    value_type: null,
+    before,
+    after,
+    packed_fields: [{
+      name: member,
+      type_label: typeLabel,
+      offset: 0,
+      size: 32,
+      before: { value_decoded: beforeValue },
+      after: { value_decoded: afterValue },
+    }],
+    struct_field: null,
+    struct_definition: {
+      name: 'ConfigData',
+      members: [{ name: member, type_label: typeLabel, slot_offset: slot - 6, byte_offset: 0, size: 32 }],
+    },
+    changes: [{
+      before,
+      after,
+      pc: 1,
+      step,
+      effect: changed ? 'applied' : 'noop',
+      storage_address: '0x6666666666666666666666666666666666666666',
+      code_address: '0x6666666666666666666666666666666666666666',
+      changed_value: changed,
+      frame_outcome: 'applied',
+      frame_id: 1,
+      depth: 1,
+      opcode: 'SSTORE',
+      namespace: 'persistent',
+    }],
+  };
+}
+
 test('home search accepts a transaction hash and opens transaction-wide history', async ({ page }) => {
   await page.goto('/');
   await page.getByPlaceholder('Contract address or transaction hash (0x...)').fill(SIMPLE_TX);
@@ -242,6 +322,103 @@ test('structured values show only changed fields without spilling', async ({ pag
 
   await diff.getByRole('button', { name: 'Copy new claimed' }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('2000000000000000000');
+});
+
+test('timeline names struct members and stays readable on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const oldRate = '0x1972B5D65A690De0BC36278AC93D47fd98Bc14f7';
+  const newRate = '0xD3d5C6fc52f3bc29C3aB017d57D9A94A036Ca90f';
+  const oracle = '0xa346BA5E838D6Ee40204A69549c81AB982644150';
+  const oracleEncoded = `0x${'0'.repeat(24)}${oracle.slice(2).toLowerCase()}`;
+  const oldRateEncoded = `0x${'0'.repeat(24)}${oldRate.slice(2).toLowerCase()}`;
+  const newRateEncoded = `0x${'0'.repeat(24)}${newRate.slice(2).toLowerCase()}`;
+  const slots = [
+    configStructSlot({
+      slot: 6,
+      member: 'oracle',
+      typeLabel: 'address',
+      beforeValue: oracle,
+      afterValue: oracle,
+      beforeEncoded: oracleEncoded,
+      afterEncoded: oracleEncoded,
+      step: 1414,
+    }),
+    configStructSlot({
+      slot: 7,
+      member: 'rateCalculator',
+      typeLabel: 'address',
+      beforeValue: oldRate,
+      afterValue: newRate,
+      beforeEncoded: oldRateEncoded,
+      afterEncoded: newRateEncoded,
+      step: 1425,
+    }),
+  ];
+  const contract = resolutionContract({
+    storage_address: '0x6666666666666666666666666666666666666666',
+    code_addresses: ['0x6666666666666666666666666666666666666666'],
+    name: 'ResupplyPairDeployer',
+    is_verified: true,
+    layout_available: true,
+    counts: {
+      slots_written: 2,
+      sstore_events: 2,
+      net_changed_slots: 1,
+      restored_slots: 0,
+      reverted_only_slots: 0,
+      noop_only_slots: 1,
+      reverted_writes: 0,
+      noop_writes: 1,
+    },
+    slots,
+  });
+  const response = resolutionResponse([
+    contract,
+    resolutionContract({
+      storage_address: '0x7777777777777777777777777777777777777777',
+      code_addresses: ['0x7777777777777777777777777777777777777777'],
+      name: 'OtherContract',
+    }),
+  ]);
+  response.global_order = slots.map((slot, ordinal) => ({
+    ordinal,
+    step: slot.changes[0].step,
+    storage_address: contract.storage_address,
+    slot: slot.slot,
+    event_index: 0,
+  }));
+  await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
+    await route.fulfill({ json: response });
+  });
+
+  await page.goto(`/1/tx/${RESOLUTION_TX}?view=timeline`);
+
+  const noopRow = page.getByTestId('timeline-event').filter({ hasText: '_defaultConfigData.oracle' });
+  const changedRow = page.getByTestId('timeline-event').filter({ hasText: '_defaultConfigData.rateCalculator' });
+  await expect(noopRow.getByTestId('timeline-value')).toContainText(`${oracle}→${oracle}`);
+  await expect(changedRow.getByTestId('timeline-value')).toContainText(oldRate);
+  await expect(changedRow.getByTestId('timeline-value')).toContainText(newRate);
+  await expect(changedRow.getByTestId('timeline-value')).not.toContainText('rateCalculator');
+
+  const changedRowBox = await changedRow.boundingBox();
+  expect(changedRowBox).not.toBeNull();
+  expect(changedRowBox!.height).toBeLessThan(120);
+  const scroll = page.getByTestId('data-table-scroll');
+  const scrollState = await scroll.evaluate((element) => {
+    element.scrollLeft = element.scrollWidth;
+    return {
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      scrollLeft: element.scrollLeft,
+      overflowX: getComputedStyle(element).overflowX,
+    };
+  });
+  expect(scrollState.scrollWidth).toBeGreaterThan(scrollState.clientWidth);
+  expect(scrollState.scrollLeft).toBeGreaterThan(0);
+  expect(scrollState.overflowX).toBe('auto');
+  const valueBox = await changedRow.getByTestId('timeline-value').boundingBox();
+  expect(valueBox).not.toBeNull();
+  expect(valueBox!.width).toBeGreaterThan(200);
 });
 
 test('transaction summary, controls, and copy actions stay compact at wide widths', async ({ page }) => {

@@ -34,6 +34,17 @@ function eventValue(event: StorageChangeResponse, side: 'before' | 'after', show
     : formatDecodedValue(pair.value_decoded);
 }
 
+function timelineStructMember(slot: SlotChangeResponse) {
+  if (!slot.struct_definition || slot.packed_fields?.length !== 1) return null;
+  return slot.packed_fields[0];
+}
+
+function timelineVariablePath(slot: SlotChangeResponse, memberName?: string) {
+  const base = slot.variable_path || slot.variable_name;
+  if (!base || !memberName || base.endsWith(`.${memberName}`)) return base;
+  return `${base}.${memberName}`;
+}
+
 export function ContractSection({
   contract,
   chain,
@@ -142,44 +153,54 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
   if (entries.length === 0) return <div className="border border-gray-300 p-8 text-center text-gray-500">No writes match the search</div>;
 
   return (
-    <StorageTable>
+    <StorageTable minWidth="56rem">
       <StorageTableColumns showContract={showContract} />
       <StorageTableHeader showContract={showContract} />
       <tbody>
-        {entries.map(({ contract, slot, event, ordinal }) => (
-          <tr key={`${contract.storage_address}:${slot.slot}:${event.step}:${ordinal}`} data-testid="timeline-event" className="border-b border-gray-200 text-xs hover:bg-gray-50">
-            {showContract && (
+        {entries.map(({ contract, slot, event, ordinal }) => {
+          const structMember = timelineStructMember(slot);
+          const variablePath = timelineVariablePath(slot, structMember?.name);
+
+          return (
+            <tr key={`${contract.storage_address}:${slot.slot}:${event.step}:${ordinal}`} data-testid="timeline-event" className="border-b border-gray-200 text-xs hover:bg-gray-50">
+              {showContract && (
+                <td className={storageCellClass}>
+                  <a href={getAddressExplorerUrl(chain, contract.storage_address)} target="_blank" rel="noopener noreferrer" className="block truncate text-gray-700 hover:underline" title={contract.storage_address}>
+                    {contractDisplayLabel(contract)}
+                  </a>
+                </td>
+              )}
               <td className={storageCellClass}>
-                <a href={getAddressExplorerUrl(chain, contract.storage_address)} target="_blank" rel="noopener noreferrer" className="block truncate text-gray-700 hover:underline" title={contract.storage_address}>
-                  {contractDisplayLabel(contract)}
-                </a>
+                {variablePath?.includes('[') ? (
+                  <KeyedVariablePath path={variablePath} typeLabel={structMember?.type_label || slot.value_type || slot.type_label} chainId={chain} />
+                ) : (
+                  <div className="truncate font-mono text-gray-900" title={variablePath || slot.slot}>{variablePath || truncateHash(slot.slot, 7)}</div>
+                )}
               </td>
-            )}
-            <td className={storageCellClass}>
-              {slot.variable_path?.includes('[') ? (
-                <KeyedVariablePath path={slot.variable_path} typeLabel={slot.value_type || slot.type_label} chainId={chain} />
-              ) : (
-                <div className="truncate font-mono text-gray-900" title={slot.variable_path || slot.slot}>{slot.variable_path || slot.variable_name || truncateHash(slot.slot, 7)}</div>
-              )}
-            </td>
-            <td className={`${storageCellClass} min-w-0 overflow-hidden font-mono`}>
-              {!showHex
-                && isStructuredDecodedValue(event.before.value_decoded)
-                && isStructuredDecodedValue(event.after.value_decoded) ? (
-                <StructuredValueDiff before={event.before.value_decoded} after={event.after.value_decoded} />
-              ) : (
-                <ValueDiff before={eventValue(event, 'before', showHex)} after={eventValue(event, 'after', showHex)} beforeClassName="text-gray-400" afterClassName="text-gray-900" />
-              )}
-              {event.frame_outcome === 'reverted' && <div className="mt-0.5 text-[9px] uppercase tracking-wide text-amber-600">reverted</div>}
-            </td>
-            <td className={`${storageCellClass} min-w-0 font-mono text-gray-500`} title={slot.slot}>
-              <span data-testid="slot-reference" className="block truncate">{slotReferenceDisplay(slot.slot, false)}</span>
-            </td>
-            <td className={`${storageCellClass} overflow-hidden whitespace-nowrap font-mono text-gray-400`} data-testid="step-reference">
-              {event.step ?? '—'}
-            </td>
-          </tr>
-        ))}
+              <td className={`${storageCellClass} min-w-0 overflow-hidden font-mono`} data-testid="timeline-value">
+                {!showHex
+                  && isStructuredDecodedValue(event.before.value_decoded)
+                  && isStructuredDecodedValue(event.after.value_decoded) ? (
+                  <StructuredValueDiff
+                    before={event.before.value_decoded}
+                    after={event.after.value_decoded}
+                    showFieldNames={!structMember}
+                    showUnchanged={event.effect === 'noop'}
+                  />
+                ) : (
+                  <ValueDiff before={eventValue(event, 'before', showHex)} after={eventValue(event, 'after', showHex)} beforeClassName="text-gray-400" afterClassName="text-gray-900" />
+                )}
+                {event.frame_outcome === 'reverted' && <div className="mt-0.5 text-[9px] uppercase tracking-wide text-amber-600">reverted</div>}
+              </td>
+              <td className={`${storageCellClass} min-w-0 font-mono text-gray-500`} title={slot.slot}>
+                <span data-testid="slot-reference" className="block truncate">{slotReferenceDisplay(slot.slot, false)}</span>
+              </td>
+              <td className={`${storageCellClass} overflow-hidden whitespace-nowrap font-mono text-gray-400`} data-testid="step-reference">
+                {event.step ?? '—'}
+              </td>
+            </tr>
+          );
+        })}
       </tbody>
     </StorageTable>
   );

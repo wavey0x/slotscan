@@ -4,6 +4,7 @@ import { DataTable, dataTableCellClass, dataTableHeadCellClass } from '@/compone
 interface StorageTableProps {
   children: ReactNode;
   className?: string;
+  minWidth?: string;
 }
 
 interface StorageTableColumnsProps {
@@ -12,9 +13,9 @@ interface StorageTableColumnsProps {
   showStep?: boolean;
 }
 
-export function StorageTable({ children, className }: StorageTableProps) {
+export function StorageTable({ children, className, minWidth }: StorageTableProps) {
   return (
-    <DataTable className={className}>{children}</DataTable>
+    <DataTable className={className} minWidth={minWidth}>{children}</DataTable>
   );
 }
 

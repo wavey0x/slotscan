@@ -39,6 +39,7 @@ function searchableContract(contract: ContractHistoryResponse, slot: SlotChangeR
     slot.variable_name,
     slot.variable_path,
     ...slot.resolved_paths,
+    ...(slot.packed_fields ?? []).flatMap((field) => [field.name, field.type_label]),
   ].filter(Boolean).join(' ').toLowerCase();
 }
 
