@@ -63,37 +63,40 @@ export function ContractPage({ chain, address }: ContractPageProps) {
   const { data: layout, isLoading, error } = useLayout(chain, address);
   const { data: storage } = useStorage(chain, address, 'latest');
   const [showHex, setShowHex] = useState(false);
-  const contractName = contract?.name || layout?.contract_name || truncateAddress(address);
+  const displayName = contract?.name || layout?.contract_name || null;
 
   useEffect(() => {
-    if (contractName && contractName !== truncateAddress(address)) {
-      updateRecentSearchName(chain, address, contractName);
+    if (displayName) {
+      updateRecentSearchName(chain, address, displayName);
     }
-  }, [address, chain, contractName]);
+  }, [address, chain, displayName]);
 
   const statuses = [
     contract?.is_proxy ? 'Proxy' : null,
     contract ? (contract.is_verified ? 'Verified' : 'Unverified') : null,
   ].filter(Boolean);
 
+  const addressIdentifier = (
+    <span className="inline-flex min-w-0 items-center gap-0.5">
+      <a
+        href={getAddressExplorerUrl(chain, address)}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="truncate font-mono"
+        title={address}
+      >
+        {truncateAddress(address)}
+      </a>
+      <CopyButton value={address} label="Copy contract address" />
+    </span>
+  );
+
   return (
     <>
       <EntityHeader
-        title={contractName}
-        identifier={(
-          <>
-            <a
-              href={getAddressExplorerUrl(chain, address)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="truncate font-mono"
-              title={address}
-            >
-              {truncateAddress(address)}
-            </a>
-            <CopyButton value={address} label="Copy contract address" />
-          </>
-        )}
+        kind="addr"
+        title={displayName || addressIdentifier}
+        identifier={displayName ? addressIdentifier : undefined}
         status={statuses.length > 0 ? statuses.join(' · ') : undefined}
         meta={contract?.implementation_address ? (
           <span className="inline-flex items-center gap-0.5">
@@ -146,6 +149,7 @@ export function ContractPage({ chain, address }: ContractPageProps) {
                 { value: 'hex', label: 'Hex' },
               ]}
               onChange={(value) => setShowHex(value === 'hex')}
+              showLabel={false}
             />
           </div>
           <LayoutTable chainId={chain} address={address} layout={layout} showHex={showHex} />

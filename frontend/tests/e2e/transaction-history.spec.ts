@@ -168,9 +168,11 @@ test('transaction summary, controls, and copy actions stay compact at wide width
   const summaryBox = await page.getByTestId('transaction-summary').boundingBox();
   expect(summaryBox).not.toBeNull();
   expect(summaryBox!.width).toBeLessThanOrEqual(970);
+  await expect(page.getByText('TXN', { exact: true })).toBeVisible();
+  await expect(page.getByText('SUCCESS', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('group', { name: 'View' })).toBeVisible();
   await expect(page.getByRole('group', { name: 'Values' })).toBeVisible();
-  await expect(page.getByText('Values', { exact: true })).toBeVisible();
+  await expect(page.getByText('Values', { exact: true })).toHaveCount(0);
   const searchBox = await page.getByPlaceholder('Search contract, address, slot, or variable').boundingBox();
   expect(searchBox).not.toBeNull();
   expect(searchBox!.width).toBeLessThanOrEqual(385);
@@ -190,11 +192,14 @@ test('transaction summary and controls wrap cleanly at narrow widths', async ({ 
     layout_available: true,
   }));
   await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
-    await route.fulfill({ json: resolutionResponse(contracts) });
+    await route.fulfill({ json: { ...resolutionResponse(contracts), status: 'reverted' } });
   });
 
   await page.goto(`/1/tx/${RESOLUTION_TX}`);
 
+  await expect(page.getByText('TXN', { exact: true })).toBeVisible();
+  await expect(page.getByText('Reverted', { exact: true })).toBeVisible();
+  await expect(page.getByText('SUCCESS', { exact: true })).toHaveCount(0);
   const viewBox = await page.getByRole('group', { name: 'View' }).boundingBox();
   const valuesBox = await page.getByRole('group', { name: 'Values' }).boundingBox();
   const searchBox = await page.getByPlaceholder('Search contract, address, slot, or variable').boundingBox();

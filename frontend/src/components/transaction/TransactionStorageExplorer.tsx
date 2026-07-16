@@ -182,6 +182,7 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
         />
         <ViewSwitch
           label="Values"
+          showLabel={false}
           value={valueMode}
           options={[
             { value: 'decoded', label: 'Decoded' },

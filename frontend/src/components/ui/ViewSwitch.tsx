@@ -20,8 +20,10 @@ export function ViewSwitch<T extends string>({
       {showLabel && <span className="text-[10px] uppercase tracking-wide text-gray-400">{label}</span>}
       <div
         className={cn(
-          'inline-flex h-8',
-          variant === 'segment' && 'border border-gray-300 bg-gray-50 p-0.5',
+          'inline-flex',
+          variant === 'tabs'
+            ? 'h-8'
+            : 'h-7 border border-gray-300 bg-gray-50',
         )}
         role="group"
         aria-label={label}
@@ -41,10 +43,10 @@ export function ViewSwitch<T extends string>({
               value === option.value
                 ? variant === 'tabs'
                   ? 'border-gray-900 text-gray-900'
-                  : 'bg-gray-900 text-white'
+                  : 'bg-gray-200 text-gray-900'
                 : variant === 'tabs'
                   ? 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-900'
-                  : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900',
+                  : 'text-gray-500 hover:bg-gray-100 hover:text-gray-900',
             )}
           >
             {option.label}

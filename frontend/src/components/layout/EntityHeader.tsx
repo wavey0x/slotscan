@@ -1,21 +1,28 @@
 import { ReactNode } from 'react';
+import { EntityKind, EntityKindBadge } from '@/components/ui/EntityKindBadge';
 
 interface EntityHeaderProps {
-  title: string;
-  identifier: ReactNode;
+  kind?: EntityKind;
+  title: ReactNode;
+  identifier?: ReactNode;
   status?: ReactNode;
   meta?: ReactNode;
 }
 
-export function EntityHeader({ title, identifier, status, meta }: EntityHeaderProps) {
+export function EntityHeader({ kind, title, identifier, status, meta }: EntityHeaderProps) {
   return (
     <header className="mb-6 border-b border-gray-300 pb-4">
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-2">
         <div className="min-w-0">
-          <h1 className="truncate text-lg font-medium text-gray-900">{title}</h1>
-          <div className="mt-1 flex min-w-0 items-center text-xs text-gray-500">
-            {identifier}
+          <div className="flex min-w-0 items-center gap-1.5">
+            {kind && <EntityKindBadge kind={kind} />}
+            <h1 className="min-w-0 truncate text-lg font-medium text-gray-900">{title}</h1>
           </div>
+          {identifier && (
+            <div className="mt-1 flex min-w-0 items-center text-xs text-gray-500">
+              {identifier}
+            </div>
+          )}
         </div>
         {status && (
           <div className="shrink-0 text-[10px] uppercase tracking-wide text-gray-500">

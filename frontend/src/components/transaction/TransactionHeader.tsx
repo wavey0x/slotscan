@@ -1,8 +1,9 @@
 import { CopyButton } from '@/components/ui/CopyButton';
+import { EntityKindBadge } from '@/components/ui/EntityKindBadge';
 import { MetadataItem, MetricList } from '@/components/ui/Metadata';
 import { getAddressExplorerUrl, getBlockExplorerUrl, getTxExplorerUrl } from '@/lib/constants';
 import { TransactionStorageHistoryResponse } from '@/lib/types';
-import { cn, truncateAddress, truncateTxHash } from '@/lib/utils';
+import { truncateAddress, truncateTxHash } from '@/lib/utils';
 
 export function TransactionHeader({
   chain,
@@ -19,6 +20,7 @@ export function TransactionHeader({
       <div className="max-w-5xl" data-testid="transaction-summary">
         <div className="mb-3 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <div className="flex min-w-0 items-center gap-0.5">
+            <EntityKindBadge kind="txn" />
             <h1 className="min-w-0 truncate font-mono text-lg font-medium text-gray-900">
               <a
                 href={getTxExplorerUrl(chain, data.tx_hash)}
@@ -31,12 +33,11 @@ export function TransactionHeader({
             </h1>
             <CopyButton value={data.tx_hash} label="Copy transaction hash" />
           </div>
-          <span className={cn(
-            'text-[10px] uppercase tracking-wide',
-            data.status === 'success' ? 'text-gray-500' : 'text-amber-600'
-          )}>
-            {data.status}
-          </span>
+          {data.status === 'reverted' && (
+            <span className="text-[10px] uppercase tracking-wide text-amber-600">
+              Reverted
+            </span>
+          )}
         </div>
 
         <dl className="flex flex-wrap items-start gap-x-8 gap-y-2" data-testid="transaction-metadata">
