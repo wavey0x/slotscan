@@ -165,10 +165,14 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
         } : undefined}
       />
 
-      <div className="mb-5 flex flex-wrap items-center gap-2 border-b border-gray-300 pb-3">
+      <div
+        className="mb-5 flex flex-wrap items-end gap-x-5 gap-y-3 border-b border-gray-300 pb-3"
+        data-testid="transaction-controls"
+      >
         <ViewSwitch
           label="View"
           showLabel={false}
+          variant="tabs"
           value={view}
           options={[
             { value: 'grouped', label: 'Grouped' },
@@ -178,7 +182,6 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
         />
         <ViewSwitch
           label="Values"
-          showLabel={false}
           value={valueMode}
           options={[
             { value: 'decoded', label: 'Decoded' },
@@ -191,7 +194,7 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search contract, address, slot, or variable"
-            className="mt-2 w-full font-mono text-xs sm:ml-auto sm:mt-0 sm:max-w-md"
+            className="h-8 w-full font-mono text-xs sm:ml-auto sm:max-w-sm"
           />
         )}
       </div>

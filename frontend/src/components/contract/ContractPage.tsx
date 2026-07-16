@@ -28,14 +28,17 @@ function LayoutError({ error, chain }: { error: Error; chain: string }) {
         <div className="mb-1 text-sm text-gray-900">Implementation not verified</div>
         <p className="text-xs text-gray-500">
           The proxy implementation does not have a published storage layout.{' '}
-          <a
-            href={getAddressExplorerUrl(chain, details.implementation_address)}
-            target="_blank"
-            rel="noopener noreferrer"
-            title={details.implementation_address}
-          >
-            {truncateAddress(details.implementation_address)}
-          </a>
+          <span className="inline-flex items-center gap-0.5">
+            <a
+              href={getAddressExplorerUrl(chain, details.implementation_address)}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={details.implementation_address}
+            >
+              {truncateAddress(details.implementation_address)}
+            </a>
+            <CopyButton value={details.implementation_address} label="Copy implementation address" className="-my-1" />
+          </span>
         </p>
       </div>
     );
@@ -93,8 +96,8 @@ export function ContractPage({ chain, address }: ContractPageProps) {
         )}
         status={statuses.length > 0 ? statuses.join(' · ') : undefined}
         meta={contract?.implementation_address ? (
-          <span>
-            Implementation{' '}
+          <span className="inline-flex items-center gap-0.5">
+            <span>Implementation</span>
             <a
               href={getAddressExplorerUrl(chain, contract.implementation_address)}
               target="_blank"
@@ -103,6 +106,7 @@ export function ContractPage({ chain, address }: ContractPageProps) {
             >
               {truncateAddress(contract.implementation_address)}
             </a>
+            <CopyButton value={contract.implementation_address} label="Copy implementation address" className="-my-1" />
           </span>
         ) : undefined}
       />

@@ -9,6 +9,8 @@ const GNOSIS_SAFE_ADDRESS = '0x16388463d60ffe0661cf7f1f31a7d658ac790ff7';
 const LIDO_ADDRESS = '0xae7ab96520de3a18e5e111b5eaab095312d7fe84';
 const TETHER_ADDRESS = '0xdac17f958d2ee523a2206206994597c13d831ec7';
 const RESOLUTION_TX = `0x${'12'.repeat(32)}`;
+const RESOLUTION_FROM = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const RESOLUTION_TO = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
 function resolutionContract(overrides: Record<string, unknown>) {
   return {
@@ -45,8 +47,8 @@ function resolutionResponse(contracts: ReturnType<typeof resolutionContract>[]) 
     tx_hash: RESOLUTION_TX,
     block_number: 1,
     status: 'success',
-    from_address: null,
-    to_address: null,
+    from_address: RESOLUTION_FROM,
+    to_address: RESOLUTION_TO,
     created_contract: null,
     analysis_version: 5,
     capabilities: {
@@ -145,6 +147,69 @@ test('unnamed contracts distinguish layout, source, and raw-slot states', async 
   const named = page.getByRole('heading', { name: 'NamedWithoutLayout' }).locator('xpath=ancestor::section');
   await expect(named.getByText('layout unavailable · raw slots', { exact: true })).toBeVisible();
   await expect(page.getByText('Unresolved contract', { exact: true })).toHaveCount(0);
+});
+
+test('transaction summary, controls, and copy actions stay compact at wide widths', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  const contracts = ['11', '22', '33', '44'].map((byte) => resolutionContract({
+    storage_address: `0x${byte.repeat(20)}`,
+    code_addresses: [`0x${byte.repeat(20)}`],
+    name: `Contract${byte}`,
+    is_verified: true,
+    layout_available: true,
+  }));
+  await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
+    await route.fulfill({ json: resolutionResponse(contracts) });
+  });
+
+  await page.goto(`/1/tx/${RESOLUTION_TX}`);
+
+  const summaryBox = await page.getByTestId('transaction-summary').boundingBox();
+  expect(summaryBox).not.toBeNull();
+  expect(summaryBox!.width).toBeLessThanOrEqual(970);
+  await expect(page.getByRole('group', { name: 'View' })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Values' })).toBeVisible();
+  await expect(page.getByText('Values', { exact: true })).toBeVisible();
+  const searchBox = await page.getByPlaceholder('Search contract, address, slot, or variable').boundingBox();
+  expect(searchBox).not.toBeNull();
+  expect(searchBox!.width).toBeLessThanOrEqual(385);
+
+  await page.getByRole('button', { name: 'Copy sender address' }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(RESOLUTION_FROM);
+  await expect(page.getByRole('button', { name: 'Copy recipient address' })).toBeVisible();
+});
+
+test('transaction summary and controls wrap cleanly at narrow widths', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const contracts = ['11', '22', '33', '44'].map((byte) => resolutionContract({
+    storage_address: `0x${byte.repeat(20)}`,
+    code_addresses: [`0x${byte.repeat(20)}`],
+    name: `Contract${byte}`,
+    is_verified: true,
+    layout_available: true,
+  }));
+  await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
+    await route.fulfill({ json: resolutionResponse(contracts) });
+  });
+
+  await page.goto(`/1/tx/${RESOLUTION_TX}`);
+
+  const viewBox = await page.getByRole('group', { name: 'View' }).boundingBox();
+  const valuesBox = await page.getByRole('group', { name: 'Values' }).boundingBox();
+  const searchBox = await page.getByPlaceholder('Search contract, address, slot, or variable').boundingBox();
+  expect(viewBox).not.toBeNull();
+  expect(valuesBox).not.toBeNull();
+  expect(searchBox).not.toBeNull();
+  expect(searchBox!.y).toBeGreaterThanOrEqual(Math.max(
+    viewBox!.y + viewBox!.height,
+    valuesBox!.y + valuesBox!.height,
+  ));
+  const overflowing = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>('body *'))
+    .filter((element) => element.getBoundingClientRect().right > window.innerWidth + 1)
+    .map((element) => `${element.tagName.toLowerCase()}.${element.className}`)
+    .slice(0, 10));
+  expect(overflowing).toEqual([]);
 });
 
 test('transient resolution retries once automatically and then offers a manual retry', async ({ page }) => {

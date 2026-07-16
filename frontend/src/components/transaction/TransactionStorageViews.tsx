@@ -113,9 +113,10 @@ export function ContractSection({
           {contract.implementation_addresses.length > 0 && (
             <div className="mb-1 text-[10px] text-gray-500">
               written via {contract.implementation_addresses.map((address, index) => (
-                <span key={address}>
+                <span key={address} className="inline-flex items-center gap-0.5">
                   {index > 0 && ', '}
                   <a href={getAddressExplorerUrl(chain, address)} target="_blank" rel="noopener noreferrer" className="hover:underline" title={address}>{truncateAddress(address)}</a>
+                  <CopyButton value={address} label={`Copy implementation address ${truncateAddress(address)}`} className="-my-1" />
                 </span>
               ))}
             </div>
