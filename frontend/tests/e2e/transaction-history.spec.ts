@@ -180,10 +180,13 @@ test('transaction summary, controls, and copy actions stay compact at wide width
   expect(viewBox!.height).toBeLessThanOrEqual(24);
   expect(valuesBox!.height).toBeLessThanOrEqual(24);
   expect(Math.abs(viewBox!.x - valuesBox!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(viewBox!.width - valuesBox!.width)).toBeLessThanOrEqual(1);
   expect(valuesBox!.y).toBeGreaterThanOrEqual(viewBox!.y + viewBox!.height);
   const searchBox = await page.getByPlaceholder('Search contract, address, slot, or variable').boundingBox();
   expect(searchBox).not.toBeNull();
-  expect(searchBox!.width).toBeLessThanOrEqual(385);
+  expect(searchBox!.width).toBeLessThanOrEqual(321);
+  expect(searchBox!.x - (viewBox!.x + viewBox!.width)).toBeGreaterThanOrEqual(11);
+  expect(searchBox!.x - (viewBox!.x + viewBox!.width)).toBeLessThanOrEqual(13);
 
   await page.getByRole('button', { name: 'Copy sender address' }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(RESOLUTION_FROM);
@@ -215,6 +218,7 @@ test('transaction summary and controls wrap cleanly at narrow widths', async ({ 
   expect(valuesBox).not.toBeNull();
   expect(searchBox).not.toBeNull();
   expect(Math.abs(viewBox!.x - valuesBox!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(viewBox!.width - valuesBox!.width)).toBeLessThanOrEqual(1);
   expect(valuesBox!.y).toBeGreaterThanOrEqual(viewBox!.y + viewBox!.height);
   expect(searchBox!.y).toBeGreaterThanOrEqual(Math.max(
     viewBox!.y + viewBox!.height,

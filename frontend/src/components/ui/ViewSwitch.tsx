@@ -6,18 +6,23 @@ export function ViewSwitch<T extends string>({
   options,
   onChange,
   showLabel = true,
+  fullWidth = false,
 }: {
   label: string;
   value: T;
   options: readonly { value: T; label: string; disabled?: boolean }[];
   onChange: (value: T) => void;
   showLabel?: boolean;
+  fullWidth?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className={cn('flex items-center gap-2', fullWidth && 'w-full')}>
       {showLabel && <span className="text-[10px] uppercase tracking-wide text-gray-400">{label}</span>}
       <div
-        className="inline-flex h-6 border border-gray-300 bg-gray-50"
+        className={cn(
+          'inline-flex h-6 border border-gray-300 bg-gray-50',
+          fullWidth && 'w-full',
+        )}
         role="group"
         aria-label={label}
       >
@@ -30,6 +35,7 @@ export function ViewSwitch<T extends string>({
             onClick={() => onChange(option.value)}
             className={cn(
               'px-2 text-[9px] transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+              fullWidth && 'flex-1',
               value === option.value
                 ? 'bg-gray-200 text-gray-900'
                 : 'text-gray-500 hover:bg-gray-100 hover:text-gray-900',
