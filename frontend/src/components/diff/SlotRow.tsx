@@ -15,7 +15,7 @@ import {
 } from '@/lib/utils';
 import { HoverCell } from '@/components/ui/HoverCell';
 import { DetailPopover } from '@/components/ui/DetailPopover';
-import { isStructuredDecodedValue, StructuredValueDiff, ValueDiff } from './ValueDiff';
+import { isStructuredDecodedValue, StructuredValueDiff, ValueDiff, valuesEqual } from './ValueDiff';
 import { KeyedVariablePath } from './KeyedVariablePath';
 import { StorageEvidenceDetail } from './StorageEvidenceDetail';
 import { InterimPackedChangeRows, PackedFieldRow } from './PackedFieldRows';
@@ -23,7 +23,6 @@ import {
   deriveSlotDisplay,
   storageHoverProps,
   storageDisplayValue,
-  storageValueIsZero,
 } from './slotDisplay';
 
 interface SlotRowProps {
@@ -213,7 +212,8 @@ export function SlotRow({
               // Use packed field values if single packed field without struct
               const beforeDecoded = singlePackedField ? singlePackedField.before.value_decoded : slot.before.value_decoded;
               const afterDecoded = singlePackedField ? singlePackedField.after.value_decoded : slot.after.value_decoded;
-              const isFinalZero = finalValue === '0' || finalValue === 'false' || storageValueIsZero(slot.after.value_encoded, afterDecoded);
+              const unchanged = valuesEqual(beforeDecoded, afterDecoded);
+              const afterClassName = unchanged ? 'text-gray-300' : 'text-gray-900';
 
               if (!showHex && isStructuredDecodedValue(beforeDecoded) && isStructuredDecodedValue(afterDecoded)) {
                 return (
@@ -221,7 +221,7 @@ export function SlotRow({
                     before={beforeDecoded}
                     after={afterDecoded}
                     beforeClassName="text-gray-300"
-                    afterClassName={isFinalZero ? 'text-gray-300' : 'text-gray-900'}
+                    afterClassName={afterClassName}
                   />
                 );
               }
@@ -229,7 +229,7 @@ export function SlotRow({
               return (
                 <ValueDiff
                   beforeClassName="text-gray-300"
-                  afterClassName={isFinalZero ? 'text-gray-300' : 'text-gray-900'}
+                  afterClassName={afterClassName}
                   before={
                     <HoverCell
                       display={initialValue}
@@ -244,7 +244,7 @@ export function SlotRow({
                       display={finalValue}
                       {...storageHoverProps(afterDecoded, slot.after.value_encoded)}
                       chainId={chainId}
-                      colorClass={cn('text-xs font-mono', isFinalZero ? 'text-gray-300' : 'text-gray-900')}
+                      colorClass={cn('text-xs font-mono', afterClassName)}
                       wrap
                     />
                   }
@@ -300,6 +300,8 @@ export function SlotRow({
         // Non-packed: existing flat display
         const oldVal = storageDisplayValue(change.before.value_decoded, change.before.value_encoded, showHex);
         const newVal = storageDisplayValue(change.after.value_decoded, change.after.value_encoded, showHex);
+        const unchanged = valuesEqual(change.before.value_decoded, change.after.value_decoded);
+        const afterClassName = unchanged ? 'text-gray-300' : 'text-gray-900';
 
         return (
           <tr key={idx} className={cn('bg-gray-100/80', !isFirstChange && 'border-t border-gray-300')}>
@@ -322,12 +324,12 @@ export function SlotRow({
                   before={change.before.value_decoded}
                   after={change.after.value_decoded}
                   beforeClassName="text-gray-300"
-                  afterClassName={storageValueIsZero(change.after.value_encoded, change.after.value_decoded) ? 'text-gray-300' : 'text-gray-900'}
+                  afterClassName={afterClassName}
                 />
               ) : (
                 <ValueDiff
                   beforeClassName="text-gray-300"
-                  afterClassName={storageValueIsZero(change.after.value_encoded, change.after.value_decoded) ? 'text-gray-300' : 'text-gray-900'}
+                  afterClassName={afterClassName}
                   before={
                     <HoverCell
                       display={oldVal}
@@ -342,7 +344,7 @@ export function SlotRow({
                       display={newVal}
                       {...storageHoverProps(change.after.value_decoded, change.after.value_encoded)}
                       chainId={chainId}
-                      colorClass={cn('text-xs font-mono', storageValueIsZero(change.after.value_encoded, change.after.value_decoded) ? 'text-gray-300' : 'text-gray-900')}
+                      colorClass={cn('text-xs font-mono', afterClassName)}
                       wrap
                     />
                   }

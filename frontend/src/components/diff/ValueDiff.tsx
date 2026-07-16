@@ -58,7 +58,7 @@ export function isStructuredDecodedValue(value: unknown): value is Record<string
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function fieldValuesEqual(before: unknown, after: unknown) {
+export function valuesEqual(before: unknown, after: unknown) {
   if (Object.is(before, after)) return true;
   if (typeof before !== 'object' || typeof after !== 'object') return false;
   try {
@@ -119,7 +119,7 @@ export function CopyableValue({
 }) {
   return (
     <span className="inline-flex min-w-0 max-w-full items-start">
-      <span className={cn('min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]', className)}>{display}</span>
+      <span data-testid="copyable-value-text" className={cn('min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]', className)}>{display}</span>
       {shouldShowCopyAction(value, display) && (
         <CopyButton value={copyValue} label={label} className="-my-1" />
       )}
@@ -143,7 +143,7 @@ export function StructuredValueDiff({
   showUnchanged?: boolean;
 }) {
   const fields = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
-    .filter((field) => showUnchanged || !fieldValuesEqual(before[field], after[field]));
+    .filter((field) => showUnchanged || !valuesEqual(before[field], after[field]));
 
   if (fields.length === 0) {
     return <span className="font-mono text-xs text-gray-400">—</span>;
@@ -151,25 +151,40 @@ export function StructuredValueDiff({
 
   return (
     <div data-testid="structured-value-diff" className="space-y-0.5 font-mono text-xs leading-tight">
-      {fields.map((field) => (
-        <div
-          key={field}
-          data-testid="structured-field-change"
-          className={cn(
-            'grid min-w-0 gap-x-2',
-            showFieldNames ? 'grid-cols-[minmax(3.5rem,7rem)_minmax(0,1fr)]' : 'grid-cols-1',
-          )}
-        >
-          {showFieldNames && (
-            <span className="min-w-0 break-words text-gray-500 [overflow-wrap:anywhere]">{field}</span>
-          )}
-          <span className="flex min-w-0 flex-wrap items-start gap-x-1">
-            <FieldValue value={before[field]} className={beforeClassName} label={`Copy previous ${field}`} />
-            <span aria-hidden="true" className="shrink-0 text-gray-400">→</span>
-            <FieldValue value={after[field]} className={afterClassName} label={`Copy new ${field}`} />
-          </span>
-        </div>
-      ))}
+      {fields.map((field) => {
+        const unchanged = valuesEqual(before[field], after[field]);
+
+        return (
+          <div
+            key={field}
+            data-testid="structured-field-change"
+            className={cn(
+              'grid min-w-0 gap-x-2',
+              showFieldNames ? 'grid-cols-[minmax(3.5rem,7rem)_minmax(0,1fr)]' : 'grid-cols-1',
+            )}
+          >
+            {showFieldNames && (
+              <span className="min-w-0 break-words text-gray-500 [overflow-wrap:anywhere]">{field}</span>
+            )}
+            <ValueDiff
+              before={(
+                <FieldValue
+                  value={before[field]}
+                  className={beforeClassName}
+                  label={`Copy previous ${field}`}
+                />
+              )}
+              after={(
+                <FieldValue
+                  value={after[field]}
+                  className={unchanged ? beforeClassName : afterClassName}
+                  label={`Copy new ${field}`}
+                />
+              )}
+            />
+          </div>
+        );
+      })}
     </div>
   );
 }

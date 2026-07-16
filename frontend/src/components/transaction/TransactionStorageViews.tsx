@@ -171,6 +171,7 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
         {entries.map(({ contract, slot, event, ordinal }) => {
           const structMember = timelineStructMember(slot);
           const variablePath = timelineVariablePath(slot, structMember?.name);
+          const unchanged = event.effect === 'noop';
 
           return (
             <tr key={`${contract.storage_address}:${slot.slot}:${event.step}:${ordinal}`} data-testid="timeline-event" className="border-b border-gray-200 text-xs hover:bg-gray-50">
@@ -217,7 +218,7 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                       />
                     )}
                     beforeClassName="text-gray-400"
-                    afterClassName="text-gray-900"
+                    afterClassName={unchanged ? 'text-gray-400' : 'text-gray-900'}
                   />
                 )}
                 {event.frame_outcome === 'reverted' && <div className="mt-0.5 text-[9px] uppercase tracking-wide text-amber-600">reverted</div>}

@@ -364,6 +364,12 @@ test('structured values show only changed fields without spilling', async ({ pag
   await expect(diff.getByText('amount', { exact: true })).toHaveCount(0);
   await expect(diff).toContainText('2,000,000,000,000,000,000');
   expect(await diff.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const beforeBox = await diff.getByTestId('value-before').boundingBox();
+  const afterBox = await diff.getByTestId('value-after').boundingBox();
+  expect(beforeBox).not.toBeNull();
+  expect(afterBox).not.toBeNull();
+  expect(Math.abs(beforeBox!.x - afterBox!.x)).toBeLessThan(1);
+  expect(afterBox!.y).toBeGreaterThan(beforeBox!.y);
 
   await diff.getByRole('button', { name: 'Copy new claimed' }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('2000000000000000000');
@@ -402,10 +408,10 @@ test('timeline names struct members and stays readable on mobile', async ({ page
       slot: 8,
       member: 'processed',
       typeLabel: 'bool',
-      beforeValue: false,
-      afterValue: true,
-      beforeEncoded: `0x${'0'.repeat(64)}`,
-      afterEncoded: `0x${'0'.repeat(63)}1`,
+      beforeValue: true,
+      afterValue: false,
+      beforeEncoded: `0x${'0'.repeat(63)}1`,
+      afterEncoded: `0x${'0'.repeat(64)}`,
       step: 1429,
     }),
     configScalarSlot({
@@ -468,10 +474,36 @@ test('timeline names struct members and stays readable on mobile', async ({ page
   await expect(changedRow.getByTestId('timeline-value')).toContainText(oldRate);
   await expect(changedRow.getByTestId('timeline-value')).toContainText(newRate);
   await expect(changedRow.getByTestId('timeline-value')).not.toContainText('rateCalculator');
-  await expect(booleanRow.getByTestId('timeline-value')).toContainText('false→true');
+  await expect(booleanRow.getByTestId('timeline-value')).toContainText('true→false');
   await expect(booleanRow.getByRole('button', { name: /Copy (previous|new)/ })).toHaveCount(0);
   await expect(smallNumberRow.getByTestId('timeline-value')).toContainText('1→2');
   await expect(smallNumberRow.getByRole('button', { name: /Copy (previous|new)/ })).toHaveCount(0);
+
+  for (const row of [noopRow, changedRow, booleanRow, smallNumberRow]) {
+    const valueDiff = row.getByTestId('value-diff');
+    const beforeBox = await valueDiff.getByTestId('value-before').boundingBox();
+    const afterBox = await valueDiff.getByTestId('value-after').boundingBox();
+    expect(beforeBox).not.toBeNull();
+    expect(afterBox).not.toBeNull();
+    expect(Math.abs(beforeBox!.x - afterBox!.x)).toBeLessThan(1);
+    expect(afterBox!.y).toBeGreaterThan(beforeBox!.y);
+  }
+
+  const noopBeforeColor = await noopRow.getByTestId('value-before').getByTestId('copyable-value-text').evaluate(
+    (element) => getComputedStyle(element).color,
+  );
+  const noopAfterColor = await noopRow.getByTestId('value-after').getByTestId('copyable-value-text').evaluate(
+    (element) => getComputedStyle(element).color,
+  );
+  expect(noopAfterColor).toBe(noopBeforeColor);
+
+  const changedBeforeColor = await changedRow.getByTestId('value-before').getByTestId('copyable-value-text').evaluate(
+    (element) => getComputedStyle(element).color,
+  );
+  const changedAfterColor = await changedRow.getByTestId('value-after').getByTestId('copyable-value-text').evaluate(
+    (element) => getComputedStyle(element).color,
+  );
+  expect(changedAfterColor).not.toBe(changedBeforeColor);
 
   const changedRowBox = await changedRow.boundingBox();
   expect(changedRowBox).not.toBeNull();

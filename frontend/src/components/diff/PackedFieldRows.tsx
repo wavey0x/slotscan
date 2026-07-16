@@ -2,7 +2,7 @@ import { PackedFieldResponse, StorageChangeResponse } from '@/lib/types';
 import { cn, formatDecodedValue } from '@/lib/utils';
 import { HoverCell } from '@/components/ui/HoverCell';
 import { DetailPopover } from '@/components/ui/DetailPopover';
-import { ValueDiff } from './ValueDiff';
+import { ValueDiff, valuesEqual } from './ValueDiff';
 import { storageHoverProps } from './slotDisplay';
 
 export function PackedFieldRow({
@@ -29,7 +29,8 @@ export function PackedFieldRow({
   const showTree = totalFields > 1;
   const initialDisplay = formatDecodedValue(field.before.value_decoded);
   const finalDisplay = formatDecodedValue(field.after.value_decoded);
-  const finalIsZero = finalDisplay === '0' || finalDisplay === 'false';
+  const unchanged = valuesEqual(field.before.value_decoded, field.after.value_decoded);
+  const afterClassName = unchanged ? 'text-gray-300' : 'text-gray-900';
 
   return (
     <tr className={cn('hover:bg-gray-50', borderClass)}>
@@ -49,9 +50,9 @@ export function PackedFieldRow({
       <td className="px-1 py-0.5 align-top">
         <ValueDiff
           beforeClassName="text-gray-300"
-          afterClassName={finalIsZero ? 'text-gray-300' : 'text-gray-900'}
+          afterClassName={afterClassName}
           before={<HoverCell display={initialDisplay} {...storageHoverProps(field.before.value_decoded, initialEncoded)} chainId={chainId} colorClass="font-mono text-xs text-gray-300" />}
-          after={<HoverCell display={finalDisplay} {...storageHoverProps(field.after.value_decoded, finalEncoded)} chainId={chainId} colorClass={cn('font-mono text-xs', finalIsZero ? 'text-gray-300' : 'text-gray-900')} />}
+          after={<HoverCell display={finalDisplay} {...storageHoverProps(field.after.value_decoded, finalEncoded)} chainId={chainId} colorClass={cn('font-mono text-xs', afterClassName)} />}
         />
       </td>
       <td className="w-8 px-1 py-0 align-top">
@@ -95,7 +96,10 @@ export function InterimPackedChangeRows({
         const beforeDisplay = formatDecodedValue(fieldValue(change.before.value_decoded, field.name));
         const afterDisplay = formatDecodedValue(fieldValue(change.after.value_decoded, field.name));
         const isLast = fieldIndex === packedFields.length - 1;
-        const afterIsZero = ['0', 'false', '""'].includes(afterDisplay);
+        const unchanged = valuesEqual(
+          fieldValue(change.before.value_decoded, field.name),
+          fieldValue(change.after.value_decoded, field.name),
+        );
 
         return (
           <tr key={`${field.name}:${fieldIndex}`} className={cn('bg-gray-100/80', !isFirstChange && fieldIndex === 0 && 'border-t border-gray-300')}>
@@ -115,7 +119,7 @@ export function InterimPackedChangeRows({
                   <span className="text-gray-400">{field.type_label}</span>{' '}
                   <span className="text-gray-600">{field.name}</span>
                 </span>
-                <ValueDiff before={beforeDisplay} after={afterDisplay} beforeClassName="text-gray-300" afterClassName={afterIsZero ? 'text-gray-300' : 'text-gray-700'} />
+                <ValueDiff before={beforeDisplay} after={afterDisplay} beforeClassName="text-gray-300" afterClassName={unchanged ? 'text-gray-300' : 'text-gray-700'} />
               </div>
             </td>
             <td className="px-1 py-0.5 align-top" />
