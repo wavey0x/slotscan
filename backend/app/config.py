@@ -43,8 +43,24 @@ class Settings(BaseSettings):
         alias="MAX_PARALLEL_CONTRACT_RESOLUTIONS",
     )
     contract_resolution_timeout_seconds: int = Field(
-        default=6,
+        default=20,
         alias="CONTRACT_RESOLUTION_TIMEOUT_SECONDS",
+    )
+    transaction_resolution_budget_seconds: int = Field(
+        default=90,
+        alias="TRANSACTION_RESOLUTION_BUDGET_SECONDS",
+    )
+    contract_resolution_retry_delay_seconds: float = Field(
+        default=0.5,
+        alias="CONTRACT_RESOLUTION_RETRY_DELAY_SECONDS",
+    )
+    contract_resolution_retry_concurrency: int = Field(
+        default=2,
+        alias="CONTRACT_RESOLUTION_RETRY_CONCURRENCY",
+    )
+    no_source_cache_ttl_seconds: int = Field(
+        default=15 * 60,
+        alias="NO_SOURCE_CACHE_TTL_SECONDS",
     )
     # Compiler isolation
     allow_compiler_install: bool = Field(default=False, alias="ALLOW_COMPILER_INSTALL")

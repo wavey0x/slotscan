@@ -12,6 +12,12 @@ import { getAddressExplorerUrl } from '@/lib/constants';
 import { ContractHistoryResponse, SlotChangeResponse, StorageChangeResponse } from '@/lib/types';
 import { cn, formatDecodedValue, truncateAddress, truncateHash } from '@/lib/utils';
 import { slotReferenceDisplay } from '@/components/diff/slotDisplay';
+import {
+  contractActivityStatus,
+  contractDisplayLabel,
+  contractResolutionNotice,
+  contractResolutionStatus,
+} from '@/lib/contract-resolution';
 
 export interface TimelineEntry {
   contract: ContractHistoryResponse;
@@ -26,16 +32,6 @@ function eventValue(event: StorageChangeResponse, side: 'before' | 'after', show
   return pair.value_decoded === null || pair.value_decoded === undefined
     ? pair.value_encoded ?? 'unknown'
     : formatDecodedValue(pair.value_decoded);
-}
-
-function contractErrorMessage(message: string): string {
-  if (message.toLowerCase().includes('historical resolution')) {
-    return 'Variable resolution is incomplete; raw slot history is shown.';
-  }
-  if (message.toLowerCase().includes('layout')) {
-    return 'The storage layout is incomplete; unresolved slots are shown raw.';
-  }
-  return 'Some storage evidence could not be resolved; raw slot history is shown.';
 }
 
 export function ContractSection({
@@ -58,6 +54,10 @@ export function ContractSection({
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const expanded = isOpen || forceOpen;
   const detailId = `owner-storage-${contract.storage_address.slice(2)}`;
+  const displayLabel = contractDisplayLabel(contract);
+  const activityStatus = contractActivityStatus(contract);
+  const resolutionNotice = contractResolutionNotice(contract);
+  const resolutionStatus = contractResolutionStatus(contract);
 
   useEffect(() => {
     if (defaultOpen) setIsOpen(true);
@@ -72,12 +72,12 @@ export function ContractSection({
             data-testid="contract-toggle"
             aria-expanded={expanded}
             aria-controls={detailId}
-            aria-label={`${expanded ? 'Collapse' : 'Expand'} ${contract.name || 'unresolved contract'}`}
+            aria-label={`${expanded ? 'Collapse' : 'Expand'} ${displayLabel}`}
             onClick={() => setIsOpen((open) => !open)}
             className="col-span-2 row-start-1 flex min-w-0 items-center gap-1 text-left"
           >
             <span aria-hidden="true" className={cn('text-[10px] text-gray-400 transition-transform', expanded && 'rotate-90')}>▶</span>
-            <h2 className="truncate text-sm font-medium text-gray-900">{contract.name || 'Unresolved contract'}</h2>
+            <h2 className="truncate text-sm font-medium text-gray-900">{displayLabel}</h2>
           </button>
           <span className="col-start-2 row-start-2 flex min-w-0 items-center font-mono text-[10px] text-gray-500" title={contract.storage_address}>
             <Link href={`/${chain}/${contract.storage_address}`} className="truncate hover:underline">
@@ -98,11 +98,11 @@ export function ContractSection({
         </div>
         <span className="flex shrink-0 flex-col items-end whitespace-nowrap text-right text-[10px] text-gray-500">
           <span>{contract.counts.sstore_events} {contract.counts.sstore_events === 1 ? 'write' : 'writes'} · {contract.counts.slots_written} {contract.counts.slots_written === 1 ? 'slot' : 'slots'}</span>
-          {(contract.counts.reverted_writes > 0 || !contract.layout_available) && (
+          {(contract.counts.reverted_writes > 0 || activityStatus) && (
             <span className="text-[9px] text-gray-400">
               {contract.counts.reverted_writes > 0 && <>{contract.counts.reverted_writes} reverted {contract.counts.reverted_writes === 1 ? 'write' : 'writes'}</>}
-              {contract.counts.reverted_writes > 0 && !contract.layout_available && <> · </>}
-              {!contract.layout_available && <>raw slots</>}
+              {contract.counts.reverted_writes > 0 && activityStatus && <> · </>}
+              {activityStatus}
             </span>
           )}
         </span>
@@ -120,7 +120,16 @@ export function ContractSection({
               ))}
             </div>
           )}
-          {Array.from(new Set(contract.errors.map(contractErrorMessage))).map((message) => <div key={message} className="mb-1 text-[10px] text-amber-600">{message}</div>)}
+          {resolutionNotice && (
+            <div className={cn(
+              'mb-1 text-[10px]',
+              resolutionStatus === 'timed_out' || resolutionStatus === 'failed'
+                ? 'text-amber-600'
+                : 'text-gray-500',
+            )}>
+              {resolutionNotice}
+            </div>
+          )}
           <SlotHistoryTable chainId={chain} slots={contract.slots} showHex={showHex} executionOrderAvailable={executionOrderAvailable} isComplete={isComplete} />
         </div>
       )}
@@ -141,7 +150,7 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
             {showContract && (
               <td className={storageCellClass}>
                 <a href={getAddressExplorerUrl(chain, contract.storage_address)} target="_blank" rel="noopener noreferrer" className="block truncate text-gray-700 hover:underline" title={contract.storage_address}>
-                  {contract.name || truncateAddress(contract.storage_address)}
+                  {contractDisplayLabel(contract)}
                 </a>
               </td>
             )}

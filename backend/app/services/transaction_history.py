@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 
 from app.config import Settings
 from app.db import async_session_factory
 from app.models.domain import ContractMetadata, StorageLayout, TransactionDiff
+from app.models.errors import NotAContractError
 from app.repositories.compiler_artifacts import CompilerArtifactRepository
 from app.repositories.contracts import ContractRepository
 from app.repositories.trace_cache import TransactionTraceArtifactData
@@ -18,6 +20,9 @@ from app.services.tracer.journal import StorageJournal
 from app.services.web3_provider import Web3Provider
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass(frozen=True)
 class ContractHistoryProjection:
     storage_address: str
@@ -26,6 +31,7 @@ class ContractHistoryProjection:
     code_addresses: tuple[str, ...]
     display_name: str | None
     layouts_by_code_address: dict[str, StorageLayout]
+    resolution_status: str
     errors: tuple[str, ...]
 
 
@@ -34,6 +40,13 @@ class TransactionHistoryAnalysis:
     artifact: TransactionTraceArtifactData
     journal: StorageJournal
     contracts: tuple[ContractHistoryProjection, ...]
+
+
+@dataclass(frozen=True)
+class MetadataResolution:
+    metadata: ContractMetadata | None
+    status: str
+    error: str | None = None
 
 
 class TransactionHistoryService:
@@ -78,48 +91,115 @@ class TransactionHistoryService:
         semaphore = asyncio.Semaphore(
             max(1, self.settings.max_parallel_contract_resolutions)
         )
+        retry_semaphore = asyncio.Semaphore(
+            max(1, self.settings.contract_resolution_retry_concurrency)
+        )
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.settings.transaction_resolution_budget_seconds
 
-        async def project(address: str) -> ContractHistoryProjection:
-            metadata: ContractMetadata | None = None
-            errors: list[str] = []
-            code_addresses = code_addresses_by_owner.get(address.lower(), ())
-
-            async def guarded_resolve(
-                target: str,
-                *,
-                follow_proxy: bool,
-            ) -> ContractMetadata | None:
+        async def resolve_target(
+            target: str,
+            *,
+            follow_proxy: bool,
+        ) -> MetadataResolution:
+            last_error: Exception | None = None
+            for attempt in range(2):
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    last_error = TimeoutError("transaction resolution budget exhausted")
+                    break
+                if attempt:
+                    await asyncio.sleep(min(
+                        self.settings.contract_resolution_retry_delay_seconds,
+                        max(0, remaining),
+                    ))
+                limiter = semaphore if attempt == 0 else retry_semaphore
                 try:
-                    async with semaphore:
-                        return await asyncio.wait_for(
+                    async with limiter:
+                        remaining = deadline - loop.time()
+                        if remaining <= 0:
+                            raise TimeoutError(
+                                "transaction resolution budget exhausted"
+                            )
+                        timeout = min(
+                            self.settings.contract_resolution_timeout_seconds,
+                            remaining,
+                        )
+                        metadata = await asyncio.wait_for(
                             self._resolve_metadata(
                                 chain_id,
                                 target,
                                 artifact.block_number,
                                 follow_proxy=follow_proxy,
                             ),
-                            timeout=self.settings.contract_resolution_timeout_seconds,
+                            timeout=timeout,
                         )
-                except Exception as exc:
-                    message = (
-                        f"{target.lower()}: {type(exc).__name__}: "
-                        "historical resolution failed"
+                    return MetadataResolution(
+                        metadata=metadata,
+                        status=(
+                            "resolved"
+                            if metadata.is_verified
+                            else "no_verified_source"
+                        ),
                     )
-                    if message not in errors:
-                        errors.append(message)
-                    return None
+                except Exception as exc:
+                    last_error = exc
+                    if isinstance(exc, NotAContractError):
+                        break
 
-            metadata_task = guarded_resolve(address, follow_proxy=True)
-            direct_addresses = tuple(dict.fromkeys((address.lower(), *code_addresses)))
-            direct_results = await asyncio.gather(
-                *(guarded_resolve(target, follow_proxy=False) for target in direct_addresses),
-                metadata_task,
+            assert last_error is not None
+            timed_out = isinstance(last_error, (asyncio.TimeoutError, TimeoutError))
+            status = "timed_out" if timed_out else "failed"
+            return MetadataResolution(
+                metadata=None,
+                status=status,
+                error=(
+                    f"{target.lower()}: {type(last_error).__name__}: "
+                    "historical resolution failed"
+                ),
             )
-            metadata = direct_results[-1]
+
+        owner_results = await asyncio.gather(*(
+            resolve_target(owner, follow_proxy=True) for owner in owners
+        ))
+        owner_resolutions = dict(zip(owners, owner_results))
+
+        direct_resolutions: dict[str, MetadataResolution] = {}
+        direct_targets: list[str] = []
+        for owner in owners:
+            owner_result = owner_resolutions[owner]
+            for target in code_addresses_by_owner.get(owner.lower(), ()):
+                # Do not repeat an exhausted self-address lookup. A successfully
+                # identified proxy still needs a direct pass for its own code.
+                if (
+                    target == owner.lower()
+                    and (
+                        owner_result.metadata is None
+                        or not owner_result.metadata.is_proxy
+                    )
+                ):
+                    direct_resolutions[target] = owner_result
+                elif target not in direct_targets:
+                    direct_targets.append(target)
+
+        if direct_targets:
+            direct_results = await asyncio.gather(*(
+                resolve_target(target, follow_proxy=False)
+                for target in direct_targets
+            ))
+            direct_resolutions.update(zip(direct_targets, direct_results))
+
+        async def project(address: str) -> ContractHistoryProjection:
+            owner_resolution = owner_resolutions[address]
+            metadata = owner_resolution.metadata
+            code_addresses = code_addresses_by_owner.get(address.lower(), ())
             direct_metadata = {
-                target: result
-                for target, result in zip(direct_addresses, direct_results[:-1])
-                if result is not None
+                target: resolution.metadata
+                for target in code_addresses
+                if (
+                    (resolution := direct_resolutions.get(target)) is not None
+                    and resolution.metadata is not None
+                )
             }
 
             layouts_by_code_address = {
@@ -184,6 +264,29 @@ class TransactionHistoryService:
                 metadata.name if metadata else None,
             ]
             display_name = self._preferred_name(display_names)
+            relevant_resolutions = [
+                owner_resolution,
+                *(
+                    direct_resolutions[target]
+                    for target in code_addresses
+                    if target in direct_resolutions
+                    and direct_resolutions[target] is not owner_resolution
+                ),
+            ]
+            errors = tuple(dict.fromkeys(
+                resolution.error
+                for resolution in relevant_resolutions
+                if resolution.error
+            ))
+            statuses = {resolution.status for resolution in relevant_resolutions}
+            if "timed_out" in statuses:
+                resolution_status = "timed_out"
+            elif "failed" in statuses:
+                resolution_status = "failed"
+            elif "resolved" in statuses:
+                resolution_status = "resolved"
+            else:
+                resolution_status = "no_verified_source"
             return ContractHistoryProjection(
                 storage_address=address.lower(),
                 metadata=metadata,
@@ -191,10 +294,16 @@ class TransactionHistoryService:
                 code_addresses=code_addresses,
                 display_name=display_name,
                 layouts_by_code_address=layouts_by_code_address,
-                errors=tuple(errors),
+                resolution_status=resolution_status,
+                errors=errors,
             )
 
         projections = await asyncio.gather(*(project(owner) for owner in owners))
+        logger.info(
+            "Resolved %s storage owners with %s additional unique code addresses",
+            len(owner_resolutions),
+            len(direct_targets),
+        )
         first_steps = {
             event.address: event.step
             for event in reversed(journal.events)

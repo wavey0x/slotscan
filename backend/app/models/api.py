@@ -1,6 +1,6 @@
 """Pydantic models for API request/response validation."""
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -271,6 +271,12 @@ class ContractHistoryResponse(BaseModel):
     first_write_step: Optional[int] = None
     last_write_step: Optional[int] = None
     layout_available: bool = False
+    resolution_status: Literal[
+        "resolved",
+        "no_verified_source",
+        "timed_out",
+        "failed",
+    ] = "resolved"
     resolution: ContractResolutionResponse
     counts: ContractHistoryCountsResponse
     errors: list[str] = Field(default_factory=list)

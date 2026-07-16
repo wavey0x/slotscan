@@ -8,6 +8,75 @@ const NESTED_STRUCT_MAPPING_TX = '0x8e37bdd5003c883a684cd6c944c5fac24cc7f29b15ef
 const GNOSIS_SAFE_ADDRESS = '0x16388463d60ffe0661cf7f1f31a7d658ac790ff7';
 const LIDO_ADDRESS = '0xae7ab96520de3a18e5e111b5eaab095312d7fe84';
 const TETHER_ADDRESS = '0xdac17f958d2ee523a2206206994597c13d831ec7';
+const RESOLUTION_TX = `0x${'12'.repeat(32)}`;
+
+function resolutionContract(overrides: Record<string, unknown>) {
+  return {
+    storage_address: '0x1111111111111111111111111111111111111111',
+    name: null,
+    is_proxy: false,
+    is_verified: false,
+    implementation_addresses: [],
+    code_addresses: ['0x1111111111111111111111111111111111111111'],
+    first_write_step: 1,
+    last_write_step: 1,
+    layout_available: false,
+    resolution_status: 'resolved',
+    resolution: { resolved: 0, total: 1 },
+    counts: {
+      slots_written: 1,
+      sstore_events: 1,
+      net_changed_slots: 1,
+      restored_slots: 0,
+      reverted_only_slots: 0,
+      noop_only_slots: 0,
+      reverted_writes: 0,
+      noop_writes: 0,
+    },
+    errors: [],
+    slots: [],
+    ...overrides,
+  };
+}
+
+function resolutionResponse(contracts: ReturnType<typeof resolutionContract>[]) {
+  return {
+    chain_id: 1,
+    tx_hash: RESOLUTION_TX,
+    block_number: 1,
+    status: 'success',
+    from_address: null,
+    to_address: null,
+    created_contract: null,
+    analysis_version: 5,
+    capabilities: {
+      write_history_complete: true,
+      values_complete: true,
+      rollback_classification_complete: true,
+      execution_order_available: true,
+      final_state_values_available: true,
+      state_reconciliation_complete: true,
+      address_attribution_complete: true,
+      code_attribution_complete: true,
+    },
+    summary: {
+      storage_owners: contracts.length,
+      slots_written: contracts.length,
+      sstore_events: contracts.length,
+      net_changed_slots: contracts.length,
+      restored_slots: 0,
+      reverted_only_slots: 0,
+      noop_only_slots: 0,
+      reverted_writes: 0,
+      noop_writes: 0,
+      resolved_slots: 0,
+    },
+    contracts,
+    global_order: [],
+    is_complete: true,
+    trace_unavailable: false,
+  };
+}
 
 test('home search accepts a transaction hash and opens transaction-wide history', async ({ page }) => {
   await page.goto('/');
@@ -32,6 +101,80 @@ test('home search accepts a transaction hash and opens transaction-wide history'
   await expect(page.getByRole('checkbox')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Net effects' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Restored' })).toHaveCount(0);
+});
+
+test('unnamed contracts distinguish layout, source, and raw-slot states', async ({ page }) => {
+  const contracts = [
+    resolutionContract({
+      storage_address: '0x1111111111111111111111111111111111111111',
+      code_addresses: ['0x1111111111111111111111111111111111111111'],
+      layout_available: true,
+      resolution_status: 'resolved',
+    }),
+    resolutionContract({
+      storage_address: '0x2222222222222222222222222222222222222222',
+      code_addresses: ['0x2222222222222222222222222222222222222222'],
+      resolution_status: 'no_verified_source',
+    }),
+    resolutionContract({
+      storage_address: '0x3333333333333333333333333333333333333333',
+      code_addresses: ['0x3333333333333333333333333333333333333333'],
+      is_verified: true,
+      resolution_status: 'resolved',
+    }),
+    resolutionContract({
+      storage_address: '0x4444444444444444444444444444444444444444',
+      code_addresses: ['0x4444444444444444444444444444444444444444'],
+      name: 'NamedWithoutLayout',
+      is_verified: true,
+      resolution_status: 'resolved',
+    }),
+  ];
+  await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
+    await route.fulfill({ json: resolutionResponse(contracts) });
+  });
+
+  await page.goto(`/1/tx/${RESOLUTION_TX}`);
+
+  const unnamed = page.getByRole('heading', { name: 'Unnamed contract' }).locator('xpath=ancestor::section');
+  await expect(unnamed.getByText('layout available', { exact: true })).toBeVisible();
+  const noSource = page.getByRole('heading', { name: 'No verified source' }).locator('xpath=ancestor::section');
+  await expect(noSource.getByText('raw slots', { exact: true })).toBeVisible();
+  const noLayout = page.getByRole('heading', { name: 'Verified source, no layout' }).locator('xpath=ancestor::section');
+  await expect(noLayout.getByText('layout unavailable · raw slots', { exact: true })).toBeVisible();
+  const named = page.getByRole('heading', { name: 'NamedWithoutLayout' }).locator('xpath=ancestor::section');
+  await expect(named.getByText('layout unavailable · raw slots', { exact: true })).toBeVisible();
+  await expect(page.getByText('Unresolved contract', { exact: true })).toHaveCount(0);
+});
+
+test('transient resolution retries once automatically and then offers a manual retry', async ({ page }) => {
+  let requests = 0;
+  await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
+    requests += 1;
+    const contract = requests < 3
+      ? resolutionContract({
+          resolution_status: 'timed_out',
+          errors: ['0x1111: TimeoutError: historical resolution failed'],
+        })
+      : resolutionContract({
+          name: 'RecoveredContract',
+          is_verified: true,
+          layout_available: true,
+          resolution_status: 'resolved',
+          resolution: { resolved: 1, total: 1 },
+        });
+    await route.fulfill({ json: resolutionResponse([contract]) });
+  });
+
+  await page.goto(`/1/tx/${RESOLUTION_TX}`);
+
+  await expect.poll(() => requests).toBe(2);
+  await expect(page.getByRole('heading', { name: 'Resolution timed out' })).toBeVisible();
+  const retry = page.getByRole('button', { name: 'Retry resolution' });
+  await expect(retry).toBeVisible();
+  await retry.click();
+  await expect(page.getByRole('heading', { name: 'RecoveredContract' })).toBeVisible();
+  await expect(retry).toHaveCount(0);
 });
 
 test('all writes remain visible without interpretive classification controls', async ({ page }) => {

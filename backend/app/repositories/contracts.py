@@ -90,6 +90,7 @@ class ContractRepository:
             "compiler_artifact_fingerprint": metadata.compiler_artifact_fingerprint,
             "storage_layout": storage_layout_dict,
             "verified_at": datetime.utcnow() if metadata.is_verified else None,
+            "source_checked_at": datetime.utcnow(),
         }
 
         stmt = insert(Contract).values(**values)
@@ -107,6 +108,7 @@ class ContractRepository:
                 "compiler_artifact_fingerprint": values["compiler_artifact_fingerprint"],
                 "storage_layout": values["storage_layout"],
                 "verified_at": values["verified_at"],
+                "source_checked_at": values["source_checked_at"],
                 "updated_at": func.now(),
             },
         )
@@ -144,6 +146,7 @@ class ContractRepository:
             "compiler_version": metadata.compiler_version,
             "compiler_artifact_fingerprint": metadata.compiler_artifact_fingerprint,
             "storage_layout": layout,
+            "source_checked_at": datetime.utcnow(),
         }
         stmt = insert(HistoricalContractResolution).values(**values)
         stmt = stmt.on_conflict_do_update(
@@ -155,21 +158,21 @@ class ContractRepository:
         return await self.get_at_block(metadata.chain_id, metadata.address, block_number)
 
     async def needs_verification_refresh(
-        self, chain_id: int, address: str, max_age_hours: int = 24
+        self, chain_id: int, address: str, max_age_seconds: int = 15 * 60
     ) -> bool:
         """Check if verification status should be rechecked."""
         contract = await self.get(chain_id, address)
         if not contract:
             return True
 
-        if contract.is_verified:
+        if contract.is_verified and contract.storage_layout:
             return False
 
-        if not contract.verified_at:
+        if not contract.source_checked_at:
             return True
 
-        age = datetime.utcnow() - contract.verified_at
-        return age.total_seconds() > (max_age_hours * 3600)
+        age = datetime.utcnow() - contract.source_checked_at
+        return age.total_seconds() > max_age_seconds
 
     def to_metadata(self, contract: Contract) -> ContractMetadata:
         """Convert database model to domain model."""

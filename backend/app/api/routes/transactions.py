@@ -982,6 +982,7 @@ async def get_transaction_storage_history(
                 layout_available=bool(
                     projection.diff.layout and projection.diff.layout.variables
                 ),
+                resolution_status=projection.resolution_status,
                 resolution=ContractResolutionResponse(
                     resolved=resolved,
                     total=len(slots),

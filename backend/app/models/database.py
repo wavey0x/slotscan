@@ -39,6 +39,7 @@ class Contract(Base):
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     verified_at = Column(DateTime)
+    source_checked_at = Column(DateTime)
 
     __table_args__ = (
         Index("idx_contracts_chain_address", chain_id, address, unique=True),
@@ -150,6 +151,7 @@ class HistoricalContractResolution(Base):
     compiler_artifact_fingerprint = Column(String(64))
     storage_layout = Column(JSONB)
     created_at = Column(DateTime, server_default=func.now())
+    source_checked_at = Column(DateTime)
 
     __table_args__ = (
         Index(

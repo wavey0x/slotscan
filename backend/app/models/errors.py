@@ -24,6 +24,14 @@ class RPCError(SlotScanError):
         super().__init__(f"RPC {method} failed: {error}")
 
 
+class VerificationProviderError(SlotScanError):
+    """Raised when source verification providers fail inconclusively."""
+
+    def __init__(self, errors: list[str]):
+        self.errors = errors
+        super().__init__("Verification providers unavailable: " + "; ".join(errors))
+
+
 class CompilationError(SlotScanError):
     """Raised when solc compilation fails."""
 

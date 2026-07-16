@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -10,7 +11,7 @@ from web3 import Web3
 
 from app.config import Settings
 from app.models.domain import ContractMetadata, ProxyInfo, StorageLayout, VerificationResult
-from app.models.errors import NotAContractError, RPCError
+from app.models.errors import NotAContractError, RPCError, VerificationProviderError
 from app.repositories.contracts import ContractRepository
 from app.services.layout import LayoutParser
 from app.services.namespace_storage import NamespaceStorageParser
@@ -102,16 +103,20 @@ class ContractResolver:
             historical = await self.contract_repo.get_at_block(
                 chain_id, address, block_number
             )
-            if (
-                historical
-                and (follow_proxy or not historical.is_proxy)
-                and historical.is_verified
-                and historical.storage_layout
-            ):
+            if historical and (follow_proxy or not historical.is_proxy):
                 metadata = self.contract_repo.to_metadata(historical)
                 layout = metadata.storage_layout
-                if isinstance(layout, StorageLayout) and self._cache_layout_is_usable(layout):
+                if (
+                    isinstance(layout, StorageLayout)
+                    and self._cache_layout_is_usable(layout)
+                ):
                     layout.resolver_version = LAYOUT_RESOLVER_VERSION
+                    await self._hydrate_compiler_inputs(metadata)
+                    return metadata
+                if (
+                    (not historical.is_verified or not historical.storage_layout)
+                    and self._source_check_is_fresh(historical)
+                ):
                     await self._hydrate_compiler_inputs(metadata)
                     return metadata
 
@@ -120,17 +125,21 @@ class ContractResolver:
         # requested block instead of reusing today's implementation/layout.
         if self.contract_repo and block_number is None:
             cached = await self.contract_repo.get(chain_id, address)
-            if (
-                cached
-                and (follow_proxy or not cached.is_proxy)
-                and cached.is_verified
-                and cached.storage_layout
-            ):
+            if cached and (follow_proxy or not cached.is_proxy):
                 logger.debug(f"Cache hit for {address} on chain {chain_id}")
                 metadata = self.contract_repo.to_metadata(cached)
                 layout = metadata.storage_layout
-                if isinstance(layout, StorageLayout) and self._cache_layout_is_usable(layout):
+                if (
+                    isinstance(layout, StorageLayout)
+                    and self._cache_layout_is_usable(layout)
+                ):
                     layout.resolver_version = LAYOUT_RESOLVER_VERSION
+                    await self._hydrate_compiler_inputs(metadata)
+                    return metadata
+                if (
+                    (not cached.is_verified or not cached.storage_layout)
+                    and self._source_check_is_fresh(cached)
+                ):
                     await self._hydrate_compiler_inputs(metadata)
                     return metadata
 
@@ -343,26 +352,21 @@ class ContractResolver:
 
         await self._hydrate_compiler_inputs(result)
 
-        # Cache only verified layouts. Missing Sourcify layouts remain raw and
-        # can be retried later without pinning an incomplete resolution.
-        if (
-            follow_proxy
-            and self.contract_repo
-            and block_number is None
-            and result.is_verified
-            and result.storage_layout
-        ):
+        # Cache every conclusive source lookup. Confirmed misses and verified
+        # identities without layouts expire separately from usable layouts.
+        if follow_proxy and self.contract_repo and block_number is None:
             await self.contract_repo.save(result)
-        elif (
-            follow_proxy
-            and self.contract_repo
-            and block_number is not None
-            and result.is_verified
-            and result.storage_layout
-        ):
+        elif follow_proxy and self.contract_repo and block_number is not None:
             await self.contract_repo.save_at_block(result, block_number)
 
         return result
+
+    def _source_check_is_fresh(self, row) -> bool:
+        checked_at = getattr(row, "source_checked_at", None)
+        if checked_at is None:
+            return False
+        age = datetime.utcnow() - checked_at
+        return age.total_seconds() <= self.settings.no_source_cache_ttl_seconds
 
     @staticmethod
     def _cache_layout_is_usable(layout: StorageLayout) -> bool:
@@ -646,16 +650,23 @@ class ContractResolver:
         self, chain_id: int, address: str
     ) -> Optional[VerificationResult]:
         """Fetch verified source from Sourcify or Etherscan."""
-        # Try Sourcify first
-        sourcify_result = await self._try_sourcify(chain_id, address)
-        if sourcify_result:
-            return sourcify_result
+        failures: list[str] = []
+        try:
+            sourcify_result = await self._try_sourcify(chain_id, address)
+            if sourcify_result:
+                return sourcify_result
+        except VerificationProviderError as exc:
+            failures.extend(exc.errors)
 
-        # Fall back to Etherscan
-        etherscan_result = await self._try_etherscan(chain_id, address)
-        if etherscan_result:
-            return etherscan_result
+        try:
+            etherscan_result = await self._try_etherscan(chain_id, address)
+            if etherscan_result:
+                return etherscan_result
+        except VerificationProviderError as exc:
+            failures.extend(exc.errors)
 
+        if failures:
+            raise VerificationProviderError(failures)
         return None
 
     async def _try_sourcify(
@@ -669,8 +680,12 @@ class ContractResolver:
                 url,
                 params={"fields": "sources,storageLayout,compilation"},
             )
-            if response.status_code != 200:
+            if response.status_code == 404:
                 return None
+            if response.status_code != 200:
+                raise VerificationProviderError(
+                    [f"sourcify HTTP {response.status_code}"]
+                )
 
             data = response.json()
             if not isinstance(data, dict):
@@ -708,8 +723,12 @@ class ContractResolver:
             )
         except httpx.RequestError as e:
             logger.warning(f"Sourcify request failed: {e}")
+            raise VerificationProviderError(
+                [f"sourcify {type(e).__name__}"]
+            ) from e
         except (TypeError, ValueError) as e:
             logger.warning(f"Invalid Sourcify response for {address}: {e}")
+            raise VerificationProviderError(["sourcify invalid response"]) from e
 
         return None
 
@@ -732,25 +751,34 @@ class ContractResolver:
         }
 
         try:
-                response = await self.http_client.get(base_url, params=params)
+            response = await self.http_client.get(base_url, params=params)
 
-                if response.status_code != 200:
+            if response.status_code != 200:
+                raise VerificationProviderError(
+                    [f"etherscan HTTP {response.status_code}"]
+                )
+
+            data = response.json()
+
+            if data.get("status") != "1":
+                detail = f"{data.get('message', '')} {data.get('result', '')}"
+                normalized = detail.lower()
+                if "not verified" in normalized or "no data found" in normalized:
                     return None
+                raise VerificationProviderError(["etherscan unavailable"])
 
-                data = response.json()
+            result = data.get("result", [{}])[0]
 
-                if data.get("status") != "1":
-                    return None
+            if not result.get("SourceCode"):
+                return None
 
-                result = data.get("result", [{}])[0]
-
-                if not result.get("SourceCode"):
-                    return None
-
-                return self._parse_etherscan_response(result)
+            return self._parse_etherscan_response(result)
 
         except httpx.RequestError as e:
             logger.warning(f"Etherscan request failed: {e}")
+            raise VerificationProviderError(
+                [f"etherscan {type(e).__name__}"]
+            ) from e
 
         return None
 

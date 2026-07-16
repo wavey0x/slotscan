@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from eth_abi import encode
@@ -6,11 +7,13 @@ from web3 import Web3
 
 from app.config import Settings
 from app.models.domain import (
+    ContractMetadata,
     StorageLayout,
     StorageType,
     StorageVariable,
     VerificationResult,
 )
+from app.models.errors import VerificationProviderError
 from app.services.namespace_storage import NamespaceStorageParser
 from app.services.resolver import ContractResolver
 from app.services.tracer.slot_resolver import SlotResolver
@@ -551,6 +554,58 @@ class _Resolver(ContractResolver):
 
 
 class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_provider_failure_is_not_reported_as_conclusive_source_miss(self):
+        resolver = ContractResolver(object(), Settings(), http_client=object())
+        resolver._try_sourcify = AsyncMock(
+            side_effect=VerificationProviderError(["sourcify timeout"])
+        )
+        resolver._try_etherscan = AsyncMock(return_value=None)
+
+        with self.assertRaises(VerificationProviderError):
+            await resolver._fetch_verification(1, ADDRESS)
+
+    async def test_fresh_historical_source_miss_uses_negative_cache(self):
+        row = SimpleNamespace(
+            is_proxy=False,
+            is_verified=False,
+            storage_layout=None,
+            source_checked_at=datetime.utcnow(),
+        )
+
+        class Repo:
+            async def get_at_block(self, chain_id, address, block_number):
+                return row
+
+            def to_metadata(self, cached):
+                return ContractMetadata(
+                    chain_id=1,
+                    address=ADDRESS,
+                    is_verified=False,
+                )
+
+        resolver = _Resolver(object(), Settings(), contract_repo=Repo())
+        resolver._check_is_contract = AsyncMock(
+            side_effect=AssertionError("fresh source miss must avoid provider work")
+        )
+
+        metadata = await resolver.resolve(1, ADDRESS, block_number=123)
+
+        self.assertFalse(metadata.is_verified)
+        resolver._check_is_contract.assert_not_awaited()
+
+    def test_negative_cache_expires_after_configured_ttl(self):
+        resolver = _Resolver(
+            object(),
+            Settings(NO_SOURCE_CACHE_TTL_SECONDS=900),
+        )
+        fresh = SimpleNamespace(source_checked_at=datetime.utcnow())
+        expired = SimpleNamespace(
+            source_checked_at=datetime.utcnow() - timedelta(seconds=901)
+        )
+
+        self.assertTrue(resolver._source_check_is_fresh(fresh))
+        self.assertFalse(resolver._source_check_is_fresh(expired))
+
     async def test_vyper_0216_prefers_exact_compiler_layout(self):
         class VyperResolver(_Resolver):
             async def _fetch_verification(self, chain_id, address):

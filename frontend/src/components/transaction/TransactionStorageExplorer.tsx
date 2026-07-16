@@ -13,6 +13,10 @@ import {
   ContractHistoryResponse,
   SlotChangeResponse,
 } from '@/lib/types';
+import {
+  contractDisplayLabel,
+  hasRetryableContractResolution,
+} from '@/lib/contract-resolution';
 
 type ViewMode = 'grouped' | 'timeline';
 type ValueMode = 'decoded' | 'hex';
@@ -25,6 +29,7 @@ interface TransactionStorageExplorerProps {
 function searchableContract(contract: ContractHistoryResponse, slot: SlotChangeResponse) {
   return [
     contract.name,
+    contractDisplayLabel(contract),
     contract.storage_address,
     ...contract.implementation_addresses,
     slot.slot,
@@ -35,7 +40,14 @@ function searchableContract(contract: ContractHistoryResponse, slot: SlotChangeR
 }
 
 export function TransactionStorageExplorer({ chain, txHash }: TransactionStorageExplorerProps) {
-  const { data, isLoading, error } = useTransactionStorageHistory(chain, txHash);
+  const {
+    data,
+    isLoading,
+    isFetching,
+    error,
+    refetch,
+    resolutionAutoRetryFinished,
+  } = useTransactionStorageHistory(chain, txHash);
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -127,7 +139,10 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
     !data.capabilities.state_reconciliation_complete && 'Replayed values did not fully reconcile with final state.',
     !data.capabilities.execution_order_available && 'Global execution order is unavailable.',
     !data.capabilities.code_attribution_complete && 'Some implementation/code addresses are unknown.',
+    hasRetryableContractResolution(data.contracts)
+      && 'Some contract names or storage layouts could not be resolved.',
   ].filter(Boolean) as string[];
+  const retryableResolution = hasRetryableContractResolution(data.contracts);
 
   const singleContract = data.contracts.length === 1 ? data.contracts[0] : null;
   const view: ViewMode = requestedView === 'timeline' && data.capabilities.execution_order_available
@@ -141,7 +156,14 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
         <div className="-mt-4 mb-5 text-[10px] uppercase tracking-wide text-gray-500">Raw slots</div>
       )}
 
-      <DataQuality warnings={warnings} />
+      <DataQuality
+        warnings={warnings}
+        action={retryableResolution && resolutionAutoRetryFinished ? {
+          label: isFetching ? 'Retrying…' : 'Retry resolution',
+          onClick: () => { void refetch(); },
+          disabled: isFetching,
+        } : undefined}
+      />
 
       <div className="mb-5 flex flex-wrap items-center gap-2 border-b border-gray-300 pb-3">
         <ViewSwitch

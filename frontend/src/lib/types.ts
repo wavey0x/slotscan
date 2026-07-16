@@ -194,6 +194,12 @@ export interface ContractHistoryCountsResponse {
   noop_writes: number;
 }
 
+export type ContractResolutionStatus =
+  | 'resolved'
+  | 'no_verified_source'
+  | 'timed_out'
+  | 'failed';
+
 export interface ContractHistoryResponse {
   storage_address: string;
   name: string | null;
@@ -204,6 +210,7 @@ export interface ContractHistoryResponse {
   first_write_step: number | null;
   last_write_step: number | null;
   layout_available: boolean;
+  resolution_status: ContractResolutionStatus;
   resolution: { resolved: number; total: number };
   counts: ContractHistoryCountsResponse;
   errors: string[];

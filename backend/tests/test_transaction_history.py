@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, TestCase
@@ -162,6 +163,32 @@ class _HistoryService(TransactionHistoryService):
         )
 
 
+class _CountingHistoryService(TransactionHistoryService):
+    async def _resolve_metadata(
+        self,
+        chain_id,
+        address,
+        block_number,
+        *,
+        follow_proxy=True,
+    ):
+        self.resolution_calls.append((address.lower(), follow_proxy))
+        key = (address.lower(), follow_proxy)
+        attempts = self.attempts.get(key, 0)
+        self.attempts[key] = attempts + 1
+        if getattr(self, "always_timeout", False):
+            raise asyncio.TimeoutError
+        if self.fail_first and attempts == 0:
+            raise RuntimeError("temporary provider failure")
+        return ContractMetadata(
+            chain_id=chain_id,
+            address=address,
+            name="ResolvedContract",
+            is_verified=True,
+            is_proxy=False,
+        )
+
+
 class TransactionOwnerTests(TestCase):
     def setUp(self):
         self.tracer = TransactionAnalysisService(
@@ -290,6 +317,99 @@ class PrestateRecoveryTests(TestCase):
 
 
 class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
+    async def test_non_proxy_self_code_reuses_owner_resolution(self):
+        tracer = TransactionAnalysisService(
+            _NoopProvider(),
+            Settings(MAX_SSTORE_OPS=100),
+            TypeDecoder(),
+            trace_cache_repo=_CachedArtifactRepository(artifact()),
+        )
+        service = _CountingHistoryService(
+            tracer=tracer,
+            web3_provider=_NoopProvider(),
+            settings=Settings(CONTRACT_RESOLUTION_RETRY_DELAY_SECONDS=0),
+            layout_parser=None,
+            http_client=None,
+        )
+        service.resolution_calls = []
+        service.attempts = {}
+        service.fail_first = False
+
+        result = await service.analyze(
+            1,
+            artifact().tx_hash,
+            storage_addresses=(ADDRESS_B,),
+        )
+
+        self.assertEqual(service.resolution_calls, [(ADDRESS_B, True)])
+        self.assertEqual(result.contracts[0].resolution_status, "resolved")
+
+    async def test_transient_owner_resolution_is_retried_once(self):
+        tracer = TransactionAnalysisService(
+            _NoopProvider(),
+            Settings(MAX_SSTORE_OPS=100),
+            TypeDecoder(),
+            trace_cache_repo=_CachedArtifactRepository(artifact()),
+        )
+        service = _CountingHistoryService(
+            tracer=tracer,
+            web3_provider=_NoopProvider(),
+            settings=Settings(CONTRACT_RESOLUTION_RETRY_DELAY_SECONDS=0),
+            layout_parser=None,
+            http_client=None,
+        )
+        service.resolution_calls = []
+        service.attempts = {}
+        service.fail_first = True
+
+        result = await service.analyze(
+            1,
+            artifact().tx_hash,
+            storage_addresses=(ADDRESS_B,),
+        )
+
+        self.assertEqual(
+            service.resolution_calls,
+            [(ADDRESS_B, True), (ADDRESS_B, True)],
+        )
+        self.assertEqual(result.contracts[0].resolution_status, "resolved")
+        self.assertEqual(result.contracts[0].errors, ())
+
+    async def test_repeated_timeout_is_reported_separately_from_source_miss(self):
+        tracer = TransactionAnalysisService(
+            _NoopProvider(),
+            Settings(MAX_SSTORE_OPS=100),
+            TypeDecoder(),
+            trace_cache_repo=_CachedArtifactRepository(artifact()),
+        )
+        service = _CountingHistoryService(
+            tracer=tracer,
+            web3_provider=_NoopProvider(),
+            settings=Settings(CONTRACT_RESOLUTION_RETRY_DELAY_SECONDS=0),
+            layout_parser=None,
+            http_client=None,
+        )
+        service.resolution_calls = []
+        service.attempts = {}
+        service.fail_first = False
+        service.always_timeout = True
+
+        result = await service.analyze(
+            1,
+            artifact().tx_hash,
+            storage_addresses=(ADDRESS_B,),
+        )
+
+        self.assertEqual(
+            service.resolution_calls,
+            [(ADDRESS_B, True), (ADDRESS_B, True)],
+        )
+        self.assertEqual(result.contracts[0].resolution_status, "timed_out")
+        self.assertEqual(
+            result.contracts[0].errors,
+            (f"{ADDRESS_B}: TimeoutError: historical resolution failed",),
+        )
+
     async def test_historical_resolution_uses_full_verification_fallback(self):
         service = TransactionHistoryService(
             tracer=None,
@@ -410,6 +530,7 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
             response.contracts[1].slots[0].classification,
             "reverted_only",
         )
+        self.assertEqual(response.contracts[1].resolution_status, "failed")
 
         single = await get_tx_diff(
             chain_id=1,
