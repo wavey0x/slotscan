@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { memo, useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { TransactionHeader } from '@/components/transaction/TransactionHeader';
 import { DataQuality } from '@/components/transaction/DataQuality';
 import { ContractSection, Timeline, TimelineEntry } from '@/components/transaction/TransactionStorageViews';
@@ -26,6 +26,9 @@ interface TransactionStorageExplorerProps {
   txHash: string;
 }
 
+const MemoizedContractSection = memo(ContractSection);
+const MemoizedTimeline = memo(Timeline);
+
 function searchableContract(contract: ContractHistoryResponse, slot: SlotChangeResponse) {
   return [
     contract.name,
@@ -48,15 +51,27 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
     refetch,
     resolutionAutoRetryFinished,
   } = useTransactionStorageHistory(chain, txHash);
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [search, setSearch] = useState('');
   const viewParam = searchParams.get('view');
-  const requestedView: ViewMode = viewParam === 'timeline' ? 'timeline' : 'grouped';
-  const valueMode: ValueMode = searchParams.get('values') === 'hex' ? 'hex' : 'decoded';
-  const showHex = valueMode === 'hex';
+  const urlView: ViewMode = viewParam === 'timeline' ? 'timeline' : 'grouped';
+  const urlValueMode: ValueMode = searchParams.get('values') === 'hex' ? 'hex' : 'decoded';
+  const [requestedView, setRequestedView] = useState<ViewMode>(urlView);
+  const [valueMode, setValueMode] = useState<ValueMode>(urlValueMode);
+  const deferredSearch = useDeferredValue(search);
+  const view: ViewMode = requestedView === 'timeline' && data?.capabilities.execution_order_available
+    ? 'timeline'
+    : 'grouped';
+  const deferredView = useDeferredValue(view);
+  const deferredValueMode = useDeferredValue(valueMode);
+  const showHex = deferredValueMode === 'hex';
   const focusParam = searchParams.get('focus')?.toLowerCase() || null;
+
+  useEffect(() => {
+    setRequestedView(urlView);
+    setValueMode(urlValueMode);
+  }, [urlValueMode, urlView]);
 
   useEffect(() => {
     if (!data || !focusParam) return;
@@ -70,30 +85,32 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
   }, [data, focusParam]);
 
   const selectView = (mode: ViewMode) => {
-    const next = new URLSearchParams(searchParams.toString());
+    setRequestedView(mode);
+    const next = new URLSearchParams(window.location.search);
     next.set('view', mode);
-    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+    window.history.replaceState(null, '', `${pathname}?${next.toString()}`);
   };
 
   const selectValueMode = (mode: ValueMode) => {
-    const next = new URLSearchParams(searchParams.toString());
+    setValueMode(mode);
+    const next = new URLSearchParams(window.location.search);
     if (mode === 'hex') next.set('values', 'hex');
     else next.delete('values');
     const query = next.toString();
-    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    window.history.replaceState(null, '', query ? `${pathname}?${query}` : pathname);
   };
 
   const filteredContracts = useMemo(() => {
-    if (!data) return [];
-    const query = search.trim().toLowerCase();
+    if (!data || deferredView !== 'grouped') return [];
+    const query = deferredSearch.trim().toLowerCase();
     if (!query) return data.contracts;
     return data.contracts.map((contract) => ({
       ...contract,
       slots: contract.slots.filter((slot) => searchableContract(contract, slot).includes(query)),
     })).filter((contract) => contract.slots.length > 0);
-  }, [data, search]);
+  }, [data, deferredSearch, deferredView]);
 
-  const timeline = useMemo(() => {
+  const timelineEntries = useMemo(() => {
     if (!data) return [];
     const contracts = new Map(data.contracts.map((contract) => [contract.storage_address.toLowerCase(), contract]));
     const slots = new Map<string, SlotChangeResponse>();
@@ -109,17 +126,22 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
         event_index: eventIndex,
       })))
     ));
-    const query = search.trim().toLowerCase();
     return references.map((reference): TimelineEntry | null => {
       const contract = contracts.get(reference.storage_address.toLowerCase());
       const slot = slots.get(`${reference.storage_address.toLowerCase()}:${reference.slot}`);
       const event = slot?.changes[reference.event_index];
       if (!contract || !slot || !event) return null;
-      if (query && !searchableContract(contract, slot).includes(query)) return null;
       return { contract, slot, event, ordinal: reference.ordinal };
     }).filter((entry): entry is TimelineEntry => entry !== null)
       .sort((a, b) => (a.event.step ?? Number.MAX_SAFE_INTEGER) - (b.event.step ?? Number.MAX_SAFE_INTEGER) || a.ordinal - b.ordinal);
-  }, [data, search]);
+  }, [data]);
+
+  const timeline = useMemo(() => {
+    if (deferredView !== 'timeline') return [];
+    const query = deferredSearch.trim().toLowerCase();
+    if (!query) return timelineEntries;
+    return timelineEntries.filter(({ contract, slot }) => searchableContract(contract, slot).includes(query));
+  }, [deferredSearch, deferredView, timelineEntries]);
 
   if (isLoading) {
     return <Loading message="Analyzing transaction" subtitle="Large traces may take up to two minutes." />;
@@ -145,9 +167,6 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
   const retryableResolution = hasRetryableContractResolution(data.contracts);
 
   const singleContract = data.contracts.length === 1 ? data.contracts[0] : null;
-  const view: ViewMode = requestedView === 'timeline' && data.capabilities.execution_order_available
-    ? 'timeline'
-    : 'grouped';
   const showSearch = data.summary.slots_written > 15 || data.contracts.length > 3;
   return (
     <div>
@@ -169,27 +188,28 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
         className="mb-5 flex flex-wrap items-end gap-x-5 gap-y-3 border-b border-gray-300 pb-3"
         data-testid="transaction-controls"
       >
-        <ViewSwitch
-          label="View"
-          showLabel={false}
-          variant="tabs"
-          value={view}
-          options={[
-            { value: 'grouped', label: 'Grouped' },
-            { value: 'timeline', label: 'Timeline', disabled: !data.capabilities.execution_order_available },
-          ]}
-          onChange={selectView}
-        />
-        <ViewSwitch
-          label="Values"
-          showLabel={false}
-          value={valueMode}
-          options={[
-            { value: 'decoded', label: 'Decoded' },
-            { value: 'hex', label: 'Hex' },
-          ]}
-          onChange={selectValueMode}
-        />
+        <div className="flex shrink-0 flex-col items-start gap-0.5" data-testid="transaction-view-controls">
+          <ViewSwitch
+            label="View"
+            showLabel={false}
+            value={view}
+            options={[
+              { value: 'grouped', label: 'Grouped' },
+              { value: 'timeline', label: 'Timeline', disabled: !data.capabilities.execution_order_available },
+            ]}
+            onChange={selectView}
+          />
+          <ViewSwitch
+            label="Values"
+            showLabel={false}
+            value={valueMode}
+            options={[
+              { value: 'decoded', label: 'Decoded' },
+              { value: 'hex', label: 'Hex' },
+            ]}
+            onChange={selectValueMode}
+          />
+        </div>
         {showSearch && (
           <Input
             value={search}
@@ -200,18 +220,18 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
         )}
       </div>
 
-      {view === 'grouped' ? (
+      {deferredView === 'grouped' ? (
         <div>
           <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 border-b border-gray-200 px-0 py-1 text-[9px] font-medium uppercase tracking-wide text-gray-400">
             <span className="pl-5">Contract</span>
             <span className="text-right">Activity</span>
           </div>
           {filteredContracts.map((contract) => (
-            <ContractSection
+            <MemoizedContractSection
               key={contract.storage_address}
               contract={contract}
               chain={chain}
-              forceOpen={Boolean(search.trim())}
+              forceOpen={Boolean(deferredSearch.trim())}
               defaultOpen={focusParam === contract.storage_address.toLowerCase()}
               executionOrderAvailable={data.capabilities.execution_order_available}
               isComplete={data.is_complete}
@@ -221,7 +241,7 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
           {filteredContracts.length === 0 && <div className="border border-gray-300 p-8 text-center text-gray-500">No writes match the search</div>}
         </div>
       ) : (
-        <Timeline entries={timeline} chain={chain} showContract={!singleContract} showHex={showHex} />
+        <MemoizedTimeline entries={timeline} chain={chain} showContract={!singleContract} showHex={showHex} />
       )}
     </div>
   );
