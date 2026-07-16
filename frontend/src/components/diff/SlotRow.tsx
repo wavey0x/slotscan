@@ -107,7 +107,6 @@ export function SlotRow({
                 display={slotNumber}
                 value={slot.slot}
                 colorClass="text-xs text-gray-500 font-mono"
-                forceActions
               />
             </DetailPopover>
           </td>
@@ -237,7 +236,6 @@ export function SlotRow({
                       {...storageHoverProps(beforeDecoded, slot.before.value_encoded)}
                       chainId={chainId}
                       colorClass="text-xs font-mono text-gray-300"
-                      forceActions
                       wrap
                     />
                   }
@@ -247,7 +245,6 @@ export function SlotRow({
                       {...storageHoverProps(afterDecoded, slot.after.value_encoded)}
                       chainId={chainId}
                       colorClass={cn('text-xs font-mono', isFinalZero ? 'text-gray-300' : 'text-gray-900')}
-                      forceActions
                       wrap
                     />
                   }
@@ -262,7 +259,6 @@ export function SlotRow({
                 display={slotNumber}
                 value={slot.slot}
                 colorClass="text-xs text-gray-500 font-mono"
-                forceActions
               />
             </DetailPopover>
           </td>

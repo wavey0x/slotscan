@@ -158,8 +158,8 @@ function configStructSlot({
   slot: number;
   member: string;
   typeLabel: string;
-  beforeValue: string;
-  afterValue: string;
+  beforeValue: unknown;
+  afterValue: unknown;
   beforeEncoded: string;
   afterEncoded: string;
   step: number;
@@ -222,6 +222,51 @@ function configStructSlot({
       opcode: 'SSTORE',
       namespace: 'persistent',
     }],
+  };
+}
+
+function configScalarSlot({
+  slot,
+  variable,
+  typeLabel,
+  beforeValue,
+  afterValue,
+  beforeEncoded,
+  afterEncoded,
+  step,
+}: {
+  slot: number;
+  variable: string;
+  typeLabel: string;
+  beforeValue: unknown;
+  afterValue: unknown;
+  beforeEncoded: string;
+  afterEncoded: string;
+  step: number;
+}) {
+  const base = configStructSlot({
+    slot,
+    member: variable,
+    typeLabel,
+    beforeValue,
+    afterValue,
+    beforeEncoded,
+    afterEncoded,
+    step,
+  });
+  const before = { value_encoded: beforeEncoded, value_decoded: beforeValue };
+  const after = { value_encoded: afterEncoded, value_decoded: afterValue };
+
+  return {
+    ...base,
+    variable_name: variable,
+    variable_path: variable,
+    type_label: typeLabel,
+    before,
+    after,
+    packed_fields: null,
+    struct_definition: null,
+    changes: base.changes.map((change) => ({ ...change, before, after })),
   };
 }
 
@@ -353,6 +398,26 @@ test('timeline names struct members and stays readable on mobile', async ({ page
       afterEncoded: newRateEncoded,
       step: 1425,
     }),
+    configStructSlot({
+      slot: 8,
+      member: 'processed',
+      typeLabel: 'bool',
+      beforeValue: false,
+      afterValue: true,
+      beforeEncoded: `0x${'0'.repeat(64)}`,
+      afterEncoded: `0x${'0'.repeat(63)}1`,
+      step: 1429,
+    }),
+    configScalarSlot({
+      slot: 9,
+      variable: '_status',
+      typeLabel: 'uint8',
+      beforeValue: 1,
+      afterValue: 2,
+      beforeEncoded: `0x${'0'.repeat(63)}1`,
+      afterEncoded: `0x${'0'.repeat(63)}2`,
+      step: 1431,
+    }),
   ];
   const contract = resolutionContract({
     storage_address: '0x6666666666666666666666666666666666666666',
@@ -361,9 +426,9 @@ test('timeline names struct members and stays readable on mobile', async ({ page
     is_verified: true,
     layout_available: true,
     counts: {
-      slots_written: 2,
-      sstore_events: 2,
-      net_changed_slots: 1,
+      slots_written: 4,
+      sstore_events: 4,
+      net_changed_slots: 3,
       restored_slots: 0,
       reverted_only_slots: 0,
       noop_only_slots: 1,
@@ -395,10 +460,18 @@ test('timeline names struct members and stays readable on mobile', async ({ page
 
   const noopRow = page.getByTestId('timeline-event').filter({ hasText: '_defaultConfigData.oracle' });
   const changedRow = page.getByTestId('timeline-event').filter({ hasText: '_defaultConfigData.rateCalculator' });
+  const booleanRow = page.getByTestId('timeline-event').filter({ hasText: '_defaultConfigData.processed' });
+  const smallNumberRow = page.getByTestId('timeline-event').filter({ hasText: '_status' });
   await expect(noopRow.getByTestId('timeline-value')).toContainText(`${oracle}→${oracle}`);
+  await expect(noopRow.getByRole('button', { name: 'Copy previous oracle' })).toBeVisible();
+  await expect(noopRow.getByRole('button', { name: 'Copy new oracle' })).toBeVisible();
   await expect(changedRow.getByTestId('timeline-value')).toContainText(oldRate);
   await expect(changedRow.getByTestId('timeline-value')).toContainText(newRate);
   await expect(changedRow.getByTestId('timeline-value')).not.toContainText('rateCalculator');
+  await expect(booleanRow.getByTestId('timeline-value')).toContainText('false→true');
+  await expect(booleanRow.getByRole('button', { name: /Copy (previous|new)/ })).toHaveCount(0);
+  await expect(smallNumberRow.getByTestId('timeline-value')).toContainText('1→2');
+  await expect(smallNumberRow.getByRole('button', { name: /Copy (previous|new)/ })).toHaveCount(0);
 
   const changedRowBox = await changedRow.boundingBox();
   expect(changedRowBox).not.toBeNull();
@@ -419,6 +492,18 @@ test('timeline names struct members and stays readable on mobile', async ({ page
   const valueBox = await changedRow.getByTestId('timeline-value').boundingBox();
   expect(valueBox).not.toBeNull();
   expect(valueBox!.width).toBeGreaterThan(200);
+
+  await page.getByRole('button', { name: 'Grouped' }).click();
+  const contractSection = page.getByRole('heading', { name: 'ResupplyPairDeployer' }).locator('xpath=ancestor::section');
+  await contractSection.getByTestId('contract-toggle').click();
+  const groupedAddressRow = contractSection.getByText('rateCalculator', { exact: true }).locator('xpath=ancestor::tr');
+  const groupedBooleanRow = contractSection.getByText('processed', { exact: true }).locator('xpath=ancestor::tr');
+  const groupedSmallNumberRow = contractSection.getByText('_status', { exact: true }).locator('xpath=ancestor::tr');
+  await expect(groupedAddressRow.getByTestId('value-diff').getByRole('button', { name: 'Copy value' })).toHaveCount(2);
+  await expect(groupedBooleanRow.getByTestId('value-diff').getByRole('button', { name: 'Copy value' })).toHaveCount(0);
+  await expect(groupedBooleanRow.getByRole('link')).toHaveCount(0);
+  await expect(groupedSmallNumberRow.getByTestId('value-diff').getByRole('button', { name: 'Copy value' })).toHaveCount(0);
+  await expect(groupedSmallNumberRow.getByRole('button', { name: 'Copy value' })).toHaveCount(1);
 });
 
 test('transaction summary, controls, and copy actions stay compact at wide widths', async ({ page }) => {

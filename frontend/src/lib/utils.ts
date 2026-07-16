@@ -13,6 +13,32 @@ export function isTxHash(value: string): boolean {
   return /^0x[a-fA-F0-9]{64}$/.test(value);
 }
 
+const COPY_TEXT_LENGTH = 20;
+const COPY_NUMERIC_DIGITS = 12;
+
+export function shouldShowCopyAction(value: unknown, display?: string): boolean {
+  if (value === null || value === undefined || typeof value === 'boolean') return false;
+
+  let raw: string;
+  try {
+    raw = typeof value === 'object'
+      ? JSON.stringify(value) ?? String(value)
+      : String(value);
+  } catch {
+    raw = String(value);
+  }
+  if (display !== undefined && display !== raw) return true;
+  if (isAddress(raw) || isTxHash(raw)) return true;
+  if (/^0x[a-fA-F0-9]{8,}$/.test(raw)) return true;
+
+  const numeric = raw.replace(/,/g, '');
+  if (/^-?\d+$/.test(numeric)) {
+    return numeric.replace(/^-/, '').length > COPY_NUMERIC_DIGITS;
+  }
+
+  return raw.length > COPY_TEXT_LENGTH;
+}
+
 export function truncateAddress(address: string): string {
   if (address.length !== 42) return address;
   return `${address.slice(0, 6)}...${address.slice(-4)}`;

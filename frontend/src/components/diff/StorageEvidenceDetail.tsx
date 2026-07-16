@@ -107,7 +107,6 @@ export function StorageEvidenceDetail({
                 value={String(slot.array_index)}
                 chainId={chainId}
                 colorClass="font-mono text-xs text-gray-200"
-                forceActions
               />
             </div>
           </DetailSection>
@@ -130,7 +129,6 @@ export function StorageEvidenceDetail({
                         value={formatted.full}
                         chainId={chainId}
                         colorClass="font-mono text-xs text-gray-200"
-                        forceActions
                       />
                     )}
                   </div>

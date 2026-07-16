@@ -1,7 +1,7 @@
 'use client';
 
 import { ReactNode } from 'react';
-import { cn, isAddress, isTxHash } from '@/lib/utils';
+import { cn, isAddress, isTxHash, shouldShowCopyAction } from '@/lib/utils';
 import { CopyButton } from './CopyButton';
 import { DetailPopover } from './DetailPopover';
 
@@ -10,6 +10,8 @@ interface HoverCellProps {
   display: string;
   /** Full value for copy/tooltip */
   value: string;
+  /** Semantic value used to decide whether a copy action is useful */
+  copyActionValue?: unknown;
   /** Chain ID for etherscan links */
   chainId?: string | number;
   /** Optional tooltip content override */
@@ -18,8 +20,6 @@ interface HoverCellProps {
   className?: string;
   /** Text color class */
   colorClass?: string;
-  /** Force actions to be visible even when display === value */
-  forceActions?: boolean;
   /** Accessible label for the copy action */
   copyLabel?: string;
   /** Wrap long display values instead of truncating them */
@@ -54,16 +54,20 @@ function getEtherscanUrl(chainId: string | number, value: string): string | null
 export function HoverCell({
   display,
   value,
+  copyActionValue,
   chainId,
   tooltip,
   className,
   colorClass = 'text-gray-900',
-  forceActions = false,
   copyLabel = 'Copy value',
   wrap = false,
 }: HoverCellProps) {
-  const etherscanUrl = chainId ? getEtherscanUrl(chainId, value) : null;
-  const showActions = forceActions || display !== value;
+  const explorerValue = copyActionValue === undefined ? value : String(copyActionValue);
+  const etherscanUrl = chainId ? getEtherscanUrl(chainId, explorerValue) : null;
+  const showActions = shouldShowCopyAction(
+    copyActionValue === undefined ? value : copyActionValue,
+    display,
+  );
 
   const tooltipContent = tooltip || (
     <span className="font-mono break-all max-w-xs">{value}</span>

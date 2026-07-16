@@ -12,6 +12,7 @@ export function storageHoverProps(decoded: unknown, encoded: string | null) {
   const fallback = encoded ?? 'unknown';
   return {
     value: decoded !== null && decoded !== undefined ? getCopyValue(decoded, fallback) : fallback,
+    copyActionValue: decoded ?? fallback,
     tooltip: getTooltipValue(decoded, fallback),
   };
 }

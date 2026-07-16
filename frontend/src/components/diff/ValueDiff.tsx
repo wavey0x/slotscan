@@ -1,6 +1,6 @@
 import { ReactNode } from 'react';
 import { CopyButton } from '@/components/ui/CopyButton';
-import { cn, formatDecodedValue } from '@/lib/utils';
+import { cn, formatDecodedValue, shouldShowCopyAction } from '@/lib/utils';
 
 interface ValueDiffProps {
   before: ReactNode;
@@ -89,15 +89,39 @@ function FieldValue({
   className?: string;
   label: string;
 }) {
-  const missing = value === undefined;
+  if (value === undefined) {
+    return <span className={cn('min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]', className)}>—</span>;
+  }
 
   return (
+    <CopyableValue
+      value={value}
+      display={fieldDisplay(value)}
+      copyValue={fieldCopyValue(value)}
+      label={label}
+      className={className}
+    />
+  );
+}
+
+export function CopyableValue({
+  value,
+  display,
+  copyValue,
+  label,
+  className,
+}: {
+  value: unknown;
+  display: string;
+  copyValue: string;
+  label: string;
+  className?: string;
+}) {
+  return (
     <span className="inline-flex min-w-0 max-w-full items-start">
-      <span className={cn('min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]', className)}>
-        {fieldDisplay(value)}
-      </span>
-      {!missing && (
-        <CopyButton value={fieldCopyValue(value)} label={label} className="-my-1" />
+      <span className={cn('min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]', className)}>{display}</span>
+      {shouldShowCopyAction(value, display) && (
+        <CopyButton value={copyValue} label={label} className="-my-1" />
       )}
     </span>
   );

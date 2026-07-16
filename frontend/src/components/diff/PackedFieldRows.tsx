@@ -50,14 +50,14 @@ export function PackedFieldRow({
         <ValueDiff
           beforeClassName="text-gray-300"
           afterClassName={finalIsZero ? 'text-gray-300' : 'text-gray-900'}
-          before={<HoverCell display={initialDisplay} {...storageHoverProps(field.before.value_decoded, initialEncoded)} chainId={chainId} colorClass="font-mono text-xs text-gray-300" forceActions />}
-          after={<HoverCell display={finalDisplay} {...storageHoverProps(field.after.value_decoded, finalEncoded)} chainId={chainId} colorClass={cn('font-mono text-xs', finalIsZero ? 'text-gray-300' : 'text-gray-900')} forceActions />}
+          before={<HoverCell display={initialDisplay} {...storageHoverProps(field.before.value_decoded, initialEncoded)} chainId={chainId} colorClass="font-mono text-xs text-gray-300" />}
+          after={<HoverCell display={finalDisplay} {...storageHoverProps(field.after.value_decoded, finalEncoded)} chainId={chainId} colorClass={cn('font-mono text-xs', finalIsZero ? 'text-gray-300' : 'text-gray-900')} />}
         />
       </td>
       <td className="w-8 px-1 py-0 align-top">
         {slotInfo && (
           <DetailPopover content={<div className="break-all font-mono text-xs text-gray-100">{slotInfo.full}</div>}>
-            <HoverCell display={slotInfo.display} value={slotInfo.full} colorClass="font-mono text-xs text-gray-500" forceActions />
+            <HoverCell display={slotInfo.display} value={slotInfo.full} colorClass="font-mono text-xs text-gray-500" />
           </DetailPopover>
         )}
       </td>

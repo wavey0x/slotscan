@@ -6,11 +6,11 @@ import { ExternalLink } from 'lucide-react';
 import { SlotHistoryTable } from '@/components/diff/DiffTable';
 import { KeyedVariablePath } from '@/components/diff/KeyedVariablePath';
 import { StorageTable, StorageTableColumns, StorageTableHeader, storageCellClass } from '@/components/diff/StorageTable';
-import { isStructuredDecodedValue, StructuredValueDiff, ValueDiff } from '@/components/diff/ValueDiff';
+import { CopyableValue, isStructuredDecodedValue, StructuredValueDiff, ValueDiff } from '@/components/diff/ValueDiff';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { getAddressExplorerUrl } from '@/lib/constants';
 import { ContractHistoryResponse, SlotChangeResponse, StorageChangeResponse } from '@/lib/types';
-import { cn, formatDecodedValue, truncateAddress, truncateHash } from '@/lib/utils';
+import { cn, formatDecodedValue, getCopyValue, truncateAddress, truncateHash } from '@/lib/utils';
 import { slotReferenceDisplay } from '@/components/diff/slotDisplay';
 import {
   contractActivityStatus,
@@ -32,6 +32,17 @@ function eventValue(event: StorageChangeResponse, side: 'before' | 'after', show
   return pair.value_decoded === null || pair.value_decoded === undefined
     ? pair.value_encoded ?? 'unknown'
     : formatDecodedValue(pair.value_decoded);
+}
+
+function eventCopyValue(event: StorageChangeResponse, side: 'before' | 'after', showHex: boolean) {
+  const pair = event[side];
+  const encoded = pair.value_encoded ?? 'unknown';
+  return showHex ? encoded : getCopyValue(pair.value_decoded, encoded);
+}
+
+function eventRawValue(event: StorageChangeResponse, side: 'before' | 'after', showHex: boolean) {
+  const pair = event[side];
+  return showHex ? pair.value_encoded : pair.value_decoded ?? pair.value_encoded;
 }
 
 function timelineStructMember(slot: SlotChangeResponse) {
@@ -188,7 +199,26 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                     showUnchanged={event.effect === 'noop'}
                   />
                 ) : (
-                  <ValueDiff before={eventValue(event, 'before', showHex)} after={eventValue(event, 'after', showHex)} beforeClassName="text-gray-400" afterClassName="text-gray-900" />
+                  <ValueDiff
+                    before={(
+                      <CopyableValue
+                        value={eventRawValue(event, 'before', showHex)}
+                        display={eventValue(event, 'before', showHex)}
+                        copyValue={eventCopyValue(event, 'before', showHex)}
+                        label="Copy previous value"
+                      />
+                    )}
+                    after={(
+                      <CopyableValue
+                        value={eventRawValue(event, 'after', showHex)}
+                        display={eventValue(event, 'after', showHex)}
+                        copyValue={eventCopyValue(event, 'after', showHex)}
+                        label="Copy new value"
+                      />
+                    )}
+                    beforeClassName="text-gray-400"
+                    afterClassName="text-gray-900"
+                  />
                 )}
                 {event.frame_outcome === 'reverted' && <div className="mt-0.5 text-[9px] uppercase tracking-wide text-amber-600">reverted</div>}
               </td>
