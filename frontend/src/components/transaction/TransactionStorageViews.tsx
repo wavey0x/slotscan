@@ -6,7 +6,7 @@ import { ExternalLink } from 'lucide-react';
 import { SlotHistoryTable } from '@/components/diff/DiffTable';
 import { KeyedVariablePath } from '@/components/diff/KeyedVariablePath';
 import { StorageTable, StorageTableColumns, StorageTableHeader, storageCellClass } from '@/components/diff/StorageTable';
-import { ValueDiff } from '@/components/diff/ValueDiff';
+import { isStructuredDecodedValue, StructuredValueDiff, ValueDiff } from '@/components/diff/ValueDiff';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { getAddressExplorerUrl } from '@/lib/constants';
 import { ContractHistoryResponse, SlotChangeResponse, StorageChangeResponse } from '@/lib/types';
@@ -163,7 +163,13 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
               )}
             </td>
             <td className={`${storageCellClass} min-w-0 overflow-hidden font-mono`}>
-              <ValueDiff before={eventValue(event, 'before', showHex)} after={eventValue(event, 'after', showHex)} beforeClassName="truncate text-gray-400" afterClassName="truncate text-gray-900" />
+              {!showHex
+                && isStructuredDecodedValue(event.before.value_decoded)
+                && isStructuredDecodedValue(event.after.value_decoded) ? (
+                <StructuredValueDiff before={event.before.value_decoded} after={event.after.value_decoded} />
+              ) : (
+                <ValueDiff before={eventValue(event, 'before', showHex)} after={eventValue(event, 'after', showHex)} beforeClassName="text-gray-400" afterClassName="text-gray-900" />
+              )}
               {event.frame_outcome === 'reverted' && <div className="mt-0.5 text-[9px] uppercase tracking-wide text-amber-600">reverted</div>}
             </td>
             <td className={`${storageCellClass} min-w-0 font-mono text-gray-500`} title={slot.slot}>

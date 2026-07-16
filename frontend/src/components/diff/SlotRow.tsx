@@ -15,7 +15,7 @@ import {
 } from '@/lib/utils';
 import { HoverCell } from '@/components/ui/HoverCell';
 import { DetailPopover } from '@/components/ui/DetailPopover';
-import { ValueDiff } from './ValueDiff';
+import { isStructuredDecodedValue, StructuredValueDiff, ValueDiff } from './ValueDiff';
 import { KeyedVariablePath } from './KeyedVariablePath';
 import { StorageEvidenceDetail } from './StorageEvidenceDetail';
 import { InterimPackedChangeRows, PackedFieldRow } from './PackedFieldRows';
@@ -216,6 +216,17 @@ export function SlotRow({
               const afterDecoded = singlePackedField ? singlePackedField.after.value_decoded : slot.after.value_decoded;
               const isFinalZero = finalValue === '0' || finalValue === 'false' || storageValueIsZero(slot.after.value_encoded, afterDecoded);
 
+              if (!showHex && isStructuredDecodedValue(beforeDecoded) && isStructuredDecodedValue(afterDecoded)) {
+                return (
+                  <StructuredValueDiff
+                    before={beforeDecoded}
+                    after={afterDecoded}
+                    beforeClassName="text-gray-300"
+                    afterClassName={isFinalZero ? 'text-gray-300' : 'text-gray-900'}
+                  />
+                );
+              }
+
               return (
                 <ValueDiff
                   beforeClassName="text-gray-300"
@@ -227,6 +238,7 @@ export function SlotRow({
                       chainId={chainId}
                       colorClass="text-xs font-mono text-gray-300"
                       forceActions
+                      wrap
                     />
                   }
                   after={
@@ -236,6 +248,7 @@ export function SlotRow({
                       chainId={chainId}
                       colorClass={cn('text-xs font-mono', isFinalZero ? 'text-gray-300' : 'text-gray-900')}
                       forceActions
+                      wrap
                     />
                   }
                 />
@@ -306,26 +319,39 @@ export function SlotRow({
               </div>
             </td>
             <td className="pl-3 py-0.5 align-top">
-              <ValueDiff
-                beforeClassName="text-gray-300"
-                afterClassName={storageValueIsZero(change.after.value_encoded, change.after.value_decoded) ? 'text-gray-300' : 'text-gray-900'}
-                before={
-                  <HoverCell
-                    display={oldVal}
-                    {...storageHoverProps(change.before.value_decoded, change.before.value_encoded)}
-                    chainId={chainId}
-                    colorClass="text-xs font-mono text-gray-300"
-                  />
-                }
-                after={
-                  <HoverCell
-                    display={newVal}
-                    {...storageHoverProps(change.after.value_decoded, change.after.value_encoded)}
-                    chainId={chainId}
-                    colorClass={cn('text-xs font-mono', storageValueIsZero(change.after.value_encoded, change.after.value_decoded) ? 'text-gray-300' : 'text-gray-900')}
-                  />
-                }
-              />
+              {!showHex
+                && isStructuredDecodedValue(change.before.value_decoded)
+                && isStructuredDecodedValue(change.after.value_decoded) ? (
+                <StructuredValueDiff
+                  before={change.before.value_decoded}
+                  after={change.after.value_decoded}
+                  beforeClassName="text-gray-300"
+                  afterClassName={storageValueIsZero(change.after.value_encoded, change.after.value_decoded) ? 'text-gray-300' : 'text-gray-900'}
+                />
+              ) : (
+                <ValueDiff
+                  beforeClassName="text-gray-300"
+                  afterClassName={storageValueIsZero(change.after.value_encoded, change.after.value_decoded) ? 'text-gray-300' : 'text-gray-900'}
+                  before={
+                    <HoverCell
+                      display={oldVal}
+                      {...storageHoverProps(change.before.value_decoded, change.before.value_encoded)}
+                      chainId={chainId}
+                      colorClass="text-xs font-mono text-gray-300"
+                      wrap
+                    />
+                  }
+                  after={
+                    <HoverCell
+                      display={newVal}
+                      {...storageHoverProps(change.after.value_decoded, change.after.value_encoded)}
+                      chainId={chainId}
+                      colorClass={cn('text-xs font-mono', storageValueIsZero(change.after.value_encoded, change.after.value_decoded) ? 'text-gray-300' : 'text-gray-900')}
+                      wrap
+                    />
+                  }
+                />
+              )}
             </td>
             <td className="px-1 py-0.5 align-top" />
             {showStep && (

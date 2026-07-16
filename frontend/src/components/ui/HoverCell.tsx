@@ -22,6 +22,8 @@ interface HoverCellProps {
   forceActions?: boolean;
   /** Accessible label for the copy action */
   copyLabel?: string;
+  /** Wrap long display values instead of truncating them */
+  wrap?: boolean;
 }
 
 function getEtherscanUrl(chainId: string | number, value: string): string | null {
@@ -58,6 +60,7 @@ export function HoverCell({
   colorClass = 'text-gray-900',
   forceActions = false,
   copyLabel = 'Copy value',
+  wrap = false,
 }: HoverCellProps) {
   const etherscanUrl = chainId ? getEtherscanUrl(chainId, value) : null;
   const showActions = forceActions || display !== value;
@@ -67,7 +70,7 @@ export function HoverCell({
   );
 
   return (
-    <DetailPopover content={tooltipContent} delay={300}>
+    <DetailPopover content={tooltipContent} delay={300} className={wrap ? 'min-w-0 max-w-full' : undefined}>
       <span
         className={cn(
           'group/cell inline-flex max-w-full items-center cursor-default',
@@ -79,12 +82,20 @@ export function HoverCell({
             href={etherscanUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className={cn('inline-block max-w-full truncate align-bottom font-mono hover:underline', colorClass)}
+            className={cn(
+              'inline-block max-w-full align-bottom font-mono hover:underline',
+              wrap ? 'whitespace-pre-wrap break-words [overflow-wrap:anywhere]' : 'truncate',
+              colorClass,
+            )}
           >
             {display}
           </a>
         ) : (
-          <span className={cn('inline-block max-w-full truncate align-bottom font-mono', colorClass)}>
+          <span className={cn(
+            'inline-block max-w-full align-bottom font-mono',
+            wrap ? 'whitespace-pre-wrap break-words [overflow-wrap:anywhere]' : 'truncate',
+            colorClass,
+          )}>
             {display}
           </span>
         )}

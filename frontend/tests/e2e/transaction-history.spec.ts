@@ -80,6 +80,71 @@ function resolutionResponse(contracts: ReturnType<typeof resolutionContract>[]) 
   };
 }
 
+function structuredValueSlot() {
+  const before = {
+    value_encoded: `0x${'00'.repeat(32)}`,
+    value_decoded: {
+      duration: '157680000',
+      amount: '9999999999999999960000000',
+      claimed: '0',
+    },
+  };
+  const after = {
+    value_encoded: `0x${'01'.repeat(32)}`,
+    value_decoded: {
+      duration: '157680000',
+      amount: '9999999999999999960000000',
+      claimed: '2000000000000000000',
+    },
+  };
+
+  return {
+    slot: `0x${'6d'.repeat(32)}`,
+    slot_decimal: '49344',
+    is_static_slot: false,
+    provenance: 'trace',
+    confidence: 'exact',
+    namespace: 'persistent',
+    net_changed: true,
+    classification: 'net_changed',
+    first_write_step: 1044,
+    last_write_step: 1044,
+    event_count: 1,
+    state_values_known: true,
+    variable_name: 'userVests',
+    variable_path: 'userVests[0x12340000000000000000000000000000000000e8]',
+    resolved_paths: [],
+    type_label: 'Vest',
+    params: [{ type: 'address', value: '0x12340000000000000000000000000000000000e8', label: null }],
+    mapping_base_slot: 6,
+    is_mapping: true,
+    is_dynamic_array: false,
+    array_index: null,
+    encoding: 'mapping',
+    value_type: 'Vest',
+    before,
+    after,
+    packed_fields: null,
+    struct_field: null,
+    struct_definition: null,
+    changes: [{
+      before,
+      after,
+      pc: 1,
+      step: 1044,
+      effect: 'applied',
+      storage_address: '0x6666666666666666666666666666666666666666',
+      code_address: '0x6666666666666666666666666666666666666666',
+      changed_value: true,
+      frame_outcome: 'applied',
+      frame_id: 1,
+      depth: 1,
+      opcode: 'SSTORE',
+      namespace: 'persistent',
+    }],
+  };
+}
+
 test('home search accepts a transaction hash and opens transaction-wide history', async ({ page }) => {
   await page.goto('/');
   await page.getByPlaceholder('Contract address or transaction hash (0x...)').fill(SIMPLE_TX);
@@ -147,6 +212,36 @@ test('unnamed contracts distinguish layout, source, and raw-slot states', async 
   const named = page.getByRole('heading', { name: 'NamedWithoutLayout' }).locator('xpath=ancestor::section');
   await expect(named.getByText('layout unavailable · raw slots', { exact: true })).toBeVisible();
   await expect(page.getByText('Unresolved contract', { exact: true })).toHaveCount(0);
+});
+
+test('structured values show only changed fields without spilling', async ({ page }) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  const contract = resolutionContract({
+    storage_address: '0x6666666666666666666666666666666666666666',
+    code_addresses: ['0x6666666666666666666666666666666666666666'],
+    name: 'VestManager',
+    is_verified: true,
+    layout_available: true,
+    resolution: { resolved: 1, total: 1 },
+    slots: [structuredValueSlot()],
+  });
+  await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
+    await route.fulfill({ json: resolutionResponse([contract]) });
+  });
+
+  await page.goto(`/1/tx/${RESOLUTION_TX}`);
+  await page.getByTestId('contract-toggle').click();
+
+  const diff = page.getByTestId('structured-value-diff');
+  await expect(diff).toBeVisible();
+  await expect(diff.getByText('claimed', { exact: true })).toBeVisible();
+  await expect(diff.getByText('duration', { exact: true })).toHaveCount(0);
+  await expect(diff.getByText('amount', { exact: true })).toHaveCount(0);
+  await expect(diff).toContainText('2,000,000,000,000,000,000');
+  expect(await diff.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+
+  await diff.getByRole('button', { name: 'Copy new claimed' }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('2000000000000000000');
 });
 
 test('transaction summary, controls, and copy actions stay compact at wide widths', async ({ page }) => {
