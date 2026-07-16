@@ -21,7 +21,7 @@ export function ViewSwitch<T extends string>({
       <div
         className={cn(
           'inline-flex h-6 border border-gray-300 bg-gray-50',
-          fullWidth && 'w-full',
+          fullWidth && 'w-full shrink-0',
         )}
         role="group"
         aria-label={label}

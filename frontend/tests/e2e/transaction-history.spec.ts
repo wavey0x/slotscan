@@ -260,8 +260,11 @@ test('transaction summary, controls, and copy actions stay compact at wide width
 
   await page.goto(`/1/tx/${RESOLUTION_TX}`);
 
+  const reportBox = await page.getByTestId('transaction-report').boundingBox();
   const summaryBox = await page.getByTestId('transaction-summary').boundingBox();
+  expect(reportBox).not.toBeNull();
   expect(summaryBox).not.toBeNull();
+  expect(reportBox!.width).toBeLessThanOrEqual(1350);
   expect(summaryBox!.width).toBeLessThanOrEqual(970);
   await expect(page.getByText('TXN', { exact: true })).toBeVisible();
   await expect(page.getByText('SUCCESS', { exact: true })).toHaveCount(0);
@@ -274,14 +277,25 @@ test('transaction summary, controls, and copy actions stay compact at wide width
   expect(valuesBox).not.toBeNull();
   expect(viewBox!.height).toBeLessThanOrEqual(24);
   expect(valuesBox!.height).toBeLessThanOrEqual(24);
+  expect(viewBox!.width).toBeGreaterThanOrEqual(134);
   expect(Math.abs(viewBox!.x - valuesBox!.x)).toBeLessThanOrEqual(1);
   expect(Math.abs(viewBox!.width - valuesBox!.width)).toBeLessThanOrEqual(1);
+  expect(await page.getByRole('button', { name: 'Timeline' }).evaluate(
+    (element) => element.scrollWidth <= element.clientWidth,
+  )).toBe(true);
   expect(valuesBox!.y).toBeGreaterThanOrEqual(viewBox!.y + viewBox!.height);
   const searchBox = await page.getByPlaceholder('Search contract, address, slot, or variable').boundingBox();
+  const controlsBox = await page.getByTestId('transaction-view-controls').boundingBox();
   expect(searchBox).not.toBeNull();
+  expect(controlsBox).not.toBeNull();
   expect(searchBox!.width).toBeLessThanOrEqual(321);
   expect(searchBox!.x - (viewBox!.x + viewBox!.width)).toBeGreaterThanOrEqual(11);
   expect(searchBox!.x - (viewBox!.x + viewBox!.width)).toBeLessThanOrEqual(13);
+  expect(Math.abs(
+    searchBox!.y + searchBox!.height / 2 - (controlsBox!.y + controlsBox!.height / 2),
+  )).toBeLessThanOrEqual(1);
+  await expect(page.getByText('Contract', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Activity', { exact: true })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Copy sender address' }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(RESOLUTION_FROM);
@@ -413,8 +427,6 @@ test('verified sources recover proxy, namespace, legacy, and Vyper variable name
   await expect(page.getByRole('heading', { name: 'Vat' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'WithdrawalQueueERC721' })).toBeVisible();
 
-  await expect(page.getByText('Contract', { exact: true })).toBeVisible();
-  await expect(page.getByText('Activity', { exact: true })).toBeVisible();
   const safeSection = page.getByRole('heading', { name: 'GnosisSafe' }).locator('xpath=ancestor::section');
   await expect(safeSection.getByText('0x1638...0ff7', { exact: true })).toBeVisible();
   await expect(safeSection.getByRole('button', { name: 'Copy' })).toBeVisible();

@@ -169,7 +169,7 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
   const singleContract = data.contracts.length === 1 ? data.contracts[0] : null;
   const showSearch = data.summary.slots_written > 15 || data.contracts.length > 3;
   return (
-    <div>
+    <div className="w-full" data-testid="transaction-report">
       <TransactionHeader chain={chain} data={data} />
       {singleContract && !singleContract.layout_available && (
         <div className="-mt-4 mb-5 text-[10px] uppercase tracking-wide text-gray-500">Raw slots</div>
@@ -185,10 +185,10 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
       />
 
       <div
-        className="mb-5 flex flex-wrap items-end gap-x-3 gap-y-2 border-b border-gray-300 pb-3"
+        className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-gray-300 pb-3"
         data-testid="transaction-controls"
       >
-        <div className="flex w-28 shrink-0 flex-col items-start gap-0.5" data-testid="transaction-view-controls">
+        <div className="flex w-36 shrink-0 flex-col items-start gap-0.5" data-testid="transaction-view-controls">
           <ViewSwitch
             label="View"
             showLabel={false}
@@ -224,10 +224,6 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
 
       {deferredView === 'grouped' ? (
         <div>
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 border-b border-gray-200 px-0 py-1 text-[9px] font-medium uppercase tracking-wide text-gray-400">
-            <span className="pl-5">Contract</span>
-            <span className="text-right">Activity</span>
-          </div>
           {filteredContracts.map((contract) => (
             <MemoizedContractSection
               key={contract.storage_address}
