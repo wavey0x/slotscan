@@ -251,8 +251,8 @@ Do not merge the semantics. Reuse the presentation system.
 - top-align multi-line cells;
 - left-align decoded and raw values;
 - columns carry a priority: identity and value columns (contract, variable, value) are essential; reference columns (slot, step) are secondary;
-- below the `sm` breakpoint, secondary columns are dropped and the table fits the viewport with no horizontal panning; the contract folds into the variable cell in Timeline view;
-- dropping a secondary column must not orphan its data: the full slot stays reachable through the variable's evidence disclosure, which opens on tap as well as hover;
+- below the `sm` breakpoint, secondary columns are dropped except for Timeline's compact Slot column, and the table fits the viewport with no horizontal panning; the contract folds into the variable cell and Step remains hidden in Timeline view;
+- compact or hidden slot references must not orphan their data: the full slot stays reachable through an evidence disclosure that opens on tap, focus, and hover;
 - at `sm` and above, tables keep a minimum readable width; horizontal scrolling engages only when the table exceeds its container, signaled by edge fades on the scrollable side;
 - when a table fits its container, column headers stick to the viewport top during vertical scroll;
 - abbreviate hashes, keys, and addresses in display (`0xa346...4150`), preserve the full value in copy and detail actions;

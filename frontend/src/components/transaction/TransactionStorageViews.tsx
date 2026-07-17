@@ -8,6 +8,7 @@ import { KeyedVariablePath } from '@/components/diff/KeyedVariablePath';
 import { StorageTable, StorageTableColumns, StorageTableHeader, storageCellClass } from '@/components/diff/StorageTable';
 import { CopyableValue, isStructuredDecodedValue, StructuredValueDiff, ValueDiff } from '@/components/diff/ValueDiff';
 import { CopyButton } from '@/components/ui/CopyButton';
+import { HoverCell } from '@/components/ui/HoverCell';
 import { getAddressExplorerUrl } from '@/lib/constants';
 import { ContractHistoryResponse, SlotChangeResponse, StorageChangeResponse } from '@/lib/types';
 import { cn, formatDecodedValue, getCopyValue, truncateAddress, truncateHash } from '@/lib/utils';
@@ -165,8 +166,8 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
 
   return (
     <StorageTable minWidth="56rem">
-      <StorageTableColumns showContract={showContract} />
-      <StorageTableHeader showContract={showContract} />
+      <StorageTableColumns showContract={showContract} showSlotOnMobile />
+      <StorageTableHeader showContract={showContract} showSlotOnMobile />
       <tbody>
         {entries.map(({ contract, slot, event, ordinal }) => {
           const structMember = timelineStructMember(slot);
@@ -229,8 +230,15 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                 )}
                 {event.frame_outcome === 'reverted' && <div className="mt-0.5 text-[9px] uppercase tracking-wide text-amber-600">reverted</div>}
               </td>
-              <td className={`${storageCellClass} hidden min-w-0 font-mono text-gray-500 sm:table-cell`} title={slot.slot}>
-                <span data-testid="slot-reference" className="block truncate">{slotReferenceDisplay(slot.slot, false)}</span>
+              <td className={`${storageCellClass} min-w-0 px-1 font-mono text-gray-500 sm:px-2`}>
+                <div data-testid="slot-reference" className="min-w-0 truncate">
+                  <HoverCell
+                    display={slotReferenceDisplay(slot.slot, false)}
+                    value={slot.slot}
+                    colorClass="text-gray-500"
+                    copyLabel="Copy slot"
+                  />
+                </div>
               </td>
               <td className={`${storageCellClass} hidden overflow-hidden whitespace-nowrap font-mono text-gray-400 sm:table-cell`} data-testid="step-reference">
                 {event.step ?? '—'}

@@ -595,20 +595,24 @@ test('timeline names struct members and stays readable on mobile', async ({ page
   expect(changedRowBox).not.toBeNull();
   expect(changedRowBox!.height).toBeLessThan(120);
 
-  // The mobile timeline drops slot/step, folds the contract into the
-  // variable cell, and fits the viewport without horizontal panning.
-  await expect(page.getByTestId('slot-reference').first()).toBeHidden();
+  // The mobile timeline keeps a compact, fully disclosable slot column,
+  // hides step, folds contract into variable, and avoids horizontal panning.
+  await expect(page.getByRole('columnheader', { name: 'Slot' })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Step' })).toBeHidden();
+  const slotReference = changedRow.getByTestId('slot-reference');
+  await expect(slotReference).toBeVisible();
+  await expect(slotReference).toContainText('7');
   await expect(page.getByTestId('step-reference').first()).toBeHidden();
   await expect(changedRow.getByRole('link', { name: 'ResupplyPairDeployer' })).toBeVisible();
+  await slotReference.getByText('7', { exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText(slots[1].slot);
+  await page.keyboard.press('Escape');
   const scroll = page.getByTestId('data-table-scroll');
   const scrollState = await scroll.evaluate((element) => ({
     clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth,
   }));
   expect(scrollState.scrollWidth).toBeLessThanOrEqual(scrollState.clientWidth + 1);
-  const valueBox = await changedRow.getByTestId('timeline-value').boundingBox();
-  expect(valueBox).not.toBeNull();
-  expect(valueBox!.width).toBeGreaterThan(200);
 
   await page.getByRole('button', { name: 'Grouped' }).click();
   const contractSection = page.getByRole('heading', { name: 'ResupplyPairDeployer' }).locator('xpath=ancestor::section');
