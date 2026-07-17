@@ -712,7 +712,11 @@ test('timeline names struct members and stays readable on mobile', async ({ page
 
   // No-op writes show the value once with an unchanged indicator, not an arrow.
   await expect(noopRow.getByTestId('timeline-value')).toContainText(truncatedOracle);
-  await expect(noopRow.getByTestId('value-noop-indicator')).toBeVisible();
+  const noopIndicator = noopRow.getByTestId('value-noop-indicator');
+  await expect(noopIndicator).toBeVisible();
+  await expect(noopIndicator).toHaveAttribute('title', 'Written, value unchanged');
+  await expect(noopIndicator.locator('svg')).toHaveCount(1);
+  await expect(noopIndicator).not.toContainText('↺');
   await expect(noopRow.getByTestId('value-arrow')).toHaveCount(0);
   await expect(noopRow.getByRole('button', { name: 'Copy oracle' })).toBeVisible();
   await expect(noopRow.getByRole('button', { name: 'Copy previous oracle' })).toHaveCount(0);
@@ -884,6 +888,24 @@ test('timeline contains single-key mapping paths on mobile', async ({ page }) =>
     'href',
     `https://etherscan.io/address/${implementation}`,
   );
+  const contractLabelBox = await pathDetail.getByText('Contract', { exact: true }).boundingBox();
+  const variableLabelBox = await pathDetail.getByText('Variable', { exact: true }).boundingBox();
+  expect(contractLabelBox).not.toBeNull();
+  expect(variableLabelBox).not.toBeNull();
+  expect(contractLabelBox!.y).toBeLessThan(variableLabelBox!.y);
+  const appearance = await pathDetail.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      backgroundColor: style.backgroundColor,
+      borderRadius: parseFloat(style.borderRadius),
+      boxShadow: style.boxShadow,
+    };
+  });
+  expect(appearance.backgroundColor).toBe(await page.evaluate(
+    () => getComputedStyle(document.body).backgroundColor,
+  ));
+  expect(appearance.borderRadius).toBeGreaterThan(0);
+  expect(appearance.boxShadow).not.toBe('none');
   const detailBox = await pathDetail.boundingBox();
   expect(detailBox).not.toBeNull();
   expect(detailBox!.x).toBeGreaterThanOrEqual(7);

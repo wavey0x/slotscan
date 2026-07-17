@@ -20,6 +20,7 @@ interface DetailPopoverProps {
   dialogLabel?: string;
   delay?: number;
   maxWidth?: string;
+  variant?: 'dark' | 'surface';
 }
 
 /**
@@ -34,6 +35,7 @@ export function DetailPopover({
   dialogLabel,
   delay = 100,
   maxWidth = 'max-w-md',
+  variant = 'dark',
 }: DetailPopoverProps) {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -132,7 +134,10 @@ export function DetailPopover({
       role="dialog"
       aria-label={dialogLabel}
       className={cn(
-        'detail-popover fixed z-[99999] border border-gray-600 bg-gray-900 p-3 text-xs text-white',
+        'fixed z-[99999] border text-xs',
+        variant === 'surface'
+          ? 'rounded-[0.75rem] border-gray-200 bg-white p-4 text-gray-700 shadow-[0_8px_24px_rgb(0_0_0/0.10),0_1px_3px_rgb(0_0_0/0.08)]'
+          : 'detail-popover border-gray-600 bg-gray-900 p-3 text-white',
         maxWidth,
         contentClassName,
       )}

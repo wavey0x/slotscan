@@ -1,4 +1,5 @@
 import { ReactNode } from 'react';
+import { CircleEqual } from 'lucide-react';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { cn, formatDecodedValue, shouldShowCopyAction, valuesEqual } from '@/lib/utils';
 
@@ -21,9 +22,9 @@ export function UnchangedIndicator() {
     <span
       data-testid="value-noop-indicator"
       title="Written, value unchanged"
-      className="shrink-0 cursor-default text-gray-400"
+      className="inline-flex h-4 w-4 shrink-0 cursor-default items-center justify-center text-gray-400"
     >
-      <span aria-hidden="true">↺</span>
+      <CircleEqual aria-hidden="true" size={13} strokeWidth={1.5} />
       <span className="sr-only">written, value unchanged</span>
     </span>
   );
