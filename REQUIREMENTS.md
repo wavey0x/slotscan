@@ -115,7 +115,7 @@ they are evidence needed to reproduce a layout.
 
 - Request-time compiler installation is disabled by default.
 - Compiler processes are concurrency-, time-, input-, CPU-, and memory-bounded.
-- RPC calls use configured primary/backup failover.
+- RPC calls use the single configured endpoint for each supported chain.
 - Readiness requires both database and RPC connectivity.
 - The application remains single-chain (Ethereum mainnet) until another chain
   is deliberately configured and tested.

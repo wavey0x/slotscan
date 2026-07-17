@@ -29,7 +29,6 @@ class Settings(BaseSettings):
 
     # RPC - Mainnet only for MVP
     rpc_url_1: str = Field(default="", alias="RPC_URL_1")
-    rpc_url_1_backup: str = Field(default="", alias="RPC_URL_1_BACKUP")
 
     # Etherscan API
     etherscan_api_key_1: str = Field(default="", alias="ETHERSCAN_API_KEY_1")
@@ -90,14 +89,6 @@ class Settings(BaseSettings):
         urls = {}
         if self.rpc_url_1:
             urls[1] = self.rpc_url_1
-        return urls
-
-    @property
-    def rpc_backup_urls(self) -> dict[int, str]:
-        """Get backup RPC URLs by chain ID."""
-        urls = {}
-        if self.rpc_url_1_backup:
-            urls[1] = self.rpc_url_1_backup
         return urls
 
     @property

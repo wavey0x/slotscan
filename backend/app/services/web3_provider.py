@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-from typing import Optional
 
 from web3 import AsyncWeb3, AsyncHTTPProvider, Web3
 from web3.middleware import ExtraDataToPOAMiddleware
@@ -19,7 +18,6 @@ class Web3Provider:
     def __init__(self, settings: Settings):
         self.settings = settings
         self._instances: dict[int, AsyncWeb3] = {}
-        self._backup_instances: dict[int, AsyncWeb3] = {}
 
     def get_web3(self, chain_id: int) -> AsyncWeb3:
         """Get Web3 instance for chain."""
@@ -38,75 +36,33 @@ class Web3Provider:
 
         return self._instances[chain_id]
 
-    def get_backup_web3(self, chain_id: int) -> Optional[AsyncWeb3]:
-        """Get backup Web3 instance for chain."""
-        backup_url = self.settings.rpc_backup_urls.get(chain_id)
-        if not backup_url:
-            return None
-
-        if chain_id not in self._backup_instances:
-            provider = AsyncHTTPProvider(
-                backup_url,
-                request_kwargs={"timeout": self.settings.request_timeout_seconds},
+    async def _call(self, chain_id: int, operation: str, call):
+        web3 = self.get_web3(chain_id)
+        try:
+            return await asyncio.wait_for(
+                call(web3),
+                timeout=self.settings.request_timeout_seconds,
             )
-            w3 = AsyncWeb3(provider)
-            w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
-            self._backup_instances[chain_id] = w3
-
-        return self._backup_instances[chain_id]
-
-    def _providers(self, chain_id: int) -> list[AsyncWeb3]:
-        providers = [self.get_web3(chain_id)]
-        backup = self.get_backup_web3(chain_id)
-        if backup is not None:
-            providers.append(backup)
-        return providers
-
-    async def _with_failover(self, chain_id: int, operation: str, call):
-        errors = []
-        for web3 in self._providers(chain_id):
-            try:
-                return await asyncio.wait_for(
-                    call(web3),
-                    timeout=self.settings.request_timeout_seconds,
-                )
-            except Exception as exc:
-                errors.append(str(exc))
-                logger.warning("%s failed on RPC provider: %s", operation, exc)
-        raise RuntimeError(f"{operation} failed on all RPC providers: {'; '.join(errors)}")
+        except Exception as exc:
+            logger.warning("%s failed on RPC endpoint: %s", operation, exc)
+            raise RuntimeError(f"{operation} failed on RPC endpoint: {exc}") from exc
 
     async def make_request(self, chain_id: int, method: str, params: list) -> dict:
-        last_error_response = None
-        transport_errors = []
-        for web3 in self._providers(chain_id):
-            try:
-                result = await asyncio.wait_for(
-                    web3.provider.make_request(method, params),
-                    timeout=self.settings.request_timeout_seconds,
-                )
-            except Exception as exc:
-                transport_errors.append(str(exc))
-                logger.warning("%s failed on RPC provider: %s", method, exc)
-                continue
-            if "error" not in result:
-                return result
-            last_error_response = result
-            logger.warning("%s returned an RPC error; trying backup provider", method)
-        if last_error_response is not None:
-            return last_error_response
-        raise RuntimeError(
-            f"{method} failed on all RPC providers: {'; '.join(transport_errors)}"
+        return await self._call(
+            chain_id,
+            method,
+            lambda web3: web3.provider.make_request(method, params),
         )
 
     async def get_transaction_receipt(self, chain_id: int, tx_hash: str):
-        return await self._with_failover(
+        return await self._call(
             chain_id,
             "eth_getTransactionReceipt",
             lambda web3: web3.eth.get_transaction_receipt(tx_hash),
         )
 
     async def get_code(self, chain_id: int, address: str, block: int | str):
-        return await self._with_failover(
+        return await self._call(
             chain_id,
             "eth_getCode",
             lambda web3: web3.eth.get_code(address, block_identifier=block),
@@ -115,32 +71,31 @@ class Web3Provider:
     async def get_storage_at(
         self, chain_id: int, address: str, slot: int | str, block: int | str
     ):
-        return await self._with_failover(
+        return await self._call(
             chain_id,
             "eth_getStorageAt",
             lambda web3: web3.eth.get_storage_at(address, slot, block_identifier=block),
         )
 
     async def get_block_number(self, chain_id: int) -> int:
-        return await self._with_failover(
+        return await self._call(
             chain_id,
             "eth_blockNumber",
             lambda web3: web3.eth.get_block_number(),
         )
 
     async def eth_call(self, chain_id: int, transaction: dict, block: int | str):
-        return await self._with_failover(
+        return await self._call(
             chain_id,
             "eth_call",
             lambda web3: web3.eth.call(transaction, block_identifier=block),
         )
 
     async def close(self) -> None:
-        """Close every provider session created by this process."""
-        for web3 in [*self._instances.values(), *self._backup_instances.values()]:
+        """Close every RPC session created by this process."""
+        for web3 in self._instances.values():
             await web3.provider.disconnect()
         self._instances.clear()
-        self._backup_instances.clear()
 
     async def batch_get_storage_at(
         self,
@@ -161,7 +116,7 @@ class Web3Provider:
             address: Contract address
             slots: List of slot numbers to read
             block: Block number or 'latest'
-            batch_size: Max calls per batch (RPC providers often limit this)
+            batch_size: Max calls per batch (RPC endpoints often limit this)
 
         Returns:
             Dict mapping slot number to hex value string
@@ -173,7 +128,7 @@ class Web3Provider:
 
         results = {}
 
-        # Process in batches (RPC providers often limit batch size to 100-1000)
+        # Process in batches (RPC endpoints often limit batch size to 100-1000)
         for i in range(0, len(slots), batch_size):
             batch_slots = slots[i : i + batch_size]
 
@@ -194,7 +149,7 @@ class Web3Provider:
                         )
                 return batch_responses
 
-            responses = await self._with_failover(
+            responses = await self._call(
                 chain_id,
                 f"eth_getStorageAt batch {i}-{i + len(batch_slots)}",
                 execute_batch,
