@@ -45,6 +45,9 @@ Do not add legacy redirects or a second contract-scoped transaction UI.
   structured regions, including packed extents, inclusive ranges, roots,
   moves, additions, removals, and scope-root changes. Do not add a Result,
   Change, Review, or Breaking column.
+- Render slot identifiers as the same bare values used elsewhere in the app.
+  Put byte ranges, roots, and other location qualifiers on a smaller muted line
+  below the identifier.
 - Group scopes under Default storage or their proven ERC-7201 identifier. Every
   changed row exposes all backend-owned objective details in one keyboard
   accessible disclosure.

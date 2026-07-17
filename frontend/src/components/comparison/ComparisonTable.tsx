@@ -31,6 +31,25 @@ function byteRange(region: ComparisonRegion): string {
   return `bytes ${start}–${end}`;
 }
 
+function slotIdentifier(region: ComparisonRegion): string {
+  const { location } = region;
+  if (location.slot !== location.end_slot) {
+    return `${compactSlot(location.slot)}–${compactSlot(location.end_slot)}`;
+  }
+  return compactSlot(location.slot);
+}
+
+function locationQualifier(region: ComparisonRegion): string | null {
+  if (region.location.is_root) return 'root';
+  if (
+    region.location.byte_offset !== 0
+    || region.location.byte_size !== '32'
+  ) {
+    return byteRange(region);
+  }
+  return null;
+}
+
 function sideLocation(region: ComparisonRegion): string {
   const { location } = region;
   if (location.is_root) return `root slot ${compactSlot(location.slot)}`;
@@ -71,6 +90,63 @@ function formatComparisonLocation(entry: ComparisonEntry): string {
     return `slot ${compactSlot(from.location.slot)} · ${byteRange(from)} → ${byteRange(to)}`;
   }
   return `${sideLocation(from)} → ${sideLocation(to)}`;
+}
+
+function locationDisplay(entry: ComparisonEntry): {
+  primary: string;
+  secondary: string | null;
+} {
+  const from = entry.from_region;
+  const to = entry.to_region;
+  if (entry.kind === 'scope_root_changed' && from && to) {
+    return {
+      primary: `${compactSlot(from.scope.root_slot)} → ${compactSlot(to.scope.root_slot)}`,
+      secondary: 'scope root',
+    };
+  }
+  if (!from && to) {
+    return {
+      primary: `— → ${slotIdentifier(to)}`,
+      secondary: locationQualifier(to),
+    };
+  }
+  if (from && !to) {
+    return {
+      primary: `${slotIdentifier(from)} → —`,
+      secondary: locationQualifier(from),
+    };
+  }
+  if (!from || !to) return { primary: '—', secondary: null };
+
+  const sameScope = from.scope.root_slot === to.scope.root_slot;
+  const sameSlot = from.location.slot === to.location.slot;
+  const sameEndSlot = from.location.end_slot === to.location.end_slot;
+  if (
+    sameScope
+    && sameSlot
+    && sameEndSlot
+    && from.location.byte_offset === to.location.byte_offset
+    && from.location.byte_size === to.location.byte_size
+  ) {
+    return {
+      primary: slotIdentifier(from),
+      secondary: locationQualifier(from),
+    };
+  }
+  if (sameScope && sameSlot && sameEndSlot) {
+    return {
+      primary: slotIdentifier(from),
+      secondary: `${byteRange(from)} → ${byteRange(to)}`,
+    };
+  }
+  const fromQualifier = locationQualifier(from);
+  const toQualifier = locationQualifier(to);
+  return {
+    primary: `${slotIdentifier(from)} → ${slotIdentifier(to)}`,
+    secondary: fromQualifier || toQualifier
+      ? `${fromQualifier || 'full slot'} → ${toQualifier || 'full slot'}`
+      : null,
+  };
 }
 
 function searchable(entry: ComparisonEntry): string {
@@ -223,6 +299,7 @@ export function ComparisonTable({
               </tr>,
               ...rows.flatMap((entry) => {
                 const expanded = open.has(entry.id);
+                const location = locationDisplay(entry);
                 return [
                   <tr
                     key={entry.id}
@@ -244,15 +321,22 @@ export function ComparisonTable({
                             ? <ChevronDown aria-hidden="true" size={13} />
                             : <ChevronRight aria-hidden="true" size={13} />}
                         </button>
-                        <span className="break-words">
+                        <div className="min-w-0">
                           {entry.impact === 'conflict' && (
                             <span className="sr-only">Storage conflict. </span>
                           )}
                           {entry.impact === 'ambiguous' && (
                             <span className="sr-only">Indeterminate change. </span>
                           )}
-                          {formatComparisonLocation(entry)}
-                        </span>
+                          <div className="break-words font-mono text-xs text-gray-900">
+                            {location.primary}
+                          </div>
+                          {location.secondary && (
+                            <div className="mt-0.5 break-words font-mono text-[9px] text-gray-400">
+                              {location.secondary}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td className={dataTableCellClass}>{evidence(entry.from_region)}</td>
