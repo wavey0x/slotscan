@@ -47,6 +47,44 @@ def is_one_word_scalar(type_info: CompiledType | None) -> bool:
     )
 
 
+def is_one_word_query_result(
+    layout: CompiledLayout,
+    type_info: CompiledType | None,
+) -> bool:
+    """Return whether one queried word can be decoded without further access."""
+    if is_one_word_scalar(type_info):
+        return True
+    if (
+        type_info is None
+        or type_info.kind != "struct"
+        or type_info.encoding != "inplace"
+        or not type_info.members
+        or type_info.num_bytes is None
+        or not 0 < type_info.num_bytes <= 32
+    ):
+        return False
+
+    occupied_ranges: list[tuple[int, int]] = []
+    for member in type_info.members:
+        member_type = layout.get_type(member.type_id)
+        start = member.byte_offset
+        end = start + member.byte_size
+        if (
+            member.slot != 0
+            or not is_one_word_scalar(member_type)
+            or member_type.num_bytes != member.byte_size
+            or start < 0
+            or end > 32
+            or any(
+                start < occupied_end and end > occupied_start
+                for occupied_start, occupied_end in occupied_ranges
+            )
+        ):
+            return False
+        occupied_ranges.append((start, end))
+    return True
+
+
 def is_queryable_storage_type(
     layout: CompiledLayout,
     type_info: CompiledType,
@@ -67,7 +105,7 @@ def is_queryable_storage_type(
             if next_type is None:
                 return False
             current = next_type
-        return is_one_word_scalar(current)
+        return is_one_word_query_result(layout, current)
 
     if type_info.kind == "array":
         if (

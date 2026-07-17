@@ -21,6 +21,7 @@ from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
 from app.services.storage import (
     StorageReader,
+    is_one_word_query_result,
     is_one_word_scalar,
     plan_compiled_scalar_reads,
 )
@@ -411,7 +412,7 @@ class StorageViewService:
         declaration_id: str,
         steps: list[dict[str, str]],
     ) -> dict[str, Any]:
-        """Resolve one backend-authoritative scalar mapping or array access."""
+        """Resolve one backend-authoritative mapping or array access."""
         if chain_id <= 0:
             raise StorageQueryError("INVALID_CHAIN", "chain_id must be positive")
         try:
@@ -501,10 +502,10 @@ class StorageViewService:
                         "The mapping value type is unavailable",
                     )
                 current_type = next_type
-            if not is_one_word_scalar(current_type):
+            if not is_one_word_query_result(layout, current_type):
                 raise StorageQueryError(
                     "UNSUPPORTED_ACCESS",
-                    "Mappings must end in a one-word scalar value",
+                    "Mappings must end in a one-word scalar or packed struct value",
                 )
             byte_offset = 0
             result_type = current_type
@@ -557,15 +558,27 @@ class StorageViewService:
         )
         raw_word = word_values[slot]
         try:
-            decoded = self.decoder.decode(
-                bytes.fromhex(raw_word[2:]),
-                result_type,
-                byte_offset,
-            )
+            raw_bytes = bytes.fromhex(raw_word[2:])
+            if result_type.kind == "struct":
+                decoded_wire = {
+                    member.name: _wire_decoded(
+                        self.decoder.decode(
+                            raw_bytes,
+                            layout.types[member.type_id],
+                            member.byte_offset,
+                        ).decoded
+                    )
+                    for member in result_type.members
+                }
+            else:
+                decoded = self.decoder.decode(
+                    raw_bytes,
+                    result_type,
+                    byte_offset,
+                )
+                decoded_wire = _wire_decoded(decoded.decoded)
         except Exception:
             decoded_wire = None
-        else:
-            decoded_wire = _wire_decoded(decoded.decoded)
 
         response = {
             "block_ref": block_ref_wire(context.attempt.block_ref),

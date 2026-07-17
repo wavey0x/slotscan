@@ -110,8 +110,8 @@ class ScalarReadPlanningTests(unittest.TestCase):
             ],
         )
 
-    def test_aggregate_queries_are_offered_only_for_scalar_results(self):
-        struct = StorageType(
+    def test_aggregate_queries_include_packed_struct_mappings_only(self):
+        packed_struct = StorageType(
             "config",
             "struct Config",
             "struct",
@@ -121,14 +121,34 @@ class ScalarReadPlanningTests(unittest.TestCase):
                 StorageVariable("limit", 0, 0, 32, "t_uint256", "uint256")
             ],
         )
-        mapping = StorageType(
+        packed_mapping = StorageType(
             "configs",
             "mapping(address => struct Config)",
             "mapping",
             "mapping",
             num_bytes=32,
             key_type="t_address",
-            value_type=struct.id,
+            value_type=packed_struct.id,
+        )
+        wide_struct = StorageType(
+            "wide_config",
+            "struct WideConfig",
+            "struct",
+            "inplace",
+            num_bytes=64,
+            members=[
+                StorageVariable("first", 0, 0, 32, "t_uint256", "uint256"),
+                StorageVariable("second", 1, 0, 32, "t_uint256", "uint256"),
+            ],
+        )
+        wide_mapping = StorageType(
+            "wide_configs",
+            "mapping(address => struct WideConfig)",
+            "mapping",
+            "mapping",
+            num_bytes=32,
+            key_type="t_address",
+            value_type=wide_struct.id,
         )
         array = StorageType(
             "config_array",
@@ -136,7 +156,7 @@ class ScalarReadPlanningTests(unittest.TestCase):
             "array",
             "dynamic_array",
             num_bytes=32,
-            element_type=struct.id,
+            element_type=packed_struct.id,
         )
         layout = _compiled(
             [
@@ -145,8 +165,8 @@ class ScalarReadPlanningTests(unittest.TestCase):
                     0,
                     0,
                     32,
-                    mapping.id,
-                    mapping.label,
+                    packed_mapping.id,
+                    packed_mapping.label,
                 ),
                 StorageVariable(
                     "configList",
@@ -156,10 +176,20 @@ class ScalarReadPlanningTests(unittest.TestCase):
                     array.id,
                     array.label,
                 ),
+                StorageVariable(
+                    "wideConfigs",
+                    2,
+                    0,
+                    32,
+                    wide_mapping.id,
+                    wide_mapping.label,
+                ),
             ],
             {
-                struct.id: struct,
-                mapping.id: mapping,
+                packed_struct.id: packed_struct,
+                packed_mapping.id: packed_mapping,
+                wide_struct.id: wide_struct,
+                wide_mapping.id: wide_mapping,
                 array.id: array,
             },
         )
@@ -168,7 +198,11 @@ class ScalarReadPlanningTests(unittest.TestCase):
 
         self.assertEqual(
             [(projection.path, projection.status) for projection in plan.projections],
-            [("configs", "unsupported"), ("configList", "unsupported")],
+            [
+                ("configs", "on_demand"),
+                ("configList", "unsupported"),
+                ("wideConfigs", "unsupported"),
+            ],
         )
 
     def test_budget_defers_new_words_but_keeps_shared_consumers(self):

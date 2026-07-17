@@ -1,5 +1,6 @@
 import { StorageQueryLookup } from '@/lib/types';
 import { cn, formatDecodedValue, truncateSlot } from '@/lib/utils';
+import { CopyButton } from '@/components/ui/CopyButton';
 import { HoverCell } from '@/components/ui/HoverCell';
 import { DataTable, dataTableCellClass, dataTableHeadCellClass } from '@/components/ui/DataTable';
 
@@ -21,6 +22,69 @@ function lookupIsZero(lookup: StorageQueryLookup): boolean {
     || decoded === 0
     || decoded === '0'
     || decoded === '0x0000000000000000000000000000000000000000';
+}
+
+function decodedRecord(value: unknown): Record<string, unknown> | null {
+  if (
+    typeof value !== 'object'
+    || value === null
+    || Array.isArray(value)
+    || Object.keys(value).length === 0
+  ) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function LookupValue({
+  lookup,
+  chainId,
+}: {
+  lookup: StorageQueryLookup;
+  chainId: string;
+}) {
+  const fields = decodedRecord(lookup.decodedValue);
+  if (!fields) {
+    return (
+      <HoverCell
+        display={lookupValue(lookup)}
+        value={lookup.rawValue}
+        chainId={chainId}
+        colorClass={cn(
+          'font-mono',
+          lookupIsZero(lookup) ? 'text-gray-300' : 'text-gray-900',
+        )}
+      />
+    );
+  }
+
+  return (
+    <div className="flex min-w-0 items-start gap-1">
+      <div className="min-w-0 space-y-0.5">
+        {Object.entries(fields).map(([name, value]) => {
+          const display = formatDecodedValue(value);
+          return (
+            <div key={name} className="flex min-w-0 items-baseline gap-1 font-mono">
+              <span className="shrink-0 text-gray-400">{name}</span>
+              <span className="shrink-0 text-gray-400">=</span>
+              <HoverCell
+                display={display}
+                value={String(value ?? '')}
+                chainId={chainId}
+                copyLabel={`Copy ${name} value`}
+                colorClass="font-mono text-gray-900"
+              />
+            </div>
+          );
+        })}
+      </div>
+      <CopyButton
+        value={lookup.rawValue}
+        label="Copy raw storage value"
+        className="-my-1 shrink-0"
+      />
+    </div>
+  );
 }
 
 export function LookupResultsTable({
@@ -47,7 +111,9 @@ export function LookupResultsTable({
             <tr key={`${lookup.slot}:${index}`} className="border-b border-gray-200">
               <td className={`${dataTableCellClass} font-mono text-gray-700`}>{renderKey(lookup)}</td>
               <td className={dataTableCellClass}><HoverCell display={truncateSlot(lookup.slot)} value={lookup.slot} colorClass="font-mono text-gray-500" /></td>
-              <td className={dataTableCellClass}><HoverCell display={lookupValue(lookup)} value={lookup.rawValue} chainId={chainId} colorClass={cn('font-mono', lookupIsZero(lookup) ? 'text-gray-300' : 'text-gray-900')} /></td>
+              <td className={dataTableCellClass}>
+                <LookupValue lookup={lookup} chainId={chainId} />
+              </td>
             </tr>
           ))}
         </tbody>

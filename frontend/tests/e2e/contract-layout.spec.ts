@@ -178,6 +178,45 @@ test('high slots stay exact strings in the table and disclosure', async ({ page 
   await expect(page.getByRole('dialog').getByText(highSlot, { exact: true })).toBeVisible();
 });
 
+test('long type labels get responsive space and an accessible full disclosure', async ({ page }) => {
+  const typeLabel = 'mapping(address => DeployInfo)';
+  const mapping = {
+    ...scalarType('mapping', typeLabel),
+    kind: 'mapping',
+    encoding: 'mapping',
+    key_type: 't_address',
+    value_type: 't_uint256',
+  };
+  await page.setViewportSize({ width: 800, height: 844 });
+  await mockView(page, {
+    variables: [variable('decl:0', 'deployInfo', '0x4', mapping.id, typeLabel)],
+    types: {
+      mapping,
+      t_address: scalarType('t_address', 'address', '20'),
+      t_uint256: scalarType(),
+    },
+    values: [value('decl:0', 'deployInfo', '0x4', null, 'unsupported')],
+  });
+  await page.goto(`/1/${ADDRESS}`);
+
+  const typeHeader = page.getByRole('columnheader', { name: 'Type' });
+  const columnWidth = () => typeHeader.evaluate(
+    (element) => Math.round(element.getBoundingClientRect().width),
+  );
+  const tabletWidth = await columnWidth();
+  expect(tabletWidth).toBeGreaterThanOrEqual(176);
+  expect(tabletWidth).toBeLessThanOrEqual(192);
+
+  await page.setViewportSize({ width: 1200, height: 844 });
+  await expect.poll(columnWidth).toBeGreaterThanOrEqual(tabletWidth + 24);
+  await expect.poll(columnWidth).toBeLessThanOrEqual(224);
+
+  await page.getByText(typeLabel, { exact: true }).locator('..').focus();
+  const dialog = page.getByRole('dialog', { name: 'Full type for deployInfo' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(typeLabel, { exact: true })).toBeVisible();
+});
+
 test('address values stay on one line and use the full table width on mobile', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await mockView(page, {
@@ -276,14 +315,25 @@ test('unsupported aggregates do not offer a query control', async ({ page }) => 
   const config = {
     ...scalarType('config', 'struct Config'),
     kind: 'struct',
-    members: [{
-      name: 'limit',
-      slot: '0x0',
-      byte_offset: 0,
-      byte_size: '32',
-      type_id: 't_uint256',
-      label: 'uint256',
-    }],
+    num_bytes: '64',
+    members: [
+      {
+        name: 'limit',
+        slot: '0x0',
+        byte_offset: 0,
+        byte_size: '32',
+        type_id: 't_uint256',
+        label: 'uint256',
+      },
+      {
+        name: 'floor',
+        slot: '0x1',
+        byte_offset: 0,
+        byte_size: '32',
+        type_id: 't_uint256',
+        label: 'uint256',
+      },
+    ],
   };
   const mapping = {
     ...scalarType('mapping', 'mapping(address => struct Config)'),
@@ -307,6 +357,82 @@ test('unsupported aggregates do not offer a query control', async ({ page }) => 
 
   await expect(page.getByRole('button', { name: 'Expand configs' })).toHaveCount(0);
   await expect(page.getByText('expand to query')).toHaveCount(0);
+});
+
+test('packed struct mappings expand and render decoded members', async ({ page }) => {
+  const deployInfo = {
+    ...scalarType('deploy_info', 'struct DeployInfo'),
+    kind: 'struct',
+    members: [
+      {
+        name: 'protocolId',
+        slot: '0x0',
+        byte_offset: 0,
+        byte_size: '5',
+        type_id: 't_uint40',
+        label: 'uint40',
+      },
+      {
+        name: 'deployTime',
+        slot: '0x0',
+        byte_offset: 5,
+        byte_size: '5',
+        type_id: 't_uint40',
+        label: 'uint40',
+      },
+    ],
+  };
+  const mapping = {
+    ...scalarType('mapping', 'mapping(address => DeployInfo)'),
+    kind: 'mapping',
+    encoding: 'mapping',
+    key_type: 't_address',
+    value_type: deployInfo.id,
+  };
+  await mockView(page, {
+    variables: [variable('decl:0', 'deployInfo', '0x4', mapping.id, mapping.label)],
+    types: {
+      mapping,
+      deploy_info: deployInfo,
+      t_address: scalarType('t_address', 'address', '20'),
+      t_uint40: scalarType('t_uint40', 'uint40', '5'),
+    },
+    values: [value('decl:0', 'deployInfo', '0x4', null, 'on_demand')],
+  });
+  let requestBody: Record<string, any> | null = null;
+  await page.route('**/api/slotscan/storage/query', async (route) => {
+    requestBody = route.request().postDataJSON();
+    await route.fulfill({
+      json: {
+        block_ref: { number: '0x7b', hash: BLOCK_HASH },
+        layout_id: LAYOUT_ID,
+        declaration_id: 'decl:0',
+        path: `deployInfo[${ADDRESS}]`,
+        location: { slot: '0xabc', byte_offset: 0, byte_size: 32 },
+        value_encoded: `0x${'0'.repeat(44)}0066d210000000000007`,
+        value_decoded: {
+          protocolId: '7',
+          deployTime: '1725000000',
+        },
+        array_length: null,
+      },
+    });
+  });
+  await page.goto(`/1/${ADDRESS}`);
+
+  await page.getByRole('button', { name: 'Expand deployInfo' }).click();
+  await page.getByPlaceholder('0x… address').fill(ADDRESS);
+  await page.getByRole('button', { name: 'Lookup' }).click();
+
+  const history = page.getByText('Lookup history').locator('..');
+  await expect(history.getByText('protocolId', { exact: true })).toBeVisible();
+  await expect(history.getByText('7', { exact: true })).toBeVisible();
+  await expect(history.getByText('deployTime', { exact: true })).toBeVisible();
+  await expect(history.getByText('1,725,000,000', { exact: true })).toBeVisible();
+  await expect(history.getByRole('button', { name: 'Copy raw storage value' })).toBeVisible();
+  expect(requestBody!.access.steps).toEqual([
+    { kind: 'mapping_key', value: ADDRESS },
+  ]);
 });
 
 test('mapping queries send raw keys and exact identities, never a computed slot', async ({ page }) => {

@@ -134,6 +134,41 @@ def _array_layout(*, dynamic=False, base_slot=9):
     )
 
 
+def _struct_mapping_layout(*, multi_slot=False):
+    members = [
+        StorageVariable("protocolId", 0, 0, 5, "t_uint40", "uint40"),
+        StorageVariable(
+            "deployTime",
+            1 if multi_slot else 0,
+            0 if multi_slot else 5,
+            5,
+            "t_uint40",
+            "uint40",
+        ),
+    ]
+    struct = StorageType(
+        "deploy_info",
+        "struct DeployInfo",
+        "struct",
+        "inplace",
+        num_bytes=64 if multi_slot else 32,
+        members=members,
+    )
+    mapping = StorageType(
+        "deploy_info_mapping",
+        "mapping(address => struct DeployInfo)",
+        "mapping",
+        "mapping",
+        num_bytes=32,
+        key_type="t_address",
+        value_type=struct.id,
+    )
+    return _layout(
+        StorageVariable("deployInfo", 7, 0, 32, mapping.id, mapping.label),
+        {mapping.id: mapping, struct.id: struct},
+    )
+
+
 def _service(layout, values):
     attempt = _Attempt(values)
     context = StorageContext(
@@ -217,6 +252,46 @@ class StorageQueryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["location"]["slot"], hex(expected))
         self.assertEqual(response["value_decoded"], "99")
         self.assertEqual(attempt.calls, [[expected]])
+
+    async def test_mapping_to_packed_struct_reads_and_decodes_one_word(self):
+        layout = _struct_mapping_layout()
+        protocol_id = 7
+        deploy_time = 1_725_000_000
+        packed = protocol_id | (deploy_time << 40)
+        service, attempt = _service(layout, {SOLIDITY_ADDRESS_SLOT: packed})
+
+        response = await _query(
+            service,
+            layout,
+            [{"kind": "mapping_key", "value": ADDRESS}],
+        )
+        validated = StorageQueryResponse.model_validate(response)
+
+        self.assertEqual(
+            validated.value_decoded,
+            {
+                "protocolId": str(protocol_id),
+                "deployTime": str(deploy_time),
+            },
+        )
+        self.assertEqual(validated.location.slot, hex(SOLIDITY_ADDRESS_SLOT))
+        self.assertEqual(validated.location.byte_offset, 0)
+        self.assertEqual(validated.location.byte_size, 32)
+        self.assertEqual(attempt.calls, [[SOLIDITY_ADDRESS_SLOT]])
+
+    async def test_mapping_to_multi_slot_struct_is_rejected_without_reading(self):
+        layout = _struct_mapping_layout(multi_slot=True)
+        service, attempt = _service(layout, {})
+
+        with self.assertRaises(StorageQueryError) as raised:
+            await _query(
+                service,
+                layout,
+                [{"kind": "mapping_key", "value": ADDRESS}],
+            )
+
+        self.assertEqual(raised.exception.code, "UNSUPPORTED_ACCESS")
+        self.assertEqual(attempt.calls, [])
 
     async def test_invalid_mapping_key_and_layout_mismatch_read_no_value_words(self):
         layout = _mapping_layout()

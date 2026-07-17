@@ -106,8 +106,18 @@ export const LayoutRow = memo(function LayoutRow({
           </DetailPopover>
         </td>
 
-        <td className="truncate px-1 py-2 font-mono text-xs text-gray-500" title={variable.type_label}>
-          {variable.type_label}
+        <td className="px-1 py-2 font-mono text-xs text-gray-500">
+          <DetailPopover
+            className="max-w-full"
+            dialogLabel={`Full type for ${variable.name}`}
+            content={(
+              <span className="block whitespace-normal font-mono text-xs text-gray-700 [overflow-wrap:anywhere]">
+                {variable.type_label}
+              </span>
+            )}
+          >
+            <span className="block truncate">{variable.type_label}</span>
+          </DetailPopover>
         </td>
 
         <td
