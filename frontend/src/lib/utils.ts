@@ -188,9 +188,13 @@ function formatCompactNumber(value: bigint): string | null {
 /**
  * Format decoded value for display. Very large integers compact to
  * scientific notation and addresses middle-truncate; copy actions and
- * tooltips keep the full value.
+ * tooltips keep the full value. Pass fullAddresses where the surface
+ * has room for the complete 42-character address.
  */
-export function formatDecodedValue(value: unknown): string {
+export function formatDecodedValue(
+  value: unknown,
+  options?: { fullAddresses?: boolean },
+): string {
   if (value === null || value === undefined) return '';
 
   // Empty string should display as "" (with quotes) to indicate string type
@@ -216,7 +220,7 @@ export function formatDecodedValue(value: unknown): string {
 
   // If it's an address, middle-truncate for display
   if (/^0x[a-fA-F0-9]{40}$/.test(str)) {
-    return truncateAddress(str);
+    return options?.fullAddresses ? str : truncateAddress(str);
   }
 
   return str;

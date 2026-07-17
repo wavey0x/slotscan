@@ -40,7 +40,7 @@ export function LayoutTable({
 
   return (
     <div>
-      <DataTable minWidth="40rem">
+      <DataTable minWidth="50rem">
         <colgroup>
           <col className="w-6" />
           <col className="w-[100px]" />

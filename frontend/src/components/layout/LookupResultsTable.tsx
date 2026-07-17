@@ -5,7 +5,7 @@ import { DataTable, dataTableCellClass, dataTableHeadCellClass } from '@/compone
 
 function lookupValue(lookup: StorageQueryLookup): string {
   if (lookup.decodedValue !== null && lookup.decodedValue !== undefined) {
-    return formatDecodedValue(lookup.decodedValue);
+    return formatDecodedValue(lookup.decodedValue, { fullAddresses: true });
   }
   if (lookup.rawValue === `0x${'0'.repeat(64)}`) return '0';
   try {
@@ -39,8 +39,8 @@ export function LookupResultsTable({
   return (
     <div className="mt-4">
       <div className="mb-2 text-[10px] font-medium uppercase tracking-wide text-gray-500">Lookup history</div>
-      <DataTable minWidth="32rem" className="text-xs">
-        <colgroup><col className="w-[34%]" /><col className="w-[25%]" /><col /></colgroup>
+      <DataTable minWidth="44rem" className="text-xs">
+        <colgroup><col className="w-[30%]" /><col className="w-[22%]" /><col /></colgroup>
         <thead><tr className="border-b border-gray-300"><th className={dataTableHeadCellClass}>{keyLabel}</th><th className={dataTableHeadCellClass}>Slot</th><th className={dataTableHeadCellClass}>Value</th></tr></thead>
         <tbody>
           {lookups.map((lookup, index) => (

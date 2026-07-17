@@ -123,7 +123,7 @@ export const LayoutRow = memo(function LayoutRow({
               {successfulValues.map((value) => {
                 const rendered = showHex
                   ? value.value_encoded!
-                  : formatDecodedValue(value.value_decoded);
+                  : formatDecodedValue(value.value_decoded, { fullAddresses: true });
                 return (
                   <div key={`${value.declaration_id}:${value.path}`} className="flex min-w-0 items-center gap-1">
                     {value.path !== variable.name && (
