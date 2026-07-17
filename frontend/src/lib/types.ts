@@ -11,7 +11,7 @@ interface ValuePairDecoded {
 
 // === Response Types ===
 
-export interface StorageViewContract {
+interface StorageViewContract {
   address: string;
   storage_address: string;
   effective_code_address: string;
@@ -21,7 +21,7 @@ export interface StorageViewContract {
   is_verified: boolean;
 }
 
-export interface StorageViewMember {
+interface StorageViewMember {
   name: string;
   slot: string;
   byte_offset: number;
@@ -132,14 +132,14 @@ export interface StorageQueryLookup {
   decodedValue: unknown;
 }
 
-export interface ComparisonScope {
+interface ComparisonScope {
   id: string;
   kind: 'default' | 'erc7201';
   root_slot: string;
   formula: string | null;
 }
 
-export interface ComparisonLocation {
+interface ComparisonLocation {
   slot: string;
   byte_offset: number;
   byte_size: string;
@@ -147,7 +147,7 @@ export interface ComparisonLocation {
   is_root: boolean;
 }
 
-export interface ComparisonType {
+interface ComparisonType {
   label: string;
   kind: string;
   encoding: string;
@@ -172,7 +172,7 @@ export interface ComparisonEntry {
   details: string[];
 }
 
-export interface ComparisonSummary {
+interface ComparisonSummary {
   conflicts: number;
   ambiguous: number;
   changes: number;

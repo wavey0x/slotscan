@@ -42,7 +42,7 @@ function sideLocation(region: ComparisonRegion): string {
   return `slot ${compactSlot(location.slot)}`;
 }
 
-export function formatComparisonLocation(entry: ComparisonEntry): string {
+function formatComparisonLocation(entry: ComparisonEntry): string {
   const from = entry.from_region;
   const to = entry.to_region;
   if (entry.kind === 'scope_root_changed' && from && to) {

@@ -196,7 +196,10 @@ test('address values stay on one line and use the full table width on mobile', a
         array_length: '9',
       },
     },
-    values: [value('decl:0', 'owner', '0x2', '0xff12b7B0dF9a2A96CBc09b3822B4Db43a575cCEE')],
+    values: [
+      value('decl:0', 'owner', '0x2', '0xff12b7B0dF9a2A96CBc09b3822B4Db43a575cCEE'),
+      value('decl:1', 'max_fee', '0x4', null, 'on_demand'),
+    ],
   });
   await page.goto(`/1/${ADDRESS}`);
 
@@ -267,6 +270,43 @@ test('a failed refresh keeps and labels the last exact response', async ({ page 
 
   await expect(page.getByText('Refresh failed · showing last exact block')).toBeVisible();
   await expect(page.getByText('Block 123')).toBeVisible();
+});
+
+test('unsupported aggregates do not offer a query control', async ({ page }) => {
+  const config = {
+    ...scalarType('config', 'struct Config'),
+    kind: 'struct',
+    members: [{
+      name: 'limit',
+      slot: '0x0',
+      byte_offset: 0,
+      byte_size: '32',
+      type_id: 't_uint256',
+      label: 'uint256',
+    }],
+  };
+  const mapping = {
+    ...scalarType('mapping', 'mapping(address => struct Config)'),
+    kind: 'mapping',
+    encoding: 'mapping',
+    key_type: 't_address',
+    value_type: config.id,
+  };
+  await mockView(page, {
+    variables: [variable('decl:0', 'configs', '0x7', mapping.id, mapping.label)],
+    types: {
+      mapping,
+      config,
+      t_address: scalarType('t_address', 'address', '20'),
+      t_uint256: scalarType(),
+    },
+    values: [value('decl:0', 'configs', '0x7', null, 'unsupported')],
+  });
+
+  await page.goto(`/1/${ADDRESS}`);
+
+  await expect(page.getByRole('button', { name: 'Expand configs' })).toHaveCount(0);
+  await expect(page.getByText('expand to query')).toHaveCount(0);
 });
 
 test('mapping queries send raw keys and exact identities, never a computed slot', async ({ page }) => {

@@ -52,7 +52,8 @@ export const LayoutRow = memo(function LayoutRow({
   const isDynamicArray = varType?.encoding === 'dynamic_array';
   const isStaticArray = varType?.kind === 'array' && varType.encoding === 'inplace';
   const isArray = isDynamicArray || isStaticArray;
-  const isInteractive = isMapping || isArray;
+  const status = values[0]?.status;
+  const isInteractive = (isMapping || isArray) && status === 'on_demand';
 
   const mappingKeyTypes: { type: string; label: string }[] = [];
   let currentType: StorageViewType | undefined = varType;
@@ -69,7 +70,6 @@ export const LayoutRow = memo(function LayoutRow({
   const successfulValues = values.filter(
     (value) => value.status === 'ok' && value.value_encoded
   );
-  const status = values[0]?.status;
 
   return (
     <>
@@ -176,7 +176,7 @@ export const LayoutRow = memo(function LayoutRow({
         </td>
       </tr>
 
-      {expanded && isMapping && (
+      {expanded && isInteractive && isMapping && (
         <tr className="bg-gray-50/50">
           <td colSpan={5} className="border-b border-gray-100 px-4 pb-2 pt-1">
             <MappingKeyInput
@@ -193,7 +193,7 @@ export const LayoutRow = memo(function LayoutRow({
         </tr>
       )}
 
-      {expanded && isArray && !isMapping && (
+      {expanded && isInteractive && isArray && !isMapping && (
         <tr className="bg-gray-50/50">
           <td colSpan={5} className="border-b border-gray-100 px-4 pb-2 pt-1">
             <ArrayIndexInput

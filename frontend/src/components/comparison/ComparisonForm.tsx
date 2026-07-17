@@ -20,15 +20,15 @@ const ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
 const BLOCK_PATTERN = /^(0|[1-9][0-9]*)$/;
 const BLOCK_HASH_PATTERN = /^0x[0-9a-fA-F]{64}$/;
 
-export function validAddress(value: string): boolean {
+function validAddress(value: string): boolean {
   return ADDRESS_PATTERN.test(value.trim());
 }
 
-export function validBlock(value: string): boolean {
+function validBlock(value: string): boolean {
   return !value.trim() || BLOCK_PATTERN.test(value.trim());
 }
 
-export function validBlockHash(value: string): boolean {
+function validBlockHash(value: string): boolean {
   return !value.trim() || BLOCK_HASH_PATTERN.test(value.trim());
 }
 
