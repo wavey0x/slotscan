@@ -80,6 +80,30 @@ function resolutionResponse(contracts: ReturnType<typeof resolutionContract>[]) 
   };
 }
 
+test('incomplete effective-code attribution explains the raw-slot fallback', async ({ page }) => {
+  const response = resolutionResponse([
+    resolutionContract({
+      code_addresses: [],
+      layout_available: false,
+    }),
+  ]);
+  response.capabilities.code_attribution_complete = false;
+  response.is_complete = false;
+  await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
+    await route.fulfill({ json: response });
+  });
+
+  await page.goto(`/1/tx/${RESOLUTION_TX}`);
+  await page.getByText(/Data quality/).click();
+
+  await expect(
+    page.getByText(
+      'Effective code attribution is unavailable; raw slots are shown.',
+      { exact: true },
+    ),
+  ).toBeVisible();
+});
+
 function structuredValueSlot() {
   const before = {
     value_encoded: `0x${'00'.repeat(32)}`,

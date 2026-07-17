@@ -12,7 +12,7 @@ from app.models.database import TransactionTraceArtifact
 
 
 logger = logging.getLogger(__name__)
-TRACE_SCHEMA_VERSION = 5
+TRACE_SCHEMA_VERSION = 6
 
 
 @dataclass(frozen=True)

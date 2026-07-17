@@ -1003,6 +1003,7 @@ async def get_transaction_storage_history(
     response_complete = (
         capabilities.get("write_history_complete", False)
         and capabilities.get("address_attribution_complete", False)
+        and capabilities.get("code_attribution_complete", False)
         and persistent_event_count <= history_service.settings.max_sstore_ops
     )
 

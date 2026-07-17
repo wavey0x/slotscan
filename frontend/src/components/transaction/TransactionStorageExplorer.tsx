@@ -161,7 +161,8 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
     !data.capabilities.rollback_classification_complete && 'Rollback classification is incomplete.',
     !data.capabilities.state_reconciliation_complete && 'Replayed values did not fully reconcile with final state.',
     !data.capabilities.execution_order_available && 'Global execution order is unavailable.',
-    !data.capabilities.code_attribution_complete && 'Some implementation/code addresses are unknown.',
+    !data.capabilities.code_attribution_complete
+      && 'Effective code attribution is unavailable; raw slots are shown.',
     hasRetryableContractResolution(data.contracts)
       && 'Some contract names or storage layouts could not be resolved.',
   ].filter(Boolean) as string[];

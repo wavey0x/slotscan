@@ -119,7 +119,7 @@ async def get_storage(
         metadata = await resolver.resolve(
             chain_id,
             address,
-            block_number=None if use_latest else block_number,
+            block_number=block_number,
         )
     except NotAContractError:
         raise HTTPException(
@@ -150,7 +150,11 @@ async def get_storage(
                 metadata_settings=metadata.compiler_settings,
             )
             metadata.storage_layout = layout
-            if resolver.contract_repo and use_latest:
+            if (
+                resolver.contract_repo
+                and use_latest
+                and not metadata.is_delegated
+            ):
                 await resolver.contract_repo.save(metadata)
         except Exception:
             layout = None
@@ -201,6 +205,7 @@ async def get_slot(
     resolver: ContractResolver = Depends(get_contract_resolver),
     layout_parser: LayoutParser = Depends(get_layout_parser),
     storage_reader: StorageReader = Depends(get_storage_reader),
+    web3_provider: Web3Provider = Depends(get_web3_provider),
 ):
     """
     Get a single slot value.
@@ -209,9 +214,17 @@ async def get_slot(
     Block can be a number or 'latest'.
     """
     # Parse block
-    block_number: int | str
     if block.lower() == "latest":
-        block_number = "latest"
+        try:
+            block_number = await web3_provider.get_block_number(chain_id)
+        except Exception as e:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": f"Failed to get latest block: {e}",
+                    "code": "RPC_ERROR",
+                },
+            )
     else:
         try:
             block_number = int(block)
@@ -239,7 +252,7 @@ async def get_slot(
         metadata = await resolver.resolve(
             chain_id,
             address,
-            block_number=None if block_number == "latest" else block_number,
+            block_number=block_number,
         )
     except NotAContractError:
         raise HTTPException(

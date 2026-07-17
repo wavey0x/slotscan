@@ -32,6 +32,10 @@ class ContractResponse(BaseModel):
     name: Optional[str] = None
     code_hash: Optional[str] = None
 
+    is_delegated: bool = False
+    delegate_address: Optional[str] = None
+    delegate_code_hash: Optional[str] = None
+
     is_proxy: bool
     proxy_type: Optional[str] = None
     implementation_address: Optional[str] = None

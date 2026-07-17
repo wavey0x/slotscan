@@ -111,14 +111,24 @@ class TransactionAnalysisService:
             evm_step_count=evidence.evm_step_count or None,
         )
         write_history_complete = evidence.evm_step_count > 0
+        persistent_writes = [
+            write
+            for write in evidence.writes
+            if write.get("namespace", "persistent") == "persistent"
+        ]
         capabilities = {
             **asdict(journal.capabilities),
             "write_history_complete": write_history_complete,
             "address_attribution_complete": all(
                 bool(write.get("address")) for write in evidence.writes
             ),
-            "code_attribution_complete": all(
-                bool(write.get("code_address")) for write in evidence.writes
+            "code_attribution_complete": (
+                write_history_complete
+                and all(
+                    write.get("code_attribution") == "exact"
+                    and bool(write.get("code_address"))
+                    for write in persistent_writes
+                )
             ),
         }
         artifact = TransactionTraceArtifactData(
@@ -194,6 +204,17 @@ class TransactionAnalysisService:
         """Decode one storage-owner projection without issuing another trace."""
         contract_address = Web3.to_checksum_address(contract_address)
         journal = journal or self.build_journal(artifact)
+        code_attribution_complete = artifact.capabilities.get(
+            "code_attribution_complete",
+            False,
+        )
+        if not code_attribution_complete:
+            # A raw struct-log target does not prove the effective EIP-7702
+            # code source. Keep the writes, but do not apply a guessed layout.
+            layout = None
+            sources = None
+            layouts_by_code_address = None
+            sources_by_code_address = None
         raw_changes: list[tuple[str, str | None, str, int | None, int]] = []
         code_address_by_step: dict[int, str | None] = {}
         had_unknown_evidence = any(
@@ -236,6 +257,7 @@ class TransactionAnalysisService:
         raw_changes.sort(key=lambda change: change[4])
         is_complete = (
             write_history_complete
+            and code_attribution_complete
             and len(raw_changes) <= self.settings.max_sstore_ops
             and not had_unknown_evidence
         )

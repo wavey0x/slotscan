@@ -184,14 +184,23 @@ class TraceRPCClient:
         {
           writes: [], sha3s: [], steps: 0, lastOp: null, lastDepth: null,
           frames: {}, frameStack: [], pendingCalls: {}, nextFrameId: 1,
-          ensureRoot: function(log) {
+          effectiveCode: function(requested, db) {
+            var requestedHex = toHex(requested).toLowerCase();
+            var rawCode = toHex(db.getCode(requested)).toLowerCase();
+            if (rawCode.length === 48 && rawCode.slice(0, 8) === '0xef0100') {
+              return '0x' + rawCode.slice(8);
+            }
+            return requestedHex;
+          },
+          ensureRoot: function(log, db) {
             if (this.frameStack.length === 0) {
-              var address = toHex(log.contract.getAddress());
-              this.frames[0] = {id: 0, parent: null, depth: log.getDepth(), storage: address, code: address, failed: false};
+              var requested = log.contract.getAddress();
+              var address = toHex(requested);
+              this.frames[0] = {id: 0, parent: null, depth: log.getDepth(), storage: address, code: this.effectiveCode(requested, db), failed: false};
               this.frameStack.push(0);
             }
           },
-          syncFrame: function(log) {
+          syncFrame: function(log, db) {
             var depth = log.getDepth();
             while (this.frameStack.length > 1 && this.currentFrame().depth > depth) {
               this.frameStack.pop();
@@ -200,13 +209,14 @@ class TraceRPCClient:
               var parent = this.currentFrame();
               var pending = this.pendingCalls[depth];
               var address = toHex(log.contract.getAddress());
+              var requested = pending && pending.code ? pending.code : log.contract.getAddress();
               var frameId = this.nextFrameId++;
               this.frames[frameId] = {
                 id: frameId,
                 parent: parent.id,
                 depth: parent.depth + 1,
                 storage: address,
-                code: pending && pending.code ? pending.code : address,
+                code: this.effectiveCode(requested, db),
                 failed: false
               };
               this.frameStack.push(frameId);
@@ -222,8 +232,8 @@ class TraceRPCClient:
           step: function(log, db) {
             this.lastOp = log.op.toString();
             this.lastDepth = log.getDepth();
-            this.ensureRoot(log);
-            this.syncFrame(log);
+            this.ensureRoot(log, db);
+            this.syncFrame(log, db);
             var frame = this.currentFrame();
             var op = log.op.toString();
 
@@ -234,6 +244,7 @@ class TraceRPCClient:
               this.writes.push({
                 address: frame.storage,
                 code_address: frame.code,
+                code_attribution: 'exact',
                 pc: log.getPC(),
                 slot: '0x' + slotValue.toString(16),
                 value: '0x' + value.toString(16),
@@ -259,7 +270,7 @@ class TraceRPCClient:
             if (op === 'CALL' || op === 'STATICCALL' || op === 'DELEGATECALL' || op === 'CALLCODE') {
               this.pendingCalls[log.getDepth() + 1] = {
                 type: op,
-                code: '0x' + log.stack.peek(1).toString(16)
+                code: toAddress(log.stack.peek(1))
               };
             } else if (op === 'CREATE' || op === 'CREATE2') {
               this.pendingCalls[log.getDepth() + 1] = {type: op, code: null};
@@ -268,7 +279,7 @@ class TraceRPCClient:
             this.steps += 1;
           },
           fault: function(log, db) {
-            this.ensureRoot(log);
+            this.ensureRoot(log, db);
             this.currentFrame().failed = true;
           },
           result: function(ctx, db) {
@@ -449,6 +460,7 @@ class TraceRPCClient:
                     sstores.append({
                         "address": current_storage_address,
                         "code_address": current_code_address,
+                        "code_attribution": "inferred",
                         "pc": pc,
                         "slot": normalized_slot,
                         "value": self._normalize_value(value),

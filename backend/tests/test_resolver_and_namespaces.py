@@ -565,7 +565,9 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
             await resolver._fetch_verification(1, ADDRESS)
 
     async def test_fresh_historical_source_miss_uses_negative_cache(self):
+        bytecode = b"\x60\x00"
         row = SimpleNamespace(
+            code_hash=Web3.keccak(bytecode).hex(),
             is_proxy=False,
             is_verified=False,
             storage_layout=None,
@@ -584,14 +586,12 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         resolver = _Resolver(object(), Settings(), contract_repo=Repo())
-        resolver._check_is_contract = AsyncMock(
-            side_effect=AssertionError("fresh source miss must avoid provider work")
-        )
+        resolver._check_is_contract = AsyncMock(return_value=bytecode)
 
         metadata = await resolver.resolve(1, ADDRESS, block_number=123)
 
         self.assertFalse(metadata.is_verified)
-        resolver._check_is_contract.assert_not_awaited()
+        resolver._check_is_contract.assert_awaited_once_with(1, ADDRESS, 123)
 
     def test_negative_cache_expires_after_configured_ttl(self):
         resolver = _Resolver(
@@ -786,6 +786,7 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_historical_resolution_uses_block_specific_cache(self):
         expected = SimpleNamespace(
+            code_hash=Web3.keccak(b"\x60\x00").hex(),
             is_verified=True,
             storage_layout={
                 "contract_name": "Cached",

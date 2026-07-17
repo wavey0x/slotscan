@@ -3,6 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 const VOTING_ESCROW_ADDRESS = '0x5f3b5dfeb7b28cdbd7faba78963ee202a494e2a2';
 const NAMED_ADDRESS = '0x1234567890abcdef1234567890abcdef12345678';
 const UNNAMED_ADDRESS = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';
+const DELEGATE_ADDRESS = '0x2222222222222222222222222222222222222222';
 
 async function mockContractPage(
   page: Page,
@@ -12,9 +13,18 @@ async function mockContractPage(
     variables?: Record<string, unknown>[];
     types?: Record<string, Record<string, unknown>>;
     slots?: Record<string, unknown>[];
+    contract?: Record<string, unknown>;
+    layoutError?: Record<string, unknown>;
   } = {},
 ) {
   await page.route(`**/api/slotscan/contracts/1/${address}/layout`, async (route) => {
+    if (data.layoutError) {
+      await route.fulfill({
+        status: 404,
+        json: { detail: data.layoutError },
+      });
+      return;
+    }
     await route.fulfill({
       json: {
         contract_name: name || '',
@@ -30,6 +40,9 @@ async function mockContractPage(
         address,
         name,
         code_hash: null,
+        is_delegated: false,
+        delegate_address: null,
+        delegate_code_hash: null,
         is_proxy: false,
         proxy_type: null,
         implementation_address: null,
@@ -37,6 +50,7 @@ async function mockContractPage(
         verification_source: 'mock',
         compiler_version: '0.8.30',
         has_layout: true,
+        ...data.contract,
       },
     });
   });
@@ -75,6 +89,48 @@ test('unnamed address headers show the address only once', async ({ page }) => {
   await expect(header.getByText('ADDR', { exact: true })).toBeVisible();
   await expect(header.getByRole('link', { name: '0xabcd...abcd' })).toHaveCount(1);
   await expect(header.getByRole('button', { name: 'Copy contract address' })).toHaveCount(1);
+});
+
+test('delegated EOAs distinguish storage from their code source', async ({ page }) => {
+  await mockContractPage(page, NAMED_ADDRESS, 'DelegateWallet', {
+    contract: {
+      is_delegated: true,
+      delegate_address: DELEGATE_ADDRESS,
+      delegate_code_hash: `0x${'ab'.repeat(32)}`,
+    },
+  });
+  await page.goto(`/1/${NAMED_ADDRESS}`);
+
+  const header = page.locator('main header');
+  await expect(header.getByText(/Delegated EOA/)).toBeVisible();
+  await expect(header.getByText(/Storage at/)).toBeVisible();
+  await expect(header.getByText(/Executing code from/)).toBeVisible();
+  await expect(header.getByRole('link', { name: '0x2222...2222' })).toBeVisible();
+  await expect(header.getByRole('button', { name: 'Copy delegate address' })).toBeVisible();
+  await expect(header.getByText('Proxy', { exact: true })).toHaveCount(0);
+});
+
+test('delegated EOAs name the unresolved code source', async ({ page }) => {
+  await mockContractPage(page, NAMED_ADDRESS, null, {
+    contract: {
+      is_delegated: true,
+      delegate_address: DELEGATE_ADDRESS,
+      delegate_code_hash: null,
+      is_verified: false,
+      has_layout: false,
+    },
+    layoutError: {
+      error: 'The delegated code source does not have a usable published storage layout',
+      code: 'DELEGATE_LAYOUT_UNAVAILABLE',
+      delegate_address: DELEGATE_ADDRESS,
+    },
+  });
+  await page.goto(`/1/${NAMED_ADDRESS}`);
+
+  await expect(page.getByText('Delegated code layout unavailable')).toBeVisible();
+  const notice = page.getByRole('paragraph');
+  await expect(notice.getByRole('link', { name: '0x2222...2222' })).toBeVisible();
+  await expect(notice.getByRole('button', { name: 'Copy delegate address' })).toBeVisible();
 });
 
 test('mobile layouts keep hidden slot indexes available from the variable disclosure', async ({ page }) => {

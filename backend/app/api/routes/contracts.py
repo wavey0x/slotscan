@@ -69,7 +69,7 @@ async def get_contract(
             )
             metadata.storage_layout = layout
             has_layout = True
-            if resolver.contract_repo:
+            if resolver.contract_repo and not metadata.is_delegated:
                 await resolver.contract_repo.save(metadata)
         except UnsupportedCompilerVersionError:
             # Old compiler version doesn't support storage layout
@@ -82,6 +82,9 @@ async def get_contract(
         address=metadata.address,
         name=metadata.name,
         code_hash=metadata.code_hash,
+        is_delegated=metadata.is_delegated,
+        delegate_address=metadata.delegate_address,
+        delegate_code_hash=metadata.delegate_code_hash,
         is_proxy=metadata.is_proxy,
         proxy_type=metadata.proxy_type,
         implementation_address=metadata.implementation_address,
@@ -172,7 +175,19 @@ async def get_layout(
 
     if not layout:
         # Provide specific error messages based on contract state
-        if metadata.is_proxy:
+        if metadata.is_delegated:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": (
+                        "The delegated code source does not have a usable "
+                        "published storage layout"
+                    ),
+                    "code": "DELEGATE_LAYOUT_UNAVAILABLE",
+                    "delegate_address": metadata.delegate_address,
+                },
+            )
+        elif metadata.is_proxy:
             proxy_type_display = {
                 "eip1167": "EIP-1167 Minimal Proxy",
                 "eip1967": "EIP-1967 Transparent Proxy",

@@ -22,6 +22,29 @@ function LayoutError({ error, chain }: { error: Error; chain: string }) {
   const apiError = error instanceof APIError ? error : null;
   const details = apiError?.details as Record<string, string> | undefined;
 
+  if (apiError?.code === 'DELEGATE_LAYOUT_UNAVAILABLE' && details?.delegate_address) {
+    return (
+      <div className="border border-gray-300 p-5">
+        <div className="mb-1 text-sm text-gray-900">Delegated code layout unavailable</div>
+        <p className="text-xs text-gray-500">
+          The code source at{' '}
+          <span className="inline-flex items-center gap-0.5">
+            <a
+              href={getAddressExplorerUrl(chain, details.delegate_address)}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={details.delegate_address}
+            >
+              {truncateAddress(details.delegate_address)}
+            </a>
+            <CopyButton value={details.delegate_address} label="Copy delegate address" className="-my-1" />
+          </span>{' '}
+          does not have a usable published storage layout.
+        </p>
+      </div>
+    );
+  }
+
   if (apiError?.code === 'PROXY_IMPL_NOT_VERIFIED' && details?.implementation_address) {
     return (
       <div className="border border-gray-300 p-5">
@@ -72,6 +95,7 @@ export function ContractPage({ chain, address }: ContractPageProps) {
   }, [address, chain, displayName]);
 
   const statuses = [
+    contract?.is_delegated ? 'Delegated EOA' : null,
     contract?.is_proxy ? 'Proxy' : null,
     contract ? (contract.is_verified ? 'Verified' : 'Unverified') : null,
   ].filter(Boolean);
@@ -90,6 +114,30 @@ export function ContractPage({ chain, address }: ContractPageProps) {
       <CopyButton value={address} label="Copy contract address" />
     </span>
   );
+  const addressLink = (value: string, copyLabel: string) => (
+    <span className="inline-flex items-center gap-0.5">
+      <a
+        href={getAddressExplorerUrl(chain, value)}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={value}
+      >
+        {truncateAddress(value)}
+      </a>
+      <CopyButton value={value} label={copyLabel} className="-my-1" />
+    </span>
+  );
+  const metadata = contract?.is_delegated && contract.delegate_address ? (
+    <span className="flex flex-wrap gap-x-5 gap-y-1">
+      <span>Storage at {addressLink(address, 'Copy storage address')}</span>
+      <span>Executing code from {addressLink(contract.delegate_address, 'Copy delegate address')}</span>
+    </span>
+  ) : contract?.implementation_address ? (
+    <span className="inline-flex items-center gap-0.5">
+      <span>Implementation</span>
+      {addressLink(contract.implementation_address, 'Copy implementation address')}
+    </span>
+  ) : undefined;
 
   return (
     <>
@@ -98,20 +146,7 @@ export function ContractPage({ chain, address }: ContractPageProps) {
         title={displayName || addressIdentifier}
         identifier={displayName ? addressIdentifier : undefined}
         status={statuses.length > 0 ? statuses.join(' · ') : undefined}
-        meta={contract?.implementation_address ? (
-          <span className="inline-flex items-center gap-0.5">
-            <span>Implementation</span>
-            <a
-              href={getAddressExplorerUrl(chain, contract.implementation_address)}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={contract.implementation_address}
-            >
-              {truncateAddress(contract.implementation_address)}
-            </a>
-            <CopyButton value={contract.implementation_address} label="Copy implementation address" className="-my-1" />
-          </span>
-        ) : undefined}
+        meta={metadata}
       />
 
       {isLoading ? (

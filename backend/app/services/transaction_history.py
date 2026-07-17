@@ -80,13 +80,14 @@ class TransactionHistoryService:
             journal,
         )
         code_addresses_by_owner: dict[str, tuple[str, ...]] = {}
-        for event in journal.events:
-            if event.namespace.value != "persistent" or not event.code_address:
-                continue
-            current = list(code_addresses_by_owner.get(event.address, ()))
-            if event.code_address not in current:
-                current.append(event.code_address)
-                code_addresses_by_owner[event.address] = tuple(current)
+        if artifact.capabilities.get("code_attribution_complete", False):
+            for event in journal.events:
+                if event.namespace.value != "persistent" or not event.code_address:
+                    continue
+                current = list(code_addresses_by_owner.get(event.address, ()))
+                if event.code_address not in current:
+                    current.append(event.code_address)
+                    code_addresses_by_owner[event.address] = tuple(current)
 
         semaphore = asyncio.Semaphore(
             max(1, self.settings.max_parallel_contract_resolutions)
@@ -101,6 +102,7 @@ class TransactionHistoryService:
             target: str,
             *,
             follow_proxy: bool,
+            follow_delegation: bool = True,
         ) -> MetadataResolution:
             last_error: Exception | None = None
             for attempt in range(2):
@@ -131,6 +133,7 @@ class TransactionHistoryService:
                                 target,
                                 artifact.block_number,
                                 follow_proxy=follow_proxy,
+                                follow_delegation=follow_delegation,
                             ),
                             timeout=timeout,
                         )
@@ -184,7 +187,11 @@ class TransactionHistoryService:
 
         if direct_targets:
             direct_results = await asyncio.gather(*(
-                resolve_target(target, follow_proxy=False)
+                resolve_target(
+                    target,
+                    follow_proxy=False,
+                    follow_delegation=False,
+                )
                 for target in direct_targets
             ))
             direct_resolutions.update(zip(direct_targets, direct_results))
@@ -328,6 +335,7 @@ class TransactionHistoryService:
         block_number: int,
         *,
         follow_proxy: bool = True,
+        follow_delegation: bool = True,
     ) -> ContractMetadata:
         # Each concurrent owner receives its own AsyncSession. SQLAlchemy does
         # not permit concurrent operations on one request-scoped session.
@@ -346,6 +354,7 @@ class TransactionHistoryService:
                 block_number=block_number,
                 sourcify_layout_only=False,
                 follow_proxy=follow_proxy,
+                follow_delegation=follow_delegation,
             )
 
     @staticmethod

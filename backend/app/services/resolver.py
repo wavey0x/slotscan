@@ -47,6 +47,9 @@ BEACON_IMPL_SELECTOR = "0x5c60da1b"
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 LAYOUT_RESOLVER_VERSION = 5
 
+# EIP-7702 delegation designator: 0xef0100 || 20-byte delegate address.
+EIP7702_PREFIX = bytes.fromhex("ef0100")
+
 # EIP-1167 Minimal Proxy bytecode patterns
 # Standard: 363d3d373d3d3d363d73<address>5af43d82803e903d91602b57fd5bf3
 EIP1167_PREFIX = bytes.fromhex("363d3d373d3d3d363d73")
@@ -55,6 +58,13 @@ EIP1167_SUFFIX = bytes.fromhex("5af43d82803e903d91602b57fd5bf3")
 # Vyper minimal proxy variant
 VYPER_PROXY_PREFIX = bytes.fromhex("366000600037611000600036600073")
 VYPER_PROXY_SUFFIX = bytes.fromhex("5af4602c57600080fd5b6110006000f3")
+
+
+def _parse_eip7702_designator(bytecode: bytes) -> Optional[str]:
+    """Return the one-hop delegate from an exact EIP-7702 designator."""
+    if len(bytecode) != 23 or not bytecode.startswith(EIP7702_PREFIX):
+        return None
+    return Web3.to_checksum_address(bytecode[3:])
 
 
 class ContractResolver:
@@ -86,24 +96,48 @@ class ContractResolver:
         block_number: Optional[int] = None,
         sourcify_layout_only: bool = False,
         follow_proxy: bool = True,
+        follow_delegation: bool = True,
     ) -> ContractMetadata:
         """
         Resolve full contract metadata.
 
-        1. Check cache first
-        2. Verify it's a contract
-        3. Detect proxy pattern
-        4. Fetch verification from Sourcify (and optionally Etherscan sources)
-        5. Cache and return result
+        Chain code is checked before address caches so mutable EIP-7702
+        delegations cannot return a stale layout.
         """
         address = Web3.to_checksum_address(address)
 
-        # Check cache first
+        bytecode = await self._check_is_contract(chain_id, address, block_number)
+        code_hash = Web3.keccak(bytecode).hex()
+        delegate_address = _parse_eip7702_designator(bytecode)
+        if delegate_address and follow_delegation:
+            return await self._resolve_delegated(
+                chain_id=chain_id,
+                authority_address=address,
+                designator_hash=code_hash,
+                delegate_address=delegate_address,
+                block_number=block_number,
+                sourcify_layout_only=sourcify_layout_only,
+            )
+        if delegate_address:
+            # The protocol follows a delegation exactly once. Callers that
+            # already followed one hop must treat these bytes as loaded code.
+            return ContractMetadata(
+                chain_id=chain_id,
+                address=address,
+                code_hash=code_hash,
+            )
+
+        # A cached address binding is usable only while its raw code identity
+        # still matches the selected chain state.
         if self.contract_repo and block_number is not None:
             historical = await self.contract_repo.get_at_block(
                 chain_id, address, block_number
             )
-            if historical and (follow_proxy or not historical.is_proxy):
+            if (
+                historical
+                and self._cache_matches_code_hash(historical, code_hash)
+                and (follow_proxy or not historical.is_proxy)
+            ):
                 metadata = self.contract_repo.to_metadata(historical)
                 layout = metadata.storage_layout
                 if (
@@ -125,7 +159,11 @@ class ContractResolver:
         # requested block instead of reusing today's implementation/layout.
         if self.contract_repo and block_number is None:
             cached = await self.contract_repo.get(chain_id, address)
-            if cached and (follow_proxy or not cached.is_proxy):
+            if (
+                cached
+                and self._cache_matches_code_hash(cached, code_hash)
+                and (follow_proxy or not cached.is_proxy)
+            ):
                 logger.debug(f"Cache hit for {address} on chain {chain_id}")
                 metadata = self.contract_repo.to_metadata(cached)
                 layout = metadata.storage_layout
@@ -142,10 +180,6 @@ class ContractResolver:
                 ):
                     await self._hydrate_compiler_inputs(metadata)
                     return metadata
-
-        # Verify it's a contract
-        bytecode = await self._check_is_contract(chain_id, address, block_number)
-        code_hash = Web3.keccak(bytecode).hex()
 
         # Detect proxy (pass bytecode for EIP-1167 detection)
         proxy_info = (
@@ -360,6 +394,58 @@ class ContractResolver:
             await self.contract_repo.save_at_block(result, block_number)
 
         return result
+
+    async def _resolve_delegated(
+        self,
+        *,
+        chain_id: int,
+        authority_address: str,
+        designator_hash: str,
+        delegate_address: str,
+        block_number: Optional[int],
+        sourcify_layout_only: bool,
+    ) -> ContractMetadata:
+        """Compose delegate code metadata with authority storage identity."""
+        try:
+            delegate = await self.resolve(
+                chain_id,
+                delegate_address,
+                block_number=block_number,
+                sourcify_layout_only=sourcify_layout_only,
+                follow_proxy=False,
+                follow_delegation=False,
+            )
+        except NotAContractError:
+            delegate = None
+
+        return ContractMetadata(
+            chain_id=chain_id,
+            address=authority_address,
+            code_hash=designator_hash,
+            is_delegated=True,
+            delegate_address=delegate_address,
+            delegate_code_hash=delegate.code_hash if delegate else None,
+            is_proxy=False,
+            proxy_type=None,
+            implementation_address=None,
+            is_verified=delegate.is_verified if delegate else False,
+            verification_source=(
+                delegate.verification_source if delegate else None
+            ),
+            name=delegate.name if delegate else None,
+            compiler_version=delegate.compiler_version if delegate else None,
+            sources=delegate.sources if delegate else None,
+            compiler_settings=delegate.compiler_settings if delegate else None,
+            storage_layout=delegate.storage_layout if delegate else None,
+            compiler_artifact_fingerprint=(
+                delegate.compiler_artifact_fingerprint if delegate else None
+            ),
+        )
+
+    @staticmethod
+    def _cache_matches_code_hash(row, code_hash: str) -> bool:
+        cached_hash = getattr(row, "code_hash", None)
+        return bool(cached_hash) and cached_hash.lower() == code_hash.lower()
 
     def _source_check_is_fresh(self, row) -> bool:
         checked_at = getattr(row, "source_checked_at", None)

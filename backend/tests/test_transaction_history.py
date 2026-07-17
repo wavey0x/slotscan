@@ -16,10 +16,17 @@ from app.models.domain import (
     StorageType,
     StorageVariable,
 )
-from app.repositories.trace_cache import TransactionTraceArtifactData
+from app.repositories.trace_cache import (
+    TRACE_SCHEMA_VERSION,
+    TransactionTraceArtifactData,
+)
 from app.services.decoder import TypeDecoder
 from app.services.tracer.tracer import TransactionAnalysisService
-from app.services.tracer.extractor import TransactionTraceExtractor
+from app.services.tracer.extractor import (
+    TransactionTraceEvidence,
+    TransactionTraceExtractor,
+)
+from app.services.tracer.rpc_client import TraceRPCClient
 from app.services.transaction_history import TransactionHistoryService
 
 
@@ -141,6 +148,48 @@ class _CachedArtifactRepository:
         return self.value
 
 
+class _CompactTraceProvider:
+    def __init__(self):
+        self.params = None
+
+    async def make_request(self, chain_id, method, params):
+        self.params = params
+        return {
+            "result": {
+                "writes": [
+                    {
+                        "address": ADDRESS_A,
+                        "code_address": CODE_A,
+                        "code_attribution": "exact",
+                        "slot": "0x1",
+                        "value": "0x1",
+                        "old_value": None,
+                        "opcode": "SSTORE",
+                        "namespace": "persistent",
+                        "depth": 1,
+                        "index": 5,
+                        "frame_id": 0,
+                    },
+                    {
+                        "address": ADDRESS_B,
+                        "code_address": CODE_B,
+                        "code_attribution": "exact",
+                        "slot": "0x2",
+                        "value": "0x2",
+                        "old_value": None,
+                        "opcode": "SSTORE",
+                        "namespace": "persistent",
+                        "depth": 2,
+                        "index": 8,
+                        "frame_id": 1,
+                    }
+                ],
+                "sha3s": [],
+                "stepCount": 10,
+            }
+        }
+
+
 class _HistoryService(TransactionHistoryService):
     async def _resolve_metadata(
         self,
@@ -149,7 +198,10 @@ class _HistoryService(TransactionHistoryService):
         block_number,
         *,
         follow_proxy=True,
+        follow_delegation=True,
     ):
+        if hasattr(self, "delegation_calls"):
+            self.delegation_calls.append((address.lower(), follow_delegation))
         if hasattr(self, "resolution_calls"):
             self.resolution_calls.append((chain_id, address, block_number, follow_proxy))
         if address.lower() == ADDRESS_B:
@@ -171,6 +223,7 @@ class _CountingHistoryService(TransactionHistoryService):
         block_number,
         *,
         follow_proxy=True,
+        follow_delegation=True,
     ):
         self.resolution_calls.append((address.lower(), follow_proxy))
         key = (address.lower(), follow_proxy)
@@ -286,6 +339,261 @@ class TransactionOwnerTests(TestCase):
         self.assertFalse(
             TransactionHistoryService._names_match("VaultHub", "WithdrawalQueueERC721")
         )
+
+
+class Eip7702TraceTests(IsolatedAsyncioTestCase):
+    async def test_code_capability_requires_complete_exact_trace_evidence(self):
+        cases = (
+            ("exact", 10, True),
+            ("inferred", 10, False),
+            ("exact", 0, False),
+        )
+        for attribution, step_count, expected in cases:
+            with self.subTest(
+                attribution=attribution,
+                step_count=step_count,
+            ):
+                tracer = TransactionAnalysisService(
+                    _NoopProvider(),
+                    Settings(MAX_SSTORE_OPS=100),
+                    TypeDecoder(),
+                )
+                write = dict(artifact().write_events[0])
+                write["code_attribution"] = attribution
+                tracer.trace_extractor.extract = AsyncMock(
+                    return_value=TransactionTraceEvidence(
+                        receipt={
+                            "blockNumber": artifact().block_number,
+                            "status": 1,
+                            "from": artifact().transaction_from,
+                            "to": artifact().transaction_to,
+                            "contractAddress": None,
+                        },
+                        prestate_diff={"pre": {}, "post": {}},
+                        writes=[write],
+                        sha3_operations=[],
+                        evm_step_count=step_count,
+                    )
+                )
+
+                traced = await tracer.load_trace_artifact(
+                    1,
+                    artifact().tx_hash,
+                )
+
+                self.assertEqual(
+                    traced.capabilities["code_attribution_complete"],
+                    expected,
+                )
+
+    async def test_compact_trace_preserves_exact_effective_code_output(self):
+        provider = _CompactTraceProvider()
+        client = TraceRPCClient(provider)
+
+        result = await client._execute_compact_storage_trace(
+            1,
+            "0x" + "ab" * 32,
+        )
+
+        self.assertIsNotNone(result)
+        writes, _, step_count = result
+        self.assertEqual(step_count, 10)
+        self.assertEqual(writes[0]["address"], ADDRESS_A)
+        self.assertEqual(writes[0]["code_address"], CODE_A)
+        self.assertEqual(writes[0]["code_attribution"], "exact")
+        self.assertEqual(writes[1]["address"], ADDRESS_B)
+        self.assertEqual(writes[1]["code_address"], CODE_B)
+        self.assertEqual(writes[1]["code_attribution"], "exact")
+        tracer_source = provider.params[1]["tracer"]
+        self.assertIn("db.getCode(requested)", tracer_source)
+        self.assertIn("rawCode.length === 48", tracer_source)
+        self.assertIn("rawCode.slice(0, 8) === '0xef0100'", tracer_source)
+        self.assertIn("toAddress(log.stack.peek(1))", tracer_source)
+        self.assertEqual(
+            tracer_source.count("this.effectiveCode(requested, db)"),
+            2,
+        )
+
+    def test_raw_structlogs_mark_code_attribution_inferred(self):
+        client = TraceRPCClient(_NoopProvider())
+
+        writes, _ = client._parse_structlogs(
+            [
+                {
+                    "op": "SSTORE",
+                    "depth": 1,
+                    "pc": 7,
+                    "stack": [ONE, SLOT_1],
+                    "memory": [],
+                }
+            ],
+            ADDRESS_A,
+            include_memory=False,
+        )
+
+        self.assertEqual(writes[0]["address"], ADDRESS_A)
+        self.assertEqual(writes[0]["code_address"], ADDRESS_A)
+        self.assertEqual(writes[0]["code_attribution"], "inferred")
+
+    def test_incomplete_code_attribution_keeps_raw_writes_without_layout(self):
+        tracer = TransactionAnalysisService(
+            _NoopProvider(),
+            Settings(MAX_SSTORE_OPS=100),
+            TypeDecoder(),
+        )
+        value_type = StorageType(
+            "t_uint256",
+            "uint256",
+            "value",
+            "inplace",
+            32,
+        )
+        layout = StorageLayout(
+            "EndBlockDelegate",
+            [
+                StorageVariable(
+                    "wrongLayout",
+                    1,
+                    0,
+                    32,
+                    value_type.id,
+                    value_type.label,
+                )
+            ],
+            {value_type.id: value_type},
+        )
+        raw_artifact = replace(
+            artifact(),
+            capabilities={
+                **artifact().capabilities,
+                "code_attribution_complete": False,
+            },
+        )
+
+        diff = tracer.project_trace_artifact(
+            raw_artifact,
+            ADDRESS_A,
+            layout=layout,
+            layouts_by_code_address={CODE_A: layout},
+        )
+
+        self.assertFalse(diff.is_complete)
+        self.assertIsNone(diff.layout)
+        self.assertTrue(diff.changes)
+        self.assertTrue(all(change.variable is None for change in diff.changes))
+
+    def test_transaction_time_code_layout_wins_over_end_block_delegate_layout(self):
+        tracer = TransactionAnalysisService(
+            _NoopProvider(),
+            Settings(MAX_SSTORE_OPS=100),
+            TypeDecoder(),
+        )
+        value_type = StorageType(
+            "t_uint256",
+            "uint256",
+            "value",
+            "inplace",
+            32,
+        )
+
+        def layout(name):
+            return StorageLayout(
+                name,
+                [
+                    StorageVariable(
+                        name,
+                        1,
+                        0,
+                        32,
+                        value_type.id,
+                        value_type.label,
+                    )
+                ],
+                {value_type.id: value_type},
+            )
+
+        diff = tracer.project_trace_artifact(
+            artifact(),
+            ADDRESS_A,
+            layout=layout("endBlockDelegate"),
+            layouts_by_code_address={
+                CODE_A: layout("transactionTimeDelegate"),
+            },
+        )
+
+        self.assertEqual(
+            [change.variable_path for change in diff.changes],
+            [
+                "transactionTimeDelegate",
+                "transactionTimeDelegate",
+                "transactionTimeDelegate",
+            ],
+        )
+
+    async def test_transaction_response_is_incomplete_without_exact_code_attribution(
+        self,
+    ):
+        raw_artifact = replace(
+            artifact(),
+            capabilities={
+                **artifact().capabilities,
+                "code_attribution_complete": False,
+            },
+        )
+        tracer = TransactionAnalysisService(
+            _NoopProvider(),
+            Settings(MAX_SSTORE_OPS=100),
+            TypeDecoder(),
+            trace_cache_repo=_CachedArtifactRepository(raw_artifact),
+        )
+        service = _HistoryService(
+            tracer=tracer,
+            web3_provider=_NoopProvider(),
+            settings=tracer.settings,
+            layout_parser=None,
+            http_client=None,
+        )
+
+        response = await get_transaction_storage_history(
+            chain_id=1,
+            tx_hash=raw_artifact.tx_hash,
+            history_service=service,
+        )
+
+        self.assertFalse(response.capabilities.code_attribution_complete)
+        self.assertFalse(response.is_complete)
+        self.assertTrue(
+            all(not contract.layout_available for contract in response.contracts)
+        )
+
+    async def test_exact_trace_target_is_resolved_without_a_second_hop(self):
+        tracer = TransactionAnalysisService(
+            _NoopProvider(),
+            Settings(MAX_SSTORE_OPS=100),
+            TypeDecoder(),
+            trace_cache_repo=_CachedArtifactRepository(artifact()),
+        )
+        service = _HistoryService(
+            tracer=tracer,
+            web3_provider=_NoopProvider(),
+            settings=tracer.settings,
+            layout_parser=None,
+            http_client=None,
+        )
+        service.delegation_calls = []
+
+        result = await service.analyze(
+            1,
+            artifact().tx_hash,
+            storage_addresses=(ADDRESS_A,),
+        )
+
+        self.assertEqual(result.contracts[0].code_addresses, (CODE_A,))
+        self.assertIn((ADDRESS_A, True), service.delegation_calls)
+        self.assertIn((CODE_A, False), service.delegation_calls)
+
+    def test_trace_schema_version_invalidates_pre_eip7702_artifacts(self):
+        self.assertEqual(TRACE_SCHEMA_VERSION, 6)
 
 
 class PrestateRecoveryTests(TestCase):
@@ -447,6 +755,7 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
             block_number=artifact().block_number,
             sourcify_layout_only=False,
             follow_proxy=False,
+            follow_delegation=True,
         )
 
     async def test_shared_artifact_is_loaded_once_and_resolution_degrades_locally(self):

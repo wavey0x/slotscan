@@ -16,6 +16,9 @@ export interface ContractResponse {
   address: string;
   name: string | null;
   code_hash: string | null;
+  is_delegated: boolean;
+  delegate_address: string | null;
+  delegate_code_hash: string | null;
   is_proxy: boolean;
   proxy_type: string | null;
   implementation_address: string | null;
@@ -250,9 +253,10 @@ export interface ErrorResponse {
 
 export interface LayoutErrorResponse {
   error: string;
-  code: 'NOT_CONTRACT' | 'NOT_VERIFIED' | 'NO_LAYOUT' | 'PROXY_IMPL_NOT_VERIFIED' | 'LAYOUT_PARSE_ERROR' | 'RPC_ERROR';
+  code: 'NOT_CONTRACT' | 'NOT_VERIFIED' | 'NO_LAYOUT' | 'PROXY_IMPL_NOT_VERIFIED' | 'DELEGATE_LAYOUT_UNAVAILABLE' | 'LAYOUT_PARSE_ERROR' | 'RPC_ERROR';
   proxy_type?: string;
   implementation_address?: string;
+  delegate_address?: string;
 }
 
 // === Layout Page Types ===
