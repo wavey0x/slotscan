@@ -52,7 +52,9 @@ export function slotReferenceDisplay(slotHex: string, showHex: boolean): string 
     const value = BigInt(slotHex);
     if (!showHex && value <= BigInt(999)) return value.toString();
     const hex = value.toString(16);
-    return hex.length <= 4 ? `0x${hex}` : `0x${hex.slice(0, 2)}..`;
+    // Hashed slots (mappings, ERC-7201 bases) often share a prefix and differ
+    // only in the trailing digits, so the suffix carries the distinguishing bits.
+    return hex.length <= 6 ? `0x${hex}` : `0x${hex.slice(0, 2)}..${hex.slice(-2)}`;
   } catch {
     return formatSlotShort(slotHex, 4);
   }

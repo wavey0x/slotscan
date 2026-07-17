@@ -7,26 +7,35 @@ import { storageHoverProps } from './slotDisplay';
 
 export function PackedFieldRow({
   field,
+  isFirst,
   isLast,
+  hasHeader,
   totalFields,
   chainId,
   showStep,
   slotInfo,
+  step,
   initialEncoded,
   finalEncoded,
   borderClass,
 }: {
   field: PackedFieldResponse;
+  isFirst: boolean;
   isLast: boolean;
+  hasHeader: boolean;
   totalFields: number;
   chainId: string;
   showStep?: boolean;
   slotInfo?: { display: string; full: string };
+  step?: number | null;
   initialEncoded: string | null;
   finalEncoded: string | null;
   borderClass?: string;
 }) {
   const showTree = totalFields > 1;
+  // Without a struct header there is no parent row, so the trunk starts at the
+  // first branch instead of dangling above it.
+  const treeTop = isFirst && !hasHeader ? '50%' : 0;
   const initialDisplay = formatDecodedValue(field.before.value_decoded);
   const finalDisplay = formatDecodedValue(field.after.value_decoded);
   const unchanged = valuesEqual(field.before.value_decoded, field.after.value_decoded);
@@ -38,7 +47,7 @@ export function PackedFieldRow({
       <td className="relative w-48 py-0.5 pl-1 pr-1">
         {showTree && (
           <>
-            <div className="absolute bg-gray-300" style={{ left: 5, top: 0, bottom: isLast ? '50%' : 0, width: 1 }} />
+            <div className="absolute bg-gray-300" style={{ left: 5, top: treeTop, bottom: isLast ? '50%' : 0, width: 1 }} />
             <div className="absolute bg-gray-300" style={{ left: 5, top: '50%', width: 8, height: 1 }} />
           </>
         )}
@@ -63,7 +72,15 @@ export function PackedFieldRow({
           </DetailPopover>
         )}
       </td>
-      {showStep && <td className="hidden w-8 px-1 py-0 align-top sm:table-cell" />}
+      {showStep && (
+        <td className="hidden w-8 px-1 py-0 text-right align-top sm:table-cell">
+          {step !== null && step !== undefined && (
+            <DetailPopover content={<div className="font-mono text-[10px] text-gray-100">Step: {step}</div>}>
+              <span className="cursor-default font-mono text-[10px] text-gray-400">{step}</span>
+            </DetailPopover>
+          )}
+        </td>
+      )}
     </tr>
   );
 }

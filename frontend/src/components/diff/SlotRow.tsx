@@ -125,12 +125,15 @@ export function SlotRow({
         <PackedFieldRow
           key={idx}
           field={field}
+          isFirst={idx === 0}
           isLast={idx === displayedPackedFields.length - 1}
+          hasHeader={Boolean(slot.struct_definition?.name)}
           totalFields={displayedPackedFields.length}
           chainId={chainId}
           showStep={showStep}
           // Show slot/step on first field row only if no struct header
           slotInfo={!slot.struct_definition?.name && idx === 0 ? { display: slotNumber, full: slot.slot } : undefined}
+          step={!slot.struct_definition?.name && idx === 0 ? firstStep : undefined}
           initialEncoded={slot.before.value_encoded}
           finalEncoded={slot.after.value_encoded}
           // Add border on first field row if no struct header
@@ -195,6 +198,10 @@ export function SlotRow({
                       <span className="text-gray-900 font-medium">{singlePackedField?.name || variableDisplayName}</span>
                       {variableLabel && (
                         <span className="text-gray-400 ml-1">({variableLabel})</span>
+                      )}
+                      {/* A lone changed field still shares its slot; the hover lists its siblings. */}
+                      {singlePackedField && (slot.packed_fields?.length ?? 0) > 1 && (
+                        <span data-testid="packed-slot-marker" className="ml-1.5 select-none text-[9px] uppercase tracking-wide text-gray-400">packed</span>
                       )}
                     </span>
                   ) : null}
