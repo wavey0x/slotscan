@@ -2,6 +2,11 @@ import { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import { DataTable, dataTableCellClass, dataTableHeadCellClass } from '@/components/ui/DataTable';
 
+const storageTableHeadCellClass = cn(
+  dataTableHeadCellClass,
+  'py-1 shadow-[inset_0_-1px_0_rgb(var(--color-gray-200))]',
+);
+
 interface StorageTableProps {
   children: ReactNode;
   className?: string;
@@ -49,16 +54,16 @@ export function StorageTableHeader({
 }: StorageTableColumnsProps) {
   return (
     <thead>
-      <tr className="border-b border-gray-300">
-        {showExpand && <th aria-label="Row actions" className={cn(dataTableHeadCellClass, 'w-6 px-1')} />}
-        {showContract && <th className={cn(dataTableHeadCellClass, 'hidden sm:table-cell')}>Contract</th>}
-        <th className={dataTableHeadCellClass}>Variable</th>
-        <th className={dataTableHeadCellClass}>Value diff</th>
+      <tr>
+        {showExpand && <th aria-label="Row actions" className={cn(storageTableHeadCellClass, 'w-6 px-1')} />}
+        {showContract && <th className={cn(storageTableHeadCellClass, 'hidden sm:table-cell')}>Contract</th>}
+        <th className={storageTableHeadCellClass}>Variable</th>
+        <th className={storageTableHeadCellClass}>Value diff</th>
         <th className={cn(
-          dataTableHeadCellClass,
+          storageTableHeadCellClass,
           showSlotOnMobile ? 'px-1 sm:px-2' : 'hidden sm:table-cell',
         )}>Slot</th>
-        {showStep && <th className={cn(dataTableHeadCellClass, 'hidden sm:table-cell')}>Step</th>}
+        {showStep && <th className={cn(storageTableHeadCellClass, 'hidden sm:table-cell')}>Step</th>}
       </tr>
     </thead>
   );
