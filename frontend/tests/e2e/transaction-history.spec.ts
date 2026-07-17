@@ -787,6 +787,16 @@ test('timeline names struct members and stays readable on mobile', async ({ page
   }));
   expect(scrollState.scrollWidth).toBeLessThanOrEqual(scrollState.clientWidth + 1);
 
+  // Value mode also controls the numeric slot representation.
+  await page.getByRole('button', { name: 'Hex' }).click();
+  const hexSlotReference = slotReference.getByText('0x7', { exact: true });
+  await expect(hexSlotReference).toBeVisible();
+  await hexSlotReference.click();
+  await expect(page.getByRole('dialog')).toContainText(slots[1].slot);
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Decoded' }).click();
+  await expect(slotReference.getByText('7', { exact: true })).toBeVisible();
+
   await page.getByRole('button', { name: 'Grouped' }).click();
   const contractSection = page.getByRole('heading', { name: 'ResupplyPairDeployer' }).locator('xpath=ancestor::section');
   await contractSection.getByTestId('contract-toggle').click();

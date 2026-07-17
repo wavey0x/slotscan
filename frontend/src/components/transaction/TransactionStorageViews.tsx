@@ -278,7 +278,7 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
               <td className={`${storageCellClass} min-w-0 px-1 font-mono text-gray-500 sm:px-2`}>
                 <div data-testid="slot-reference" className="min-w-0 truncate">
                   <HoverCell
-                    display={slotReferenceDisplay(slot.slot, false)}
+                    display={slotReferenceDisplay(slot.slot, showHex)}
                     value={slot.slot}
                     colorClass="text-gray-500"
                     copyLabel="Copy slot"
