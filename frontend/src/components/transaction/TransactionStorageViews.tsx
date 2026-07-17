@@ -201,7 +201,7 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
             <tr key={`${contract.storage_address}:${slot.slot}:${event.step}:${ordinal}`} data-testid="timeline-event" className="border-b border-gray-200 text-xs hover:bg-gray-50">
               {showContract && (
                 <td className={`${storageCellClass} hidden sm:table-cell`}>
-                  <a href={getAddressExplorerUrl(chain, contract.storage_address)} target="_blank" rel="noopener noreferrer" className="block truncate text-gray-700 hover:underline" title={contract.storage_address}>
+                  <a href={getAddressExplorerUrl(chain, contract.storage_address)} target="_blank" rel="noopener noreferrer" className="block truncate text-gray-500 hover:underline" title={contract.storage_address}>
                     {contractDisplayLabel(contract)}
                   </a>
                   <span className="flex min-w-0 items-center text-[10px] text-gray-500">
