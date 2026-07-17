@@ -113,29 +113,30 @@ export function ContractPage({ chain, address }: ContractPageProps) {
       />
 
       <section>
-        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h2 className="text-base font-medium text-gray-900">Storage layout</h2>
-            <div className="mt-1 flex flex-wrap items-center gap-x-5 gap-y-1 text-[10px] text-gray-500">
-              <span>
-                Block{' '}
-                <a
-                  href={getBlockExplorerUrl(chain, blockNumber)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  {BigInt(blockNumber).toLocaleString()}
-                </a>
-              </span>
-              <span className="inline-flex items-center gap-0.5" title={view.block_ref.hash}>
-                Hash {truncateHash(view.block_ref.hash, 6)}
-                <CopyButton value={view.block_ref.hash} label="Copy block hash" className="-my-1" />
-              </span>
-              <span>{view.layout.variables.length} variables</span>
-              {isFetching && <span>Refreshing…</span>}
-              {error && <span className="text-red">Refresh failed · showing last exact block</span>}
-            </div>
+        <div className="mb-4">
+          <h2 className="text-base font-medium text-gray-900">Storage layout</h2>
+          <div className="mt-1 flex flex-wrap items-center gap-x-5 gap-y-1 text-[10px] text-gray-500">
+            <span>
+              Block{' '}
+              <a
+                href={getBlockExplorerUrl(chain, blockNumber)}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {BigInt(blockNumber).toLocaleString()}
+              </a>
+            </span>
+            <span className="inline-flex items-center gap-0.5" title={view.block_ref.hash}>
+              Hash {truncateHash(view.block_ref.hash, 6)}
+              <CopyButton value={view.block_ref.hash} label="Copy block hash" className="-my-1" />
+            </span>
+            <span>{view.layout.variables.length} variables</span>
+            {isFetching && <span>Refreshing…</span>}
+            {error && <span className="text-red">Refresh failed · showing last exact block</span>}
           </div>
+        </div>
+
+        <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-gray-300 pb-3">
           <ViewSwitch
             label="Values"
             value={showHex ? 'hex' : 'decoded'}

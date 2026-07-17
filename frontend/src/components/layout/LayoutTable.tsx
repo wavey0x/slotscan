@@ -51,7 +51,7 @@ export function LayoutTable({
         <thead>
           <tr className="border-b border-gray-300">
             <th className={cn(dataTableHeadCellClass, 'w-6')}></th>
-            <th className={dataTableHeadCellClass}>Name</th>
+            <th className={dataTableHeadCellClass}>Variable</th>
             <th className={dataTableHeadCellClass}>Type</th>
             <th className={cn(dataTableHeadCellClass, 'hidden sm:table-cell')}>Slot</th>
             <th className={dataTableHeadCellClass}>Value</th>

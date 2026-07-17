@@ -82,13 +82,13 @@ export const LayoutRow = memo(function LayoutRow({
           expanded && 'bg-gray-50/30'
         )}
       >
-        <td className="px-1 py-2 text-center">
+        <td className="px-1 py-2 align-top text-center">
           {isInteractive && (
             <button
               onClick={() => setExpanded(!expanded)}
               aria-label={expanded ? `Collapse ${variable.name}` : `Expand ${variable.name}`}
               aria-expanded={expanded}
-              className="touch-hitbox h-4 w-4 font-mono text-xs text-gray-400 hover:text-gray-700"
+              className="touch-hitbox mx-auto flex h-[18px] w-4 items-center justify-center font-mono text-xs leading-none text-gray-400 hover:text-gray-700"
             >
               {expanded ? '−' : '+'}
             </button>
