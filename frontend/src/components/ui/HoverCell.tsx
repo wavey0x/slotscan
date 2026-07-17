@@ -22,6 +22,8 @@ interface HoverCellProps {
   colorClass?: string;
   /** Accessible label for the copy action */
   copyLabel?: string;
+  /** Put the copy action in the detail disclosure instead of beside the compact value. */
+  copyInDetail?: boolean;
   /** Wrap long display values instead of truncating them */
   wrap?: boolean;
 }
@@ -60,6 +62,7 @@ export function HoverCell({
   className,
   colorClass = 'text-gray-900',
   copyLabel = 'Copy value',
+  copyInDetail = false,
   wrap = false,
 }: HoverCellProps) {
   const explorerValue = copyActionValue === undefined ? value : String(copyActionValue);
@@ -69,9 +72,15 @@ export function HoverCell({
     display,
   );
 
-  const tooltipContent = tooltip || (
+  const detailContent = tooltip || (
     <span className="font-mono break-all max-w-xs">{value}</span>
   );
+  const tooltipContent = copyInDetail && showActions ? (
+    <div className="flex max-w-xs items-start gap-1">
+      <span className="min-w-0">{detailContent}</span>
+      <CopyButton value={value} label={copyLabel} className="-my-1 shrink-0" />
+    </div>
+  ) : detailContent;
 
   return (
     <DetailPopover content={tooltipContent} delay={300} className={wrap ? 'min-w-0 max-w-full' : undefined}>
@@ -103,7 +112,7 @@ export function HoverCell({
             {display}
           </span>
         )}
-        {showActions && (
+        {showActions && !copyInDetail && (
           <span className="ml-0.5 flex shrink-0 items-center">
             <CopyButton value={value} label={copyLabel} />
           </span>

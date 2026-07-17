@@ -6,12 +6,12 @@ import { ExternalLink } from 'lucide-react';
 import { SlotHistoryTable } from '@/components/diff/DiffTable';
 import { KeyedVariablePath } from '@/components/diff/KeyedVariablePath';
 import { StorageTable, StorageTableColumns, StorageTableHeader, storageCellClass } from '@/components/diff/StorageTable';
-import { CopyableValue, isStructuredDecodedValue, StructuredValueDiff, ValueDiff } from '@/components/diff/ValueDiff';
+import { CopyableValue, deriveStructuredValueFields, isStructuredDecodedValue, StructuredValueDiff, ValueDiff } from '@/components/diff/ValueDiff';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { HoverCell } from '@/components/ui/HoverCell';
 import { getAddressExplorerUrl } from '@/lib/constants';
 import { ContractHistoryResponse, SlotChangeResponse, StorageChangeResponse } from '@/lib/types';
-import { cn, formatDecodedValue, getCopyValue, truncateAddress, truncateHash, valuesEqual } from '@/lib/utils';
+import { cn, formatDecodedValue, getCopyValue, truncateAddress, truncateHash } from '@/lib/utils';
 import { slotReferenceDisplay } from '@/components/diff/slotDisplay';
 import {
   contractActivityStatus,
@@ -46,18 +46,11 @@ function eventRawValue(event: StorageChangeResponse, side: 'before' | 'after', s
   return showHex ? pair.value_encoded : pair.value_decoded ?? pair.value_encoded;
 }
 
-function timelineStructMember(slot: SlotChangeResponse, event: StorageChangeResponse) {
+function timelineStructMember(slot: SlotChangeResponse, changedFields: string[]) {
   if (!slot.struct_definition) return null;
 
   const packedFields = slot.packed_fields ?? [];
   if (packedFields.length === 1) return packedFields[0];
-  if (!isStructuredDecodedValue(event.before.value_decoded)
-    || !isStructuredDecodedValue(event.after.value_decoded)) return null;
-
-  const before = event.before.value_decoded;
-  const after = event.after.value_decoded;
-  const fields = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]));
-  const changedFields = fields.filter((field) => !valuesEqual(before[field], after[field]));
   if (changedFields.length !== 1) return null;
 
   const changedField = changedFields[0];
@@ -185,7 +178,20 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
       <StorageTableHeader showContract={showContract} showSlotOnMobile />
       <tbody>
         {entries.map(({ contract, slot, event, ordinal }) => {
-          const structMember = timelineStructMember(slot, event);
+          const structuredBefore = isStructuredDecodedValue(event.before.value_decoded)
+            ? event.before.value_decoded
+            : null;
+          const structuredAfter = isStructuredDecodedValue(event.after.value_decoded)
+            ? event.after.value_decoded
+            : null;
+          const structuredFields = structuredBefore && structuredAfter
+            ? deriveStructuredValueFields(
+                structuredBefore,
+                structuredAfter,
+                event.effect === 'noop',
+              )
+            : null;
+          const structMember = timelineStructMember(slot, structuredFields?.changedFields ?? []);
           const variablePath = timelineVariablePath(slot, structMember?.name);
           const memberSuffix = structMember ? `.${structMember.name}` : null;
           const memberBasePath = memberSuffix && variablePath?.endsWith(memberSuffix)
@@ -225,14 +231,12 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                 )}
               </td>
               <td className={`${storageCellClass} min-w-0 overflow-hidden font-mono`} data-testid="timeline-value">
-                {!showHex
-                  && isStructuredDecodedValue(event.before.value_decoded)
-                  && isStructuredDecodedValue(event.after.value_decoded) ? (
+                {!showHex && structuredBefore && structuredAfter && structuredFields ? (
                   <StructuredValueDiff
-                    before={event.before.value_decoded}
-                    after={event.after.value_decoded}
+                    before={structuredBefore}
+                    after={structuredAfter}
                     showFieldNames={!structMember}
-                    showUnchanged={event.effect === 'noop'}
+                    displayedFields={structuredFields.displayedFields}
                   />
                 ) : (
                   <ValueDiff
@@ -266,6 +270,7 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                     value={slot.slot}
                     colorClass="text-gray-500"
                     copyLabel="Copy slot"
+                    copyInDetail
                   />
                 </div>
               </td>

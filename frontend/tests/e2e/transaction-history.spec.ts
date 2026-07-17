@@ -581,6 +581,15 @@ test('timeline promotes one packed member into a compact canonical mobile path',
   await expect(singleRow.getByTestId('timeline-value')).not.toContainText('processed');
   await expect(singleRow.getByTestId('timeline-value')).toContainText('false');
   await expect(singleRow.getByTestId('timeline-value')).toContainText('true');
+  const slotReference = singleRow.getByTestId('slot-reference');
+  const slotDisplay = slotReference.getByText('0xb1..', { exact: true });
+  await expect(slotDisplay).toBeVisible();
+  expect(await slotDisplay.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const slotMetrics = await slotReference.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(slotMetrics.scrollWidth).toBeLessThanOrEqual(slotMetrics.clientWidth);
 
   await canonicalPath.click();
   const pathDetail = page.getByRole('dialog');
@@ -750,7 +759,9 @@ test('timeline names struct members and stays readable on mobile', async ({ page
   await expect(page.getByTestId('step-reference').first()).toBeHidden();
   await expect(changedRow.getByRole('link', { name: 'ResupplyPairDeployer' })).toBeVisible();
   await slotReference.getByText('7', { exact: true }).click();
-  await expect(page.getByRole('dialog')).toContainText(slots[1].slot);
+  const slotDetail = page.getByRole('dialog');
+  await expect(slotDetail).toContainText(slots[1].slot);
+  await expect(slotDetail.getByRole('button', { name: 'Copy slot' })).toBeVisible();
   await page.keyboard.press('Escape');
   const scroll = page.getByTestId('data-table-scroll');
   const scrollState = await scroll.evaluate((element) => ({

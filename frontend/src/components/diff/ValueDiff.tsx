@@ -99,6 +99,19 @@ export function isStructuredDecodedValue(value: unknown): value is Record<string
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+export function deriveStructuredValueFields(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+  showUnchanged = false,
+) {
+  const allFields = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]));
+  const changedFields = allFields.filter((field) => !valuesEqual(before[field], after[field]));
+  return {
+    changedFields,
+    displayedFields: showUnchanged || changedFields.length === 0 ? allFields : changedFields,
+  };
+}
+
 function fieldDisplay(value: unknown) {
   if (value === undefined) return '—';
   if (value === null) return 'null';
@@ -171,6 +184,7 @@ export function StructuredValueDiff({
   afterClassName = 'text-gray-900',
   showFieldNames = true,
   showUnchanged = false,
+  displayedFields,
 }: {
   before: Record<string, unknown>;
   after: Record<string, unknown>;
@@ -178,11 +192,11 @@ export function StructuredValueDiff({
   afterClassName?: string;
   showFieldNames?: boolean;
   showUnchanged?: boolean;
+  displayedFields?: string[];
 }) {
-  const allFields = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]));
-  const changedFields = allFields.filter((field) => !valuesEqual(before[field], after[field]));
   // A fully no-op struct write still shows its values, marked unchanged.
-  const fields = showUnchanged || changedFields.length === 0 ? allFields : changedFields;
+  const fields = displayedFields
+    ?? deriveStructuredValueFields(before, after, showUnchanged).displayedFields;
 
   if (fields.length === 0) {
     return <span className="font-mono text-xs text-gray-400">—</span>;
