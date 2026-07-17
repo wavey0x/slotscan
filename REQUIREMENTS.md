@@ -6,12 +6,13 @@ observable behavior and invariants; source code, tests, and
 
 ## Product surfaces
 
-SlotScan has three canonical user surfaces:
+SlotScan has four canonical user surfaces:
 
 - `/` accepts an Ethereum address or transaction hash.
 - `/{chain}/{address}` shows a contract's resolved identity, storage layout,
   and values at a selected block.
 - `/{chain}/tx/{hash}` shows transaction-wide persistent storage activity.
+- `/{chain}/compare` directionally compares two exact declared storage layouts.
 
 There is no contract-scoped transaction route. An optional
 `?focus={address}` hint may expand and scroll to one storage owner, but it must
@@ -22,6 +23,43 @@ The public API is rooted at `/api/slotscan`:
 - `GET /contracts/{chain_id}/{address}/storage-view`
 - `POST /storage/query`
 - `GET /tx/{chain_id}/{tx_hash}`
+- `GET /layout-comparisons/{chain_id}`
+
+## Storage-layout comparison
+
+- Compare `From layout → To layout` for any two independently resolved
+  Ethereum mainnet addresses; never assume a shared proxy, upgrade, or storage
+  relationship.
+- Resolve each input to an explicit storage address and code/layout address.
+  Direct contracts use the input for both, supported proxies retain proxy
+  storage plus implementation code, and EIP-7702 retains authority storage plus
+  one-hop delegate code.
+- Accept optional per-side block numbers and exact hashes only as resolution
+  evidence. Blocks never enter the pure comparator.
+- Require authoritative exact Solidity compiler layouts for every declaration
+  and scope. Preserve inferred, Vyper, unstructured, and otherwise unsupported
+  layouts for existing pages, but return comparison unavailable instead of
+  falling back to them.
+- Treat an ERC-7201 scope as exact only when Solidity 0.8.20+ AST annotation,
+  recomputed root, source pointer assignment, and compiler-derived struct
+  allocation all agree.
+- Compare persistent physical shape before names: locations, packing, widths,
+  encodings, mapping keys and values, array packing/stride, strings/bytes, and
+  recursive struct members. Names and nominal labels can make a result
+  indeterminate but never create or erase a physical conflict.
+- Recognize only whole-slot fixed arrays named `__gap` or `__gap_*` as storage
+  gaps. Only contiguous whole-slot prefix consumption with a correctly
+  retained suffix is non-conflicting.
+- Bound recursion, visited types, entries, and explanations. An incomplete
+  analysis is unavailable and never a partial no-conflicts report.
+- Return only the factual verdicts `no_conflicts`, `conflicts`,
+  `indeterminate`, and `unavailable`; never characterize an upgrade or contract
+  as safe and never emit a numeric score.
+- Send slots and byte sizes across the API as strings. Keep From and To regions
+  independently structured so the browser owns compact location formatting.
+- Do not read live values or transaction traces, persist comparison results,
+  add a comparison cache/schema version, or add comparison controls to
+  transaction pages.
 
 ## Contract resolution
 
@@ -106,6 +144,10 @@ readers/writers, or compatibility migrations.
 
 Raw compiler artifacts retain exact compiler versions and build inputs because
 they are evidence needed to reproduce a layout.
+
+Storage scopes are identity-bearing layout data. Incompatible pre-launch
+scope-shape changes invalidate cached current and historical layouts for
+on-demand rebuilding; they do not add legacy readers or dual payload formats.
 
 ## Failure behavior
 

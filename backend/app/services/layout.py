@@ -23,6 +23,10 @@ from app.models.domain import (
     StorageVariable,
 )
 from app.models.errors import CompilationError, LayoutNotFoundError, UnsupportedCompilerVersionError
+from app.services.namespace_storage import (
+    ERC7201_HARNESS_CONTRACT,
+    ERC7201_HARNESS_SOURCE,
+)
 from app.utils.vyper import SEQUENTIAL_STORAGE, parse_vyper_version
 
 # Minimum Solidity version that supports --storage-layout output
@@ -140,6 +144,42 @@ class LayoutParser:
             sources=sources,
         )
         return layout, artifact
+
+    async def compile_exact_namespace_types(
+        self,
+        *,
+        sources: dict[str, str],
+        compiler_version: str,
+        compiler_settings: Optional[dict],
+        harness_source: str,
+    ) -> tuple[dict[str, StorageType], dict]:
+        """Compile a synthetic harness to obtain compiler-derived namespace types."""
+        if ERC7201_HARNESS_SOURCE in sources:
+            raise CompilationError(
+                f"Verified sources already contain {ERC7201_HARNESS_SOURCE}"
+            )
+        augmented_sources = dict(sources)
+        augmented_sources[ERC7201_HARNESS_SOURCE] = harness_source
+        compiler_output, _ = await self._compile_with_layout(
+            sources=augmented_sources,
+            version=compiler_version,
+            settings=compiler_settings,
+            metadata_settings=compiler_settings,
+        )
+        raw_layout = (
+            compiler_output.get("contracts", {})
+            .get(ERC7201_HARNESS_SOURCE, {})
+            .get(ERC7201_HARNESS_CONTRACT, {})
+            .get("storageLayout")
+        )
+        if not isinstance(raw_layout, dict):
+            raise LayoutNotFoundError(ERC7201_HARNESS_CONTRACT)
+        raw_types = raw_layout.get("types") or {}
+        if not raw_layout.get("storage") or not raw_types:
+            raise CompilationError(
+                "Namespace harness produced no compiler storage types"
+            )
+        return self._parse_types(raw_types), compiler_output
 
     def parse_from_raw_layout(self, contract_name: str, raw_layout: dict) -> StorageLayout:
         """

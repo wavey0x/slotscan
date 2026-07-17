@@ -61,6 +61,10 @@ class Settings(BaseSettings):
         default=15 * 60,
         alias="NO_SOURCE_CACHE_TTL_SECONDS",
     )
+    max_parallel_verification_requests: int = Field(
+        default=4,
+        alias="MAX_PARALLEL_VERIFICATION_REQUESTS",
+    )
     # Compiler isolation
     allow_compiler_install: bool = Field(default=False, alias="ALLOW_COMPILER_INSTALL")
     max_installed_compilers: int = Field(default=64, alias="MAX_INSTALLED_COMPILERS")
@@ -70,6 +74,26 @@ class Settings(BaseSettings):
     max_compilation_input_bytes: int = Field(
         default=5 * 1024 * 1024,
         alias="MAX_COMPILATION_INPUT_BYTES",
+    )
+    comparison_max_depth: int = Field(
+        default=64,
+        alias="COMPARISON_MAX_DEPTH",
+    )
+    comparison_max_type_visits: int = Field(
+        default=4096,
+        alias="COMPARISON_MAX_TYPE_VISITS",
+    )
+    comparison_max_entries: int = Field(
+        default=2000,
+        alias="COMPARISON_MAX_ENTRIES",
+    )
+    comparison_max_detail_lines: int = Field(
+        default=8,
+        alias="COMPARISON_MAX_DETAIL_LINES",
+    )
+    comparison_max_detail_chars: int = Field(
+        default=500,
+        alias="COMPARISON_MAX_DETAIL_CHARS",
     )
 
     model_config = {

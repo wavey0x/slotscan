@@ -98,20 +98,21 @@ class DelegatedResolverTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         repository = _NoWriteRepository()
+        source_cache = object()
+        verification_service = AsyncMock()
+        verification_service.resolve.return_value = VerificationResult(
+            source="sourcify",
+            match_type="full",
+            name="DelegateWallet",
+            compiler_version="0.8.30",
+            storage_layout=_layout().to_dict(),
+        )
         resolver = ContractResolver(
             provider,
             Settings(),
+            verification_service=verification_service,
+            source_cache_repo=source_cache,
             contract_repo=repository,
-            http_client=object(),
-        )
-        resolver._fetch_verification = AsyncMock(
-            return_value=VerificationResult(
-                source="sourcify",
-                match_type="full",
-                name="DelegateWallet",
-                compiler_version="0.8.30",
-                storage_layout=_layout().to_dict(),
-            )
         )
         resolver.detect_proxy = AsyncMock(
             side_effect=AssertionError(
@@ -132,17 +133,24 @@ class DelegatedResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.is_proxy)
         self.assertTrue(result.is_verified)
         self.assertEqual(result.storage_layout.contract_name, "DelegateWallet")
-        resolver._fetch_verification.assert_awaited_once_with(1, DELEGATE)
+        verification_service.resolve.assert_awaited_once_with(
+            1,
+            DELEGATE,
+            Web3.keccak(b"\x60\x00").hex(),
+            source_cache,
+        )
         self.assertEqual(repository.save_calls, [])
 
     async def test_empty_delegate_returns_delegated_metadata_without_layout(self):
+        verification_service = AsyncMock()
+        verification_service.resolve.side_effect = AssertionError(
+            "empty delegates cannot be verified"
+        )
         resolver = ContractResolver(
             _CodeProvider({AUTHORITY: DESIGNATOR}),
             Settings(),
-            http_client=object(),
-        )
-        resolver._fetch_verification = AsyncMock(
-            side_effect=AssertionError("empty delegates cannot be verified")
+            verification_service=verification_service,
+            source_cache_repo=object(),
         )
 
         result = await resolver.resolve(1, AUTHORITY, block_number=123)
@@ -151,7 +159,7 @@ class DelegatedResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.delegate_address, DELEGATE)
         self.assertIsNone(result.delegate_code_hash)
         self.assertIsNone(result.storage_layout)
-        resolver._fetch_verification.assert_not_awaited()
+        verification_service.resolve.assert_not_awaited()
 
     async def test_delegate_to_delegate_stops_after_one_hop(self):
         provider = _CodeProvider(
@@ -161,13 +169,15 @@ class DelegatedResolverTests(unittest.IsolatedAsyncioTestCase):
                 SECOND_DELEGATE: b"\x60\x00",
             }
         )
+        verification_service = AsyncMock()
+        verification_service.resolve.side_effect = AssertionError(
+            "a second delegation must not be followed"
+        )
         resolver = ContractResolver(
             provider,
             Settings(),
-            http_client=object(),
-        )
-        resolver._fetch_verification = AsyncMock(
-            side_effect=AssertionError("a second delegation must not be followed")
+            verification_service=verification_service,
+            source_cache_repo=object(),
         )
 
         result = await resolver.resolve(1, AUTHORITY, block_number=123)
@@ -182,6 +192,7 @@ class DelegatedResolverTests(unittest.IsolatedAsyncioTestCase):
             SECOND_DELEGATE.lower(),
             [call[1].lower() for call in provider.code_calls],
         )
+        verification_service.resolve.assert_not_awaited()
 
 
 if __name__ == "__main__":

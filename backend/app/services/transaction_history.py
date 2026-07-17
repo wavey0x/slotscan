@@ -12,11 +12,13 @@ from app.models.domain import ContractMetadata, StorageLayout, TransactionDiff
 from app.models.errors import NotAContractError
 from app.repositories.compiler_artifacts import CompilerArtifactRepository
 from app.repositories.contracts import ContractRepository
+from app.repositories.source_cache import SourceCacheRepository
 from app.repositories.trace_cache import TransactionTraceArtifactData
 from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
 from app.services.tracer import TransactionAnalysisService
 from app.services.tracer.journal import StorageJournal
+from app.services.verification import VerificationService
 from app.services.web3_provider import Web3Provider
 
 
@@ -58,13 +60,13 @@ class TransactionHistoryService:
         web3_provider: Web3Provider,
         settings: Settings,
         layout_parser: LayoutParser,
-        http_client,
+        verification_service: VerificationService,
     ):
         self.tracer = tracer
         self.web3_provider = web3_provider
         self.settings = settings
         self.layout_parser = layout_parser
-        self.http_client = http_client
+        self.verification_service = verification_service
 
     async def analyze(
         self,
@@ -364,16 +366,16 @@ class TransactionHistoryService:
             resolver = ContractResolver(
                 web3_provider=self.web3_provider,
                 settings=self.settings,
+                verification_service=self.verification_service,
+                source_cache_repo=SourceCacheRepository(session),
                 contract_repo=ContractRepository(session),
                 layout_parser=self.layout_parser,
-                http_client=self.http_client,
                 compiler_artifact_repo=CompilerArtifactRepository(session),
             )
             return await resolver.resolve(
                 chain_id,
                 address,
                 block_number=block_number,
-                sourcify_layout_only=False,
                 follow_proxy=follow_proxy,
                 follow_delegation=follow_delegation,
             )

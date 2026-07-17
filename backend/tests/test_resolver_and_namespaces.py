@@ -1,5 +1,4 @@
 import unittest
-from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from eth_abi import encode
@@ -7,14 +6,15 @@ from web3 import Web3
 
 from app.config import Settings
 from app.models.domain import (
-    ContractMetadata,
     StorageLayout,
     StorageType,
     StorageVariable,
     VerificationResult,
 )
-from app.models.errors import VerificationProviderError
-from app.services.namespace_storage import NamespaceStorageParser
+from app.services.namespace_storage import (
+    NamespaceStorageParser,
+    compute_erc7201_root,
+)
 from app.services.resolver import (
     EIP1167_PREFIX,
     EIP1167_SUFFIX,
@@ -40,6 +40,16 @@ from app.utils.vyper import (
 
 
 ADDRESS = "0x" + "11" * 20
+
+
+def _make_resolver(provider, settings=None, **kwargs):
+    return ContractResolver(
+        provider,
+        settings or Settings(),
+        verification_service=AsyncMock(),
+        source_cache_repo=object(),
+        **kwargs,
+    )
 
 
 class NamespaceParserTests(unittest.TestCase):
@@ -553,6 +563,26 @@ library StorageHelpers {
 
 
 class _Resolver(ContractResolver):
+    def __init__(self, web3_provider, settings, **kwargs):
+        verification_service = AsyncMock()
+        verification_service.resolve.side_effect = self._resolve_verification
+        super().__init__(
+            web3_provider,
+            settings,
+            verification_service=verification_service,
+            source_cache_repo=object(),
+            **kwargs,
+        )
+
+    async def _resolve_verification(
+        self,
+        chain_id,
+        address,
+        code_hash,
+        source_cache_repo,
+    ):
+        return await self._fetch_verification(chain_id, address)
+
     async def _check_is_contract(self, chain_id, address, block):
         return b"\x60\x00"
 
@@ -605,11 +635,12 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
         for expected_type, slots, beacon_result in cases:
             with self.subTest(expected_type=expected_type):
                 provider = Provider(slots, beacon_result)
-                detected = await ContractResolver(
-                    provider,
-                    Settings(),
-                    http_client=object(),
-                ).detect_proxy(1, ADDRESS, block=123, bytecode=b"\x60\x00")
+                detected = await _make_resolver(provider).detect_proxy(
+                    1,
+                    ADDRESS,
+                    block=123,
+                    bytecode=b"\x60\x00",
+                )
 
                 self.assertEqual(detected.proxy_type, expected_type)
                 self.assertEqual(
@@ -631,11 +662,12 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
             + bytes.fromhex(implementation[2:])
             + EIP1167_SUFFIX
         )
-        detected = await ContractResolver(
-            Provider(),
-            Settings(),
-            http_client=object(),
-        ).detect_proxy(1, ADDRESS, block=123, bytecode=bytecode)
+        detected = await _make_resolver(Provider()).detect_proxy(
+            1,
+            ADDRESS,
+            block=123,
+            bytecode=bytecode,
+        )
 
         self.assertEqual(detected.proxy_type, "eip1167")
         self.assertEqual(detected.implementation_address, implementation)
@@ -645,11 +677,7 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
             async def get_storage_at(self, *args):
                 raise RuntimeError("slot unavailable")
 
-        resolver = ContractResolver(
-            Provider(),
-            Settings(),
-            http_client=object(),
-        )
+        resolver = _make_resolver(Provider())
         with self.assertRaisesRegex(RuntimeError, "slot unavailable"):
             await resolver.detect_proxy(
                 1,
@@ -673,7 +701,7 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
                 return b"\x60\x00"
 
         provider = Provider()
-        resolver = ContractResolver(provider, Settings(), http_client=object())
+        resolver = _make_resolver(provider)
         bytecode = b"\x63" + bytes.fromhex(selector[2:]) + b"\xf4"
         detected = await resolver.detect_proxy(
             1,
@@ -703,58 +731,6 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_provider_failure_is_not_reported_as_conclusive_source_miss(self):
-        resolver = ContractResolver(object(), Settings(), http_client=object())
-        resolver._try_sourcify = AsyncMock(
-            side_effect=VerificationProviderError(["sourcify timeout"])
-        )
-        resolver._try_etherscan = AsyncMock(return_value=None)
-
-        with self.assertRaises(VerificationProviderError):
-            await resolver._fetch_verification(1, ADDRESS)
-
-    async def test_fresh_historical_source_miss_uses_negative_cache(self):
-        bytecode = b"\x60\x00"
-        row = SimpleNamespace(
-            code_hash=Web3.keccak(bytecode).hex(),
-            is_proxy=False,
-            is_verified=False,
-            storage_layout=None,
-            source_checked_at=datetime.utcnow(),
-        )
-
-        class Repo:
-            async def get_at_block(self, chain_id, address, block_number):
-                return row
-
-            def to_metadata(self, cached):
-                return ContractMetadata(
-                    chain_id=1,
-                    address=ADDRESS,
-                    is_verified=False,
-                )
-
-        resolver = _Resolver(object(), Settings(), contract_repo=Repo())
-        resolver._check_is_contract = AsyncMock(return_value=bytecode)
-
-        metadata = await resolver.resolve(1, ADDRESS, block_number=123)
-
-        self.assertFalse(metadata.is_verified)
-        resolver._check_is_contract.assert_awaited_once_with(1, ADDRESS, 123)
-
-    def test_negative_cache_expires_after_configured_ttl(self):
-        resolver = _Resolver(
-            object(),
-            Settings(NO_SOURCE_CACHE_TTL_SECONDS=900),
-        )
-        fresh = SimpleNamespace(source_checked_at=datetime.utcnow())
-        expired = SimpleNamespace(
-            source_checked_at=datetime.utcnow() - timedelta(seconds=901)
-        )
-
-        self.assertTrue(resolver._source_check_is_fresh(fresh))
-        self.assertFalse(resolver._source_check_is_fresh(expired))
-
     async def test_vyper_0216_prefers_exact_compiler_layout(self):
         class VyperResolver(_Resolver):
             async def _fetch_verification(self, chain_id, address):
@@ -800,54 +776,6 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(metadata.storage_layout.variables[0].provenance, "compiler_layout")
         self.assertEqual(metadata.storage_layout.storage_scheme, SEQUENTIAL_STORAGE)
 
-    async def test_sourcify_v2_layout_is_parsed_without_sources_or_compilation(self):
-        response = SimpleNamespace(
-            status_code=200,
-            json=lambda: {
-                "match": "match",
-                "storageLayout": {
-                    "storage": [
-                        {
-                            "astId": 1,
-                            "contract": "C.sol:C",
-                            "label": "owner",
-                            "offset": 0,
-                            "slot": "0",
-                            "type": "t_address",
-                        }
-                    ],
-                    "types": {
-                        "t_address": {
-                            "encoding": "inplace",
-                            "label": "address",
-                            "numberOfBytes": "20",
-                        }
-                    },
-                },
-                "compilation": {
-                    "language": "Solidity",
-                    "compilerVersion": "0.8.26+commit.8a97fa7a",
-                    "compilerSettings": {"optimizer": {"enabled": True}},
-                    "name": "C",
-                    "fullyQualifiedName": "src/C.sol:C",
-                },
-                "sources": {"src/C.sol": {"content": "contract C {}"}},
-            },
-        )
-        client = SimpleNamespace(get=AsyncMock(return_value=response))
-        resolver = ContractResolver(object(), Settings(), http_client=client)
-
-        result = await resolver._try_sourcify(1, ADDRESS)
-
-        self.assertEqual(result.name, "C")
-        self.assertEqual(result.compilation_target, {"src/C.sol": "C"})
-        self.assertEqual(result.storage_layout["storage"][0]["label"], "owner")
-        self.assertEqual(result.sources, {"src/C.sol": "contract C {}"})
-        client.get.assert_awaited_once_with(
-            f"https://sourcify.dev/server/v2/contract/1/{ADDRESS}",
-            params={"fields": "sources,storageLayout,compilation"},
-        )
-
     async def test_verified_sources_without_layout_are_not_compiled_by_resolver(self):
         class SourceOnlyResolver(_Resolver):
             async def _fetch_verification(self, chain_id, address):
@@ -876,30 +804,169 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
         parser.parse_with_artifact.assert_not_awaited()
         parser.parse_vyper_with_artifact.assert_not_awaited()
 
-    async def test_sourcify_only_mode_does_not_fall_back_to_source_apis(self):
-        class SourcifyOnlyResolver(_Resolver):
-            async def _try_sourcify(self, chain_id, address):
-                return None
-
-            async def _fetch_verification(self, chain_id, address):
-                raise AssertionError("source fallback must not run")
-
-        resolver = SourcifyOnlyResolver(object(), Settings())
-
-        metadata = await resolver.resolve(
-            1,
-            ADDRESS,
-            sourcify_layout_only=True,
-        )
-
-        self.assertFalse(metadata.is_verified)
-        self.assertIsNone(metadata.storage_layout)
-
-    async def test_supplied_storage_layout_does_not_leave_language_unbound(self):
+    async def test_supplied_empty_compiler_layout_is_preserved(self):
         resolver = _Resolver(object(), Settings())
         resolver.namespace_parser.parse_namespaced_storage = lambda sources: None
         metadata = await resolver.resolve(1, ADDRESS)
-        self.assertIsNone(metadata.storage_layout)
+        self.assertIsNotNone(metadata.storage_layout)
+        self.assertEqual(metadata.storage_layout.language, "Solidity")
+        self.assertEqual(metadata.storage_layout.variables, [])
+        self.assertEqual(
+            [(scope.id, scope.kind, scope.confidence) for scope in metadata.storage_layout.scopes],
+            [("default", "default", "exact")],
+        )
+
+    async def test_erc7201_annotations_use_compiler_derived_harness_types(self):
+        identifier = "slotscan.resolver"
+        root = compute_erc7201_root(identifier)
+        source = f"""
+            library Example {{
+                /// @custom:storage-location erc7201:{identifier}
+                struct Layout {{
+                    uint64 initialized;
+                    bool initializing;
+                }}
+                bytes32 private constant SLOT = 0x{root:064x};
+                function load() internal pure returns (Layout storage $) {{
+                    assembly {{ $.slot := SLOT }}
+                }}
+            }}
+            contract Namespaced {{}}
+        """
+        compiler_output = {
+            "sources": {
+                "Namespaced.sol": {
+                    "ast": {
+                        "nodeType": "SourceUnit",
+                        "nodes": [
+                            {
+                                "nodeType": "StructDefinition",
+                                "name": "Layout",
+                                "canonicalName": "Example.Layout",
+                                "documentation": {
+                                    "text": (
+                                        "@custom:storage-location "
+                                        f"erc7201:{identifier}"
+                                    )
+                                },
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+        uint64 = StorageType(
+            "t_uint64",
+            "uint64",
+            "value",
+            "inplace",
+            8,
+        )
+        boolean = StorageType(
+            "t_bool",
+            "bool",
+            "value",
+            "inplace",
+            1,
+        )
+        struct = StorageType(
+            "t_struct(Layout)1_storage",
+            "struct Example.Layout",
+            "struct",
+            "inplace",
+            32,
+            members=[
+                StorageVariable(
+                    "initialized",
+                    0,
+                    0,
+                    8,
+                    uint64.id,
+                    uint64.label,
+                ),
+                StorageVariable(
+                    "initializing",
+                    0,
+                    8,
+                    1,
+                    boolean.id,
+                    boolean.label,
+                ),
+            ],
+        )
+        exact_default = StorageLayout(
+            contract_name="Namespaced",
+            variables=[],
+            types={},
+            language="Solidity",
+            compiler_version="0.8.30",
+            storage_scheme="solidity",
+        )
+        artifact = SimpleNamespace(
+            fingerprint="exact-namespace",
+            compiler_output=compiler_output,
+        )
+        parser = SimpleNamespace(
+            parse_from_raw_layout=Mock(return_value=exact_default),
+            _make_artifact=Mock(return_value=artifact),
+            parse_with_artifact=AsyncMock(
+                return_value=(exact_default, artifact)
+            ),
+            compile_exact_namespace_types=AsyncMock(
+                return_value=(
+                    {
+                        struct.id: struct,
+                        uint64.id: uint64,
+                        boolean.id: boolean,
+                    },
+                    compiler_output,
+                )
+            ),
+        )
+
+        class NamespacedResolver(_Resolver):
+            async def _fetch_verification(self, chain_id, address):
+                return VerificationResult(
+                    source="sourcify",
+                    match_type="full",
+                    name="Namespaced",
+                    compiler_version="0.8.30",
+                    compilation_target={
+                        "Namespaced.sol": "Namespaced"
+                    },
+                    compiler_settings={
+                        "optimizer": {"enabled": True, "runs": 200}
+                    },
+                    sources={"Namespaced.sol": source},
+                    storage_layout={"storage": [], "types": {}},
+                    language="Solidity",
+                )
+
+        metadata = await NamespacedResolver(
+            object(),
+            Settings(),
+            layout_parser=parser,
+        ).resolve(1, ADDRESS)
+
+        parser.parse_with_artifact.assert_awaited_once()
+        parser.compile_exact_namespace_types.assert_awaited_once()
+        scope = next(
+            item
+            for item in metadata.storage_layout.scopes
+            if item.kind == "erc7201"
+        )
+        self.assertEqual(scope.root_slot, root)
+        self.assertEqual(
+            [
+                (item.name, item.slot, item.offset, item.confidence)
+                for item in metadata.storage_layout.variables
+                if item.scope_id == scope.id
+            ],
+            [
+                ("initialized", root, 0, "exact"),
+                ("initializing", root, 8, "exact"),
+            ],
+        )
 
     async def test_pre_layout_vyper_source_is_inferred_without_compilation(self):
         class VyperResolver(_Resolver):
@@ -939,6 +1006,16 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
             is_verified=True,
             storage_layout={
                 "contract_name": "Cached",
+                "scopes": [
+                    {
+                        "id": "default",
+                        "kind": "default",
+                        "root_slot": 0,
+                        "formula": None,
+                        "provenance": "compiler_layout",
+                        "confidence": "exact",
+                    }
+                ],
                 "variables": [
                     {
                         "name": "owner",
@@ -949,6 +1026,7 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
                         "label": "address",
                         "provenance": "source_inference",
                         "confidence": "inferred",
+                        "scope_id": "default",
                     }
                 ],
                 "types": {

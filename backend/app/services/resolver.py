@@ -1,22 +1,21 @@
 """Contract resolver for fetching metadata, proxy detection, and verification lookup."""
 
 import asyncio
-import json
 import logging
-from datetime import datetime
 from typing import Optional
 
-import httpx
 from web3 import Web3
 
 from app.config import Settings
-from app.models.domain import ContractMetadata, ProxyInfo, StorageLayout, VerificationResult
-from app.models.errors import NotAContractError, RPCError, VerificationProviderError
+from app.models.domain import ContractMetadata, ProxyInfo, StorageLayout
+from app.models.errors import NotAContractError, RPCError
+from app.repositories.compiler_artifacts import CompilerArtifactRepository
 from app.repositories.contracts import ContractRepository
+from app.repositories.source_cache import SourceCacheRepository
 from app.services.layout import LayoutParser
 from app.services.namespace_storage import NamespaceStorageParser
+from app.services.verification import VerificationService
 from app.services.web3_provider import Web3Provider
-from app.repositories.compiler_artifacts import CompilerArtifactRepository
 from app.utils.vyper import vyper_storage_policy
 
 logger = logging.getLogger(__name__)
@@ -76,20 +75,20 @@ class ContractResolver:
         self,
         web3_provider: Web3Provider,
         settings: Settings,
+        verification_service: VerificationService,
+        source_cache_repo: SourceCacheRepository,
         contract_repo: Optional[ContractRepository] = None,
         layout_parser: Optional[LayoutParser] = None,
-        http_client: Optional[httpx.AsyncClient] = None,
         compiler_artifact_repo: Optional[CompilerArtifactRepository] = None,
         use_binding_cache: bool = True,
     ):
         self.web3_provider = web3_provider
         self.settings = settings
+        self.verification_service = verification_service
+        self.source_cache_repo = source_cache_repo
         self.contract_repo = contract_repo
         self.layout_parser = layout_parser or LayoutParser()
         self.namespace_parser = NamespaceStorageParser()
-        self.http_client = http_client or httpx.AsyncClient(
-            timeout=settings.request_timeout_seconds
-        )
         self.compiler_artifact_repo = compiler_artifact_repo
         self.use_binding_cache = use_binding_cache
 
@@ -98,7 +97,6 @@ class ContractResolver:
         chain_id: int,
         address: str,
         block_number: Optional[int] = None,
-        sourcify_layout_only: bool = False,
         follow_proxy: bool = True,
         follow_delegation: bool = True,
     ) -> ContractMetadata:
@@ -120,7 +118,6 @@ class ContractResolver:
                 designator_hash=code_hash,
                 delegate_address=delegate_address,
                 block_number=block_number,
-                sourcify_layout_only=sourcify_layout_only,
             )
         if delegate_address:
             # The protocol follows a delegation exactly once. Callers that
@@ -129,6 +126,7 @@ class ContractResolver:
                 chain_id=chain_id,
                 address=address,
                 code_hash=code_hash,
+                delegation_status="nested",
             )
 
         # A cached address binding is usable only while its raw code identity
@@ -150,35 +148,21 @@ class ContractResolver:
                 layout = metadata.storage_layout
                 if isinstance(layout, StorageLayout) and layout.variables:
                     return metadata
-                if (
-                    (not historical.is_verified or not historical.storage_layout)
-                    and self._source_check_is_fresh(historical)
-                ):
-                    if historical.is_verified and not historical.storage_layout:
-                        await self._hydrate_compiler_inputs(metadata)
-                    return metadata
 
         # The address cache is not block-versioned. It is safe only for latest;
-        # historical proxy/address resolution must inspect chain state at the
-        # requested block instead of reusing today's implementation/layout.
+        # proxy bindings remain mutable even while proxy bytecode is unchanged,
+        # so only direct-contract rows can return before proxy detection.
         if self.use_binding_cache and self.contract_repo and block_number is None:
             cached = await self.contract_repo.get(chain_id, address)
             if (
                 cached
                 and self._cache_matches_code_hash(cached, code_hash)
-                and (follow_proxy or not cached.is_proxy)
+                and not cached.is_proxy
             ):
                 logger.debug(f"Cache hit for {address} on chain {chain_id}")
                 metadata = self.contract_repo.to_metadata(cached)
                 layout = metadata.storage_layout
                 if isinstance(layout, StorageLayout) and layout.variables:
-                    return metadata
-                if (
-                    (not cached.is_verified or not cached.storage_layout)
-                    and self._source_check_is_fresh(cached)
-                ):
-                    if cached.is_verified and not cached.storage_layout:
-                        await self._hydrate_compiler_inputs(metadata)
                     return metadata
 
         # Detect proxy (pass bytecode for EIP-1167 detection)
@@ -188,22 +172,55 @@ class ContractResolver:
             else None
         )
 
-        # Determine which address to verify
-        verify_address = address
+        # Source data is keyed by the runtime code that is actually verified,
+        # not by the address whose storage is being interpreted.
+        code_address = address
+        verification_bytecode = bytecode
         if proxy_info:
-            verify_address = proxy_info.implementation_address
+            code_address = Web3.to_checksum_address(
+                proxy_info.implementation_address
+            )
+            verification_bytecode = await self._read_code(
+                chain_id,
+                code_address,
+                block_number,
+            )
+            if not verification_bytecode:
+                result = ContractMetadata(
+                    chain_id=chain_id,
+                    address=address,
+                    code_hash=code_hash,
+                    is_proxy=True,
+                    proxy_type=proxy_info.proxy_type,
+                    implementation_address=code_address,
+                )
+                await self._save_binding(
+                    result,
+                    block_number=block_number,
+                    follow_proxy=follow_proxy,
+                )
+                return result
+        verification_code_hash = Web3.keccak(verification_bytecode).hex()
 
         # Check bytecode cache for non-proxies and EIP-1167 minimal proxies
         # (EIP-1967/1822 proxies have same bytecode but different implementations, can't cache)
         parsed_layout = None
         compiler_artifact = None
+        namespace_compiler_output = None
+        exact_namespace_base = False
         cached_by_bytecode = None
         use_bytecode_cache = not proxy_info or proxy_info.proxy_type == "eip1167"
 
         if use_bytecode_cache and self.contract_repo:
-            cached_by_bytecode = await self.contract_repo.get_layout_by_code_hash(code_hash)
+            cached_by_bytecode = await self.contract_repo.get_layout_by_code_hash(
+                verification_code_hash
+            )
             if cached_by_bytecode and cached_by_bytecode.storage_layout:
-                logger.info(f"Bytecode cache hit for {address} (code_hash={code_hash[:16]}...)")
+                logger.info(
+                    "Bytecode layout cache hit for %s (code_hash=%s...)",
+                    code_address,
+                    verification_code_hash[:16],
+                )
                 candidate_layout = StorageLayout.from_dict(cached_by_bytecode.storage_layout)
                 if candidate_layout.variables:
                     parsed_layout = candidate_layout
@@ -212,10 +229,12 @@ class ContractResolver:
         verification = None
         language = "Solidity"
         if not parsed_layout:
-            if sourcify_layout_only:
-                verification = await self._try_sourcify(chain_id, verify_address)
-            else:
-                verification = await self._fetch_verification(chain_id, verify_address)
+            verification = await self.verification_service.resolve(
+                chain_id,
+                code_address,
+                verification_code_hash,
+                self.source_cache_repo,
+            )
             if verification:
                 language = getattr(verification, "language", None) or "Solidity"
 
@@ -257,6 +276,73 @@ class ContractResolver:
             except Exception as e:
                 logger.warning(f"Failed to parse layout from verification: {e}")
                 parsed_layout = None
+
+        has_erc7201_annotation = bool(
+            verification
+            and verification.sources
+            and language == "Solidity"
+            and any(
+                "@custom:storage-location erc7201:" in source
+                for source in verification.sources.values()
+            )
+        )
+        if (
+            has_erc7201_annotation
+            and verification
+            and verification.sources
+            and verification.compiler_version
+        ):
+            compilation_target = None
+            if (
+                verification.compilation_target
+                and len(verification.compilation_target) == 1
+            ):
+                target_path, target_name = next(
+                    iter(verification.compilation_target.items())
+                )
+                compilation_target = f"{target_path}:{target_name}"
+            try:
+                parsed_layout, compiler_artifact = (
+                    await self.layout_parser.parse_with_artifact(
+                        contract_name=verification.name or "",
+                        sources=verification.sources,
+                        compiler_version=verification.compiler_version,
+                        compiler_settings=verification.compiler_settings,
+                        metadata_settings=verification.compiler_settings,
+                        contract_fqname=compilation_target,
+                    )
+                )
+                exact_namespace_base = True
+                if self.compiler_artifact_repo:
+                    await self.compiler_artifact_repo.save(compiler_artifact)
+                harness_source = (
+                    self.namespace_parser.build_exact_erc7201_harness(
+                        compiler_artifact.compiler_output
+                    )
+                )
+                if harness_source:
+                    namespace_types, namespace_compiler_output = (
+                        await self.layout_parser.compile_exact_namespace_types(
+                            sources=verification.sources,
+                            compiler_version=verification.compiler_version,
+                            compiler_settings=verification.compiler_settings,
+                            harness_source=harness_source,
+                        )
+                    )
+                    for type_id, type_info in namespace_types.items():
+                        existing = parsed_layout.types.get(type_id)
+                        if existing is not None and existing != type_info:
+                            raise ValueError(
+                                f"Conflicting compiler type definition for {type_id}"
+                            )
+                        parsed_layout.types[type_id] = type_info
+            except Exception as e:
+                logger.warning(
+                    "Exact ERC-7201 compiler evidence unavailable for %s: %s",
+                    code_address,
+                    e,
+                )
+
         # Sourcify can return a deliberately empty compiler layout for old
         # compiler versions and contracts that exclusively use custom storage
         # pointers. Derive those layouts from verified source without compiling.
@@ -269,7 +355,7 @@ class ContractResolver:
                         types={},
                         language=language,
                     )
-                if not parsed_layout.variables:
+                if not parsed_layout.variables and not exact_namespace_base:
                     conventional_layout = self.namespace_parser.parse_standard_storage(
                         verification.sources,
                         verification.name or parsed_layout.contract_name,
@@ -334,7 +420,15 @@ class ContractResolver:
             except Exception as e:
                 logger.warning(f"Failed to parse verified Vyper storage: {e}")
 
-        if parsed_layout and not parsed_layout.variables:
+        has_exact_compiler_layout = bool(
+            compiler_artifact
+            or (
+                verification
+                and verification.storage_layout is not None
+                and language != "Vyper"
+            )
+        )
+        if parsed_layout and not parsed_layout.variables and not has_exact_compiler_layout:
             parsed_layout = None
         if parsed_layout:
             if verification:
@@ -346,6 +440,21 @@ class ContractResolver:
                     ).storage_scheme
                 elif language == "Solidity" and not parsed_layout.storage_scheme:
                     parsed_layout.storage_scheme = "solidity"
+            if (
+                language == "Solidity"
+                and compiler_artifact
+                and verification
+                and verification.sources
+            ):
+                parsed_layout = self.namespace_parser.promote_exact_erc7201(
+                    parsed_layout,
+                    compiler_output=(
+                        namespace_compiler_output
+                        or compiler_artifact.compiler_output
+                    ),
+                    sources=verification.sources,
+                    compiler_version=verification.compiler_version,
+                )
         # Build result - use bytecode cache metadata if verification was skipped
         if cached_by_bytecode and parsed_layout and not verification:
             # Reuse metadata from the cached contract with same bytecode
@@ -393,22 +502,11 @@ class ContractResolver:
                 ),
             )
 
-        # Cache every conclusive source lookup. Confirmed misses and verified
-        # identities without layouts expire separately from usable layouts.
-        if (
-            self.use_binding_cache
-            and follow_proxy
-            and self.contract_repo
-            and block_number is None
-        ):
-            await self.contract_repo.save(result)
-        elif (
-            self.use_binding_cache
-            and follow_proxy
-            and self.contract_repo
-            and block_number is not None
-        ):
-            await self.contract_repo.save_at_block(result, block_number)
+        await self._save_binding(
+            result,
+            block_number=block_number,
+            follow_proxy=follow_proxy,
+        )
 
         return result
 
@@ -420,7 +518,6 @@ class ContractResolver:
         designator_hash: str,
         delegate_address: str,
         block_number: Optional[int],
-        sourcify_layout_only: bool,
     ) -> ContractMetadata:
         """Compose delegate code metadata with authority storage identity."""
         try:
@@ -428,7 +525,6 @@ class ContractResolver:
                 chain_id,
                 delegate_address,
                 block_number=block_number,
-                sourcify_layout_only=sourcify_layout_only,
                 follow_proxy=False,
                 follow_delegation=False,
             )
@@ -442,6 +538,13 @@ class ContractResolver:
             is_delegated=True,
             delegate_address=delegate_address,
             delegate_code_hash=delegate.code_hash if delegate else None,
+            delegation_status=(
+                delegate.delegation_status
+                if delegate and delegate.delegation_status
+                else "ok"
+                if delegate
+                else "empty"
+            ),
             is_proxy=False,
             proxy_type=None,
             implementation_address=None,
@@ -465,45 +568,43 @@ class ContractResolver:
         cached_hash = getattr(row, "code_hash", None)
         return bool(cached_hash) and cached_hash.lower() == code_hash.lower()
 
-    def _source_check_is_fresh(self, row) -> bool:
-        checked_at = getattr(row, "source_checked_at", None)
-        if checked_at is None:
-            return False
-        age = datetime.utcnow() - checked_at
-        return age.total_seconds() <= self.settings.no_source_cache_ttl_seconds
+    async def _save_binding(
+        self,
+        metadata: ContractMetadata,
+        *,
+        block_number: Optional[int],
+        follow_proxy: bool,
+    ) -> None:
+        if not (self.use_binding_cache and follow_proxy and self.contract_repo):
+            return
+        if block_number is None:
+            await self.contract_repo.save(metadata)
+        else:
+            await self.contract_repo.save_at_block(metadata, block_number)
 
-    async def _hydrate_compiler_inputs(self, metadata: ContractMetadata) -> None:
-        """Restore sources/settings retained with the raw compiler artifact."""
-        if not (
-            metadata.compiler_artifact_fingerprint and self.compiler_artifact_repo
-        ):
-            return
-        artifact = await self.compiler_artifact_repo.get(
-            metadata.compiler_artifact_fingerprint
-        )
-        if not artifact:
-            return
-        metadata.sources = {
-            filename: source.get("content", "")
-            for filename, source in artifact.standard_input.get("sources", {}).items()
-        }
-        metadata.compiler_settings = artifact.standard_input.get("settings")
+    async def _read_code(
+        self,
+        chain_id: int,
+        address: str,
+        block: Optional[int],
+    ) -> bytes:
+        block_id = block if block is not None else "latest"
+        try:
+            code = await self.web3_provider.get_code(chain_id, address, block_id)
+        except Exception as exc:
+            raise RPCError("eth_getCode", str(exc)) from exc
+        raw = bytes(code)
+        return b"" if raw in {b"", b"0x"} else raw
 
     async def _check_is_contract(
         self, chain_id: int, address: str, block: Optional[int]
     ) -> bytes:
         """Check if address is a contract and return bytecode."""
-        block_id = block if block is not None else "latest"
-
-        try:
-            code = await self.web3_provider.get_code(chain_id, address, block_id)
-        except Exception as e:
-            raise RPCError("eth_getCode", str(e))
-
-        if code == b"" or code == b"0x" or code == bytes.fromhex(""):
+        code = await self._read_code(chain_id, address, block)
+        if not code:
             raise NotAContractError(address)
 
-        return bytes(code)
+        return code
 
     def _detect_minimal_proxy(self, bytecode: bytes) -> Optional[str]:
         """
@@ -651,16 +752,6 @@ class ContractResolver:
                         "eth_call",
                         f"{proxy_type} getter returned no implementation",
                     )
-                implementation_code = await self.web3_provider.get_code(
-                    chain_id,
-                    implementation,
-                    block_id,
-                )
-                if not implementation_code:
-                    raise RPCError(
-                        "eth_getCode",
-                        f"{proxy_type} implementation has no code",
-                    )
                 return ProxyInfo(
                     proxy_type=proxy_type,
                     implementation_address=implementation,
@@ -701,6 +792,10 @@ class ContractResolver:
         # Combine types
         merged_types = dict(standard_layout.types)
         merged_types.update(namespace_layout.types)
+        merged_scopes = {
+            scope.id: scope
+            for scope in standard_layout.scopes + namespace_layout.scopes
+        }
 
         return StorageLayout(
             contract_name=standard_layout.contract_name,
@@ -716,217 +811,5 @@ class ContractResolver:
             storage_scheme=(
                 standard_layout.storage_scheme or namespace_layout.storage_scheme
             ),
-        )
-
-    async def _fetch_verification(
-        self, chain_id: int, address: str
-    ) -> Optional[VerificationResult]:
-        """Fetch verified source from Sourcify or Etherscan."""
-        failures: list[str] = []
-        try:
-            sourcify_result = await self._try_sourcify(chain_id, address)
-            if sourcify_result:
-                return sourcify_result
-        except VerificationProviderError as exc:
-            failures.extend(exc.errors)
-
-        try:
-            etherscan_result = await self._try_etherscan(chain_id, address)
-            if etherscan_result:
-                return etherscan_result
-        except VerificationProviderError as exc:
-            failures.extend(exc.errors)
-
-        if failures:
-            raise VerificationProviderError(failures)
-        return None
-
-    async def _try_sourcify(
-        self, chain_id: int, address: str
-    ) -> Optional[VerificationResult]:
-        """Fetch Sourcify's compiler-produced layout without local compilation."""
-        url = f"https://sourcify.dev/server/v2/contract/{chain_id}/{address}"
-
-        try:
-            response = await self.http_client.get(
-                url,
-                params={"fields": "sources,storageLayout,compilation"},
-            )
-            if response.status_code == 404:
-                return None
-            if response.status_code != 200:
-                raise VerificationProviderError(
-                    [f"sourcify HTTP {response.status_code}"]
-                )
-
-            data = response.json()
-            if not isinstance(data, dict):
-                raise ValueError("expected a JSON object")
-            compilation = data.get("compilation") or {}
-            if not isinstance(compilation, dict):
-                raise ValueError("expected compilation metadata to be an object")
-            fully_qualified_name = compilation.get("fullyQualifiedName") or ""
-            compilation_target = None
-            target_name = None
-            if ":" in fully_qualified_name:
-                source_path, target_name = fully_qualified_name.rsplit(":", 1)
-                compilation_target = {source_path: target_name}
-
-            raw_sources = data.get("sources") or {}
-            if not isinstance(raw_sources, dict):
-                raise ValueError("expected sources to be an object")
-            sources: dict[str, str] = {}
-            for filename, source in raw_sources.items():
-                if isinstance(source, str):
-                    sources[filename] = source
-                elif isinstance(source, dict) and isinstance(source.get("content"), str):
-                    sources[filename] = source["content"]
-
-            return VerificationResult(
-                source="sourcify",
-                match_type=data.get("match") or "unknown",
-                name=compilation.get("name") or target_name,
-                compilation_target=compilation_target,
-                compiler_version=compilation.get("compilerVersion"),
-                compiler_settings=compilation.get("compilerSettings"),
-                sources=sources or None,
-                storage_layout=data.get("storageLayout"),
-                language=compilation.get("language") or "Solidity",
-            )
-        except httpx.RequestError as e:
-            logger.warning(f"Sourcify request failed: {e}")
-            raise VerificationProviderError(
-                [f"sourcify {type(e).__name__}"]
-            ) from e
-        except (TypeError, ValueError) as e:
-            logger.warning(f"Invalid Sourcify response for {address}: {e}")
-            raise VerificationProviderError(["sourcify invalid response"]) from e
-
-        return None
-
-    async def _try_etherscan(
-        self, chain_id: int, address: str
-    ) -> Optional[VerificationResult]:
-        """Query Etherscan API for verified source."""
-        api_key = self.settings.etherscan_keys.get(chain_id)
-        base_url = self.settings.etherscan_urls.get(chain_id)
-
-        if not api_key or not base_url:
-            return None
-
-        params = {
-            "chainid": str(chain_id),  # Required for V2 API
-            "module": "contract",
-            "action": "getsourcecode",
-            "address": address,
-            "apikey": api_key,
-        }
-
-        try:
-            response = await self.http_client.get(base_url, params=params)
-
-            if response.status_code != 200:
-                raise VerificationProviderError(
-                    [f"etherscan HTTP {response.status_code}"]
-                )
-
-            data = response.json()
-
-            if data.get("status") != "1":
-                detail = f"{data.get('message', '')} {data.get('result', '')}"
-                normalized = detail.lower()
-                if "not verified" in normalized or "no data found" in normalized:
-                    return None
-                raise VerificationProviderError(["etherscan unavailable"])
-
-            result = data.get("result", [{}])[0]
-
-            if not result.get("SourceCode"):
-                return None
-
-            return self._parse_etherscan_response(result)
-
-        except httpx.RequestError as e:
-            logger.warning(f"Etherscan request failed: {e}")
-            raise VerificationProviderError(
-                [f"etherscan {type(e).__name__}"]
-            ) from e
-
-        return None
-
-    def _parse_etherscan_response(self, result: dict) -> VerificationResult:
-        """Parse Etherscan getsourcecode response."""
-        source_code = result.get("SourceCode", "")
-        contract_name = result.get("ContractName", "")
-        compiler_version = result.get("CompilerVersion", "")
-        evm_version = result.get("EVMVersion", "")
-
-        # Detect Vyper from compiler version (e.g., "vyper:0.2.4" or "v0.2.4")
-        is_vyper = "vyper" in compiler_version.lower()
-        language = "Vyper" if is_vyper else "Solidity"
-        file_extension = ".vy" if is_vyper else ".sol"
-
-        sources = {}
-        metadata_settings = {
-            "optimizer": {
-                "enabled": result.get("OptimizationUsed") == "1",
-                "runs": int(result.get("Runs", "200")),
-            }
-        }
-        if evm_version and evm_version != "default":
-            metadata_settings["evmVersion"] = evm_version
-
-        # Handle Etherscan's various source code formats
-        if source_code.startswith("{{"):
-            # Multi-file JSON format (double braces)
-            try:
-                source_code = source_code[1:-1]
-                parsed = json.loads(source_code)
-                if "sources" in parsed:
-                    for filename, content in parsed["sources"].items():
-                        sources[filename] = content.get("content", "")
-                if "settings" in parsed:
-                    metadata_settings.update(parsed["settings"])
-            except json.JSONDecodeError:
-                sources[f"{contract_name}{file_extension}"] = source_code
-
-        elif source_code.startswith("{"):
-            # Standard JSON input format
-            try:
-                parsed = json.loads(source_code)
-                if "sources" in parsed:
-                    for filename, content in parsed["sources"].items():
-                        sources[filename] = content.get("content", "")
-                if "settings" in parsed:
-                    metadata_settings.update(parsed["settings"])
-            except json.JSONDecodeError:
-                sources[f"{contract_name}{file_extension}"] = source_code
-        else:
-            # Single file
-            sources[f"{contract_name}{file_extension}"] = source_code
-
-        # Secondary detection: check for .vy files in sources
-        if not is_vyper and any(f.endswith(".vy") for f in sources.keys()):
-            language = "Vyper"
-
-        # Parse compiler settings
-        optimization = result.get("OptimizationUsed") == "1"
-        runs = int(result.get("Runs", "200"))
-
-        compiler_settings = {
-            "optimizer": {
-                "enabled": optimization,
-                "runs": runs,
-            }
-        }
-
-        return VerificationResult(
-            source="etherscan",
-            match_type="full",
-            name=contract_name,
-            compilation_target=None,
-            compiler_version=compiler_version,
-            compiler_settings=metadata_settings or compiler_settings,
-            sources=sources,
-            language=language,
+            scopes=list(merged_scopes.values()),
         )

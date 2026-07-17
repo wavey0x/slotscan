@@ -127,6 +127,85 @@ class StorageQueryResponse(BaseModel):
     array_length: Optional[str] = None
 
 
+class ComparisonScopeResponse(BaseModel):
+    id: str
+    kind: Literal["default", "erc7201"]
+    root_slot: str
+    formula: Optional[str] = None
+
+
+class ComparisonLocationResponse(BaseModel):
+    slot: str
+    byte_offset: int
+    byte_size: str
+    end_slot: str
+    is_root: bool
+
+
+class ComparisonTypeResponse(BaseModel):
+    label: str
+    kind: str
+    encoding: str
+    byte_size: str
+    array_length: Optional[str] = None
+    element_stride: Optional[str] = None
+
+
+class ComparisonRegionResponse(BaseModel):
+    scope: ComparisonScopeResponse
+    location: ComparisonLocationResponse
+    path: str
+    type: ComparisonTypeResponse
+
+
+class ComparisonEntryResponse(BaseModel):
+    id: str
+    impact: Literal["conflict", "ambiguous", "none"]
+    kind: str
+    from_region: Optional[ComparisonRegionResponse] = None
+    to_region: Optional[ComparisonRegionResponse] = None
+    details: list[str]
+
+
+class ComparisonSummaryResponse(BaseModel):
+    conflicts: int
+    ambiguous: int
+    changes: int
+    unchanged: int
+
+
+class ResolvedLayoutSubjectResponse(BaseModel):
+    input_address: str
+    storage_address: str
+    code_address: str
+    kind: Literal["direct", "proxy", "eip7702"]
+    block_ref: BlockRefResponse
+    name: Optional[str] = None
+    layout_status: Literal[
+        "ok",
+        "unverified",
+        "unsupported",
+        "non_exact",
+        "not_contract",
+        "invalid_layout",
+    ]
+
+
+class LayoutComparisonResponse(BaseModel):
+    chain_id: int
+    verdict: Literal[
+        "no_conflicts",
+        "conflicts",
+        "indeterminate",
+        "unavailable",
+    ]
+    from_subject: Optional[ResolvedLayoutSubjectResponse] = None
+    to_subject: Optional[ResolvedLayoutSubjectResponse] = None
+    summary: Optional[ComparisonSummaryResponse] = None
+    entries: list[ComparisonEntryResponse]
+    limitations: list[str]
+
+
 class StorageChangeResponse(BaseModel):
     """A single storage change (interim step)."""
 

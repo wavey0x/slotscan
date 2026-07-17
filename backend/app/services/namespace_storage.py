@@ -14,12 +14,18 @@ Example pattern:
 import re
 import logging
 import hashlib
+from math import ceil
 from typing import Optional
 from dataclasses import dataclass
 
 from web3 import Web3
 
-from app.models.domain import StorageLayout, StorageType, StorageVariable
+from app.models.domain import (
+    StorageLayout,
+    StorageScope,
+    StorageType,
+    StorageVariable,
+)
 from app.utils.vyper import (
     LEGACY_HASHED_STORAGE,
     LOCK_AFTER_GLOBALS,
@@ -96,6 +102,16 @@ STANDARD_LIBRARY_SLOT_COUNTS = {
     "string": 1,
     "bytes": 1,
 }
+
+ERC7201_HARNESS_SOURCE = "__slotscan__/NamespaceHarness.sol"
+ERC7201_HARNESS_CONTRACT = "SlotScanNamespaceHarness"
+
+
+def compute_erc7201_root(identifier: str) -> int:
+    """Return the ERC-7201 root for one namespace identifier."""
+    first_hash = int.from_bytes(Web3.keccak(text=identifier), "big")
+    encoded = ((first_hash - 1) % (1 << 256)).to_bytes(32, "big")
+    return int.from_bytes(Web3.keccak(encoded), "big") & ~0xFF
 
 
 class NamespaceStorageParser:
@@ -226,12 +242,19 @@ class NamespaceStorageParser:
             if re.fullmatch(r"0x[a-fA-F0-9]+", compact):
                 value = int(compact, 16)
             else:
+                erc7201 = re.fullmatch(
+                    r"keccak256\(abi\.encode\(uint256\(keccak256\(\"([^\"]+)\"\)\)-1\)\)"
+                    r"&~bytes32\(uint256\(0xff\)\)",
+                    compact,
+                )
+                if erc7201:
+                    value = compute_erc7201_root(erc7201.group(1))
                 literal = re.search(r'keccak256\((?:bytes\()?"([^"]+)"\)?\)', compact)
-                if literal:
+                if value is None and literal:
                     value = int.from_bytes(Web3.keccak(text=literal.group(1)), "big")
                     if re.search(r"-1\)*$", compact):
                         value -= 1
-                elif re.fullmatch(r"\w+", compact):
+                elif value is None and re.fullmatch(r"\w+", compact):
                     value = evaluate(compact, stack | {name})
             if value is not None:
                 resolved[name] = value % (1 << 256)
@@ -240,6 +263,253 @@ class NamespaceStorageParser:
         for constant_name in expressions:
             evaluate(constant_name, set())
         return resolved
+
+    @staticmethod
+    def _ast_nodes(value):
+        if isinstance(value, dict):
+            yield value
+            for child in value.values():
+                yield from NamespaceStorageParser._ast_nodes(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from NamespaceStorageParser._ast_nodes(child)
+
+    @staticmethod
+    def _documentation_text(node: dict) -> str:
+        documentation = node.get("documentation")
+        if isinstance(documentation, str):
+            return documentation
+        if isinstance(documentation, dict):
+            text = documentation.get("text")
+            return text if isinstance(text, str) else ""
+        return ""
+
+    @staticmethod
+    def _compiler_version_at_least_0820(version: Optional[str]) -> bool:
+        if not version:
+            return False
+        match = re.search(r"(\d+)\.(\d+)\.(\d+)", version)
+        if not match:
+            return False
+        return tuple(int(part) for part in match.groups()) >= (0, 8, 20)
+
+    def build_exact_erc7201_harness(
+        self,
+        compiler_output: dict,
+    ) -> Optional[str]:
+        """Build compiler-only declarations that expose annotated struct layouts."""
+        declarations: list[tuple[str, str]] = []
+        for filename, source_output in sorted(
+            (compiler_output.get("sources") or {}).items()
+        ):
+            if (
+                not isinstance(filename, str)
+                or any(character in filename for character in {'"', "\n", "\r", "\0"})
+                or not isinstance(source_output, dict)
+                or not isinstance(source_output.get("ast"), dict)
+            ):
+                continue
+            for node in self._ast_nodes(source_output["ast"]):
+                if node.get("nodeType") != "StructDefinition":
+                    continue
+                if not re.search(
+                    r"@custom:storage-location\s+erc7201:([^\s*]+)",
+                    self._documentation_text(node),
+                ):
+                    continue
+                canonical_name = node.get("canonicalName") or node.get("name")
+                if not isinstance(canonical_name, str) or not re.fullmatch(
+                    r"[A-Za-z_$][A-Za-z0-9_$]*"
+                    r"(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*",
+                    canonical_name,
+                ):
+                    continue
+                declarations.append((filename, canonical_name))
+
+        declarations = sorted(set(declarations))
+        if not declarations:
+            return None
+
+        filenames = sorted({filename for filename, _ in declarations})
+        aliases = {
+            filename: f"SlotScanSource{index}"
+            for index, filename in enumerate(filenames)
+        }
+        imports = [
+            f'import * as {aliases[filename]} from "{filename}";'
+            for filename in filenames
+        ]
+        variables = [
+            (
+                f"    {aliases[filename]}.{canonical_name} private "
+                f"namespace_{index};"
+            )
+            for index, (filename, canonical_name) in enumerate(declarations)
+        ]
+        return "\n".join(
+            (
+                "pragma solidity >=0.8.20;",
+                *imports,
+                f"contract {ERC7201_HARNESS_CONTRACT} {{",
+                *variables,
+                "}",
+            )
+        )
+
+    @staticmethod
+    def _type_occupancy(
+        type_info: StorageType,
+    ) -> tuple[int, int]:
+        if type_info.encoding in {"mapping", "dynamic_array", "bytes"}:
+            return 1, 32
+        size = type_info.num_bytes or 32
+        return max(1, ceil(size / 32)), min(size, 32)
+
+    def promote_exact_erc7201(
+        self,
+        layout: StorageLayout,
+        *,
+        compiler_output: dict,
+        sources: dict[str, str],
+        compiler_version: Optional[str],
+    ) -> StorageLayout:
+        """Promote namespaces only when AST, root, pointer, and type graph agree."""
+        if not self._compiler_version_at_least_0820(compiler_version):
+            return layout
+        ast_roots = [
+            source.get("ast")
+            for source in (compiler_output.get("sources") or {}).values()
+            if isinstance(source, dict) and isinstance(source.get("ast"), dict)
+        ]
+        if not ast_roots:
+            return layout
+
+        pointer_namespaces = self.detect_namespace_storage(sources)
+        variables = list(layout.variables)
+        scopes = {scope.id: scope for scope in layout.scopes}
+
+        for ast_root in ast_roots:
+            for node in self._ast_nodes(ast_root):
+                if node.get("nodeType") != "StructDefinition":
+                    continue
+                annotation = re.search(
+                    r"@custom:storage-location\s+erc7201:([^\s*]+)",
+                    self._documentation_text(node),
+                )
+                if not annotation:
+                    continue
+                identifier = annotation.group(1)
+                root = compute_erc7201_root(identifier)
+                struct_name = node.get("name")
+                canonical_name = node.get("canonicalName") or struct_name
+                pointer = next(
+                    (
+                        namespace
+                        for namespace in pointer_namespaces
+                        if namespace.base_slot == root
+                        and namespace.struct_name == struct_name
+                    ),
+                    None,
+                )
+                if pointer is None:
+                    continue
+
+                type_matches = [
+                    type_info
+                    for type_info in layout.types.values()
+                    if type_info.kind == "struct"
+                    and type_info.members
+                    and (
+                        type_info.label.removeprefix("struct ") == canonical_name
+                        or type_info.label.removeprefix("struct ").endswith(
+                            f".{struct_name}"
+                        )
+                        or type_info.label.removeprefix("struct ") == struct_name
+                    )
+                ]
+                if len(type_matches) != 1:
+                    continue
+                struct_type = type_matches[0]
+                occupied: set[tuple[int, int]] = set()
+                exact_members: list[StorageVariable] = []
+                valid = True
+                scope_id = f"erc7201:{identifier}"
+                for member in struct_type.members or ():
+                    member_type = layout.types.get(member.type_id)
+                    if member_type is None:
+                        valid = False
+                        break
+                    slot_count, first_word_size = self._type_occupancy(member_type)
+                    absolute_slot = root + member.slot
+                    if absolute_slot >= 1 << 256 or absolute_slot + slot_count > 1 << 256:
+                        valid = False
+                        break
+                    for relative in range(slot_count):
+                        byte_start = member.offset if relative == 0 else 0
+                        byte_size = (
+                            min(member.size, first_word_size)
+                            if relative == 0
+                            else 32
+                        )
+                        for byte in range(byte_start, byte_start + byte_size):
+                            key = (absolute_slot + relative, byte)
+                            if byte >= 32 or key in occupied:
+                                valid = False
+                                break
+                            occupied.add(key)
+                        if not valid:
+                            break
+                    if not valid:
+                        break
+                    exact_members.append(
+                        StorageVariable(
+                            name=member.name,
+                            slot=absolute_slot,
+                            offset=member.offset,
+                            size=member.size,
+                            type_id=member.type_id,
+                            label=member.label,
+                            provenance="compiler_layout",
+                            confidence="exact",
+                            scope_id=scope_id,
+                        )
+                    )
+                if not valid:
+                    continue
+
+                inferred_scope_ids = {
+                    scope.id
+                    for scope in scopes.values()
+                    if scope.root_slot == root
+                    and scope.kind in {"custom", "unstructured"}
+                    and scope.confidence != "exact"
+                }
+                variables = [
+                    variable
+                    for variable in variables
+                    if variable.scope_id not in inferred_scope_ids
+                ]
+                for inferred_scope_id in inferred_scope_ids:
+                    scopes.pop(inferred_scope_id, None)
+                variables.extend(exact_members)
+                scopes[scope_id] = StorageScope(
+                    id=scope_id,
+                    kind="erc7201",
+                    root_slot=root,
+                    formula=f"erc7201:{identifier}",
+                    provenance="compiler_layout",
+                    confidence="exact",
+                )
+
+        return StorageLayout(
+            contract_name=layout.contract_name,
+            variables=variables,
+            types=layout.types,
+            language=layout.language,
+            compiler_version=layout.compiler_version,
+            storage_scheme=layout.storage_scheme,
+            scopes=list(scopes.values()),
+        )
 
     def find_struct_definition(
         self, struct_name: str, sources: dict[str, str]
@@ -550,6 +820,7 @@ class NamespaceStorageParser:
         """
         variables: list[StorageVariable] = []
         types: dict[str, StorageType] = {}
+        scope_id = f"namespace:{namespace.base_slot:064x}"
 
         for member in members:
             # Calculate absolute slot
@@ -566,6 +837,7 @@ class NamespaceStorageParser:
                 label=member.type_str,
                 provenance="source_inference",
                 confidence="inferred",
+                scope_id=scope_id,
             ))
 
         return StorageLayout(
@@ -573,6 +845,17 @@ class NamespaceStorageParser:
             variables=variables,
             types=types,
             language="Solidity",
+            scopes=[
+                StorageScope("default", "default", 0),
+                StorageScope(
+                    id=scope_id,
+                    kind="custom",
+                    root_slot=namespace.base_slot,
+                    formula=None,
+                    provenance="source_inference",
+                    confidence="inferred",
+                ),
+            ],
         )
 
     @staticmethod
@@ -753,6 +1036,9 @@ class NamespaceStorageParser:
 
         variables = []
         types = {}
+        scopes: dict[str, StorageScope] = {
+            "default": StorageScope("default", "default", 0)
+        }
         names = []
         for namespace in namespaces:
             if namespace.storage_type.strip().startswith("mapping"):
@@ -763,6 +1049,7 @@ class NamespaceStorageParser:
                     sources,
                 )
                 variable_name = namespace.variable_name or namespace.namespace_name
+                scope_id = f"namespace:{namespace.base_slot:064x}"
                 namespace_layout = StorageLayout(
                     contract_name=variable_name,
                     variables=[StorageVariable(
@@ -774,8 +1061,19 @@ class NamespaceStorageParser:
                         label=namespace.storage_type,
                         provenance="source_inference",
                         confidence="inferred",
+                        scope_id=scope_id,
                     )],
                     types=namespace_types,
+                    scopes=[
+                        StorageScope("default", "default", 0),
+                        StorageScope(
+                            id=scope_id,
+                            kind="custom",
+                            root_slot=namespace.base_slot,
+                            provenance="source_inference",
+                            confidence="inferred",
+                        ),
+                    ],
                 )
             else:
                 struct_body = self.find_struct_definition(namespace.struct_name, sources)
@@ -789,6 +1087,7 @@ class NamespaceStorageParser:
                 namespace_layout = self.create_namespace_layout(namespace, members, sources)
             variables.extend(namespace_layout.variables)
             types.update(namespace_layout.types)
+            scopes.update({scope.id: scope for scope in namespace_layout.scopes})
             names.append(namespace.struct_name)
 
         if not variables:
@@ -803,6 +1102,7 @@ class NamespaceStorageParser:
             variables=variables,
             types=types,
             language="Solidity",
+            scopes=list(scopes.values()),
         )
 
     @staticmethod
@@ -825,6 +1125,7 @@ class NamespaceStorageParser:
         combined = "\n".join(sources.values())
         variables: list[StorageVariable] = []
         types: dict[str, StorageType] = {}
+        scopes: list[StorageScope] = [StorageScope("default", "default", 0)]
         for constant_name, slot in constants.items():
             usage = re.search(
                 rf"\b{re.escape(constant_name)}\."
@@ -849,6 +1150,16 @@ class NamespaceStorageParser:
             else:
                 type_name = "uint256"
             type_id = self._ensure_source_type(type_name, types, sources)
+            scope_id = f"unstructured:{slot:064x}"
+            scopes.append(
+                StorageScope(
+                    id=scope_id,
+                    kind="unstructured",
+                    root_slot=slot,
+                    provenance="source_inference",
+                    confidence="inferred",
+                )
+            )
             variables.append(StorageVariable(
                 name=self._constant_variable_name(constant_name),
                 slot=slot,
@@ -858,6 +1169,7 @@ class NamespaceStorageParser:
                 label=type_name,
                 provenance="source_inference",
                 confidence="inferred",
+                scope_id=scope_id,
             ))
         if not variables:
             return None
@@ -866,6 +1178,7 @@ class NamespaceStorageParser:
             variables=variables,
             types=types,
             language="Solidity",
+            scopes=scopes,
         )
 
     @staticmethod

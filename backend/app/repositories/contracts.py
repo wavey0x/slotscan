@@ -45,6 +45,7 @@ class ContractRepository:
         result = await self.session.execute(
             select(Contract).where(
                 Contract.code_hash == code_hash,
+                Contract.is_proxy.is_(False),
                 Contract.is_verified.is_(True),
                 Contract.storage_layout.isnot(None),
             ).limit(1)

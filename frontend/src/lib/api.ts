@@ -1,4 +1,6 @@
 import type {
+  LayoutComparisonRequest,
+  LayoutComparisonResponse,
   StorageQueryRequest,
   StorageQueryResponse,
   StorageViewResponse,
@@ -85,6 +87,22 @@ export async function queryStorage(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
   });
+}
+
+export async function fetchLayoutComparison(
+  chainId: string,
+  request: LayoutComparisonRequest,
+): Promise<LayoutComparisonResponse> {
+  const params = new URLSearchParams();
+  params.set('from_address', request.fromAddress);
+  params.set('to_address', request.toAddress);
+  if (request.fromBlock) params.set('from_block', request.fromBlock);
+  if (request.fromBlockHash) {
+    params.set('from_block_hash', request.fromBlockHash);
+  }
+  if (request.toBlock) params.set('to_block', request.toBlock);
+  if (request.toBlockHash) params.set('to_block_hash', request.toBlockHash);
+  return fetchAPI(`${API_BASE}/layout-comparisons/${chainId}?${params}`);
 }
 
 export async function fetchTransactionStorageHistory(

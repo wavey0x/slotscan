@@ -549,7 +549,7 @@ class Eip7702TraceTests(IsolatedAsyncioTestCase):
             web3_provider=_NoopProvider(),
             settings=tracer.settings,
             layout_parser=None,
-            http_client=None,
+            verification_service=object(),
         )
 
         response = await get_transaction_storage_history(
@@ -576,7 +576,7 @@ class Eip7702TraceTests(IsolatedAsyncioTestCase):
             web3_provider=_NoopProvider(),
             settings=tracer.settings,
             layout_parser=None,
-            http_client=None,
+            verification_service=object(),
         )
         service.delegation_calls = []
 
@@ -689,7 +689,7 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
             web3_provider=_NoopProvider(),
             settings=tracer.settings,
             layout_parser=None,
-            http_client=None,
+            verification_service=object(),
         )
 
         result = await service.analyze(
@@ -719,7 +719,7 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
             web3_provider=_NoopProvider(),
             settings=Settings(CONTRACT_RESOLUTION_RETRY_DELAY_SECONDS=0),
             layout_parser=None,
-            http_client=None,
+            verification_service=object(),
         )
         service.resolution_calls = []
         service.attempts = {}
@@ -746,7 +746,7 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
             web3_provider=_NoopProvider(),
             settings=Settings(CONTRACT_RESOLUTION_RETRY_DELAY_SECONDS=0),
             layout_parser=None,
-            http_client=None,
+            verification_service=object(),
         )
         service.resolution_calls = []
         service.attempts = {}
@@ -777,7 +777,7 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
             web3_provider=_NoopProvider(),
             settings=Settings(CONTRACT_RESOLUTION_RETRY_DELAY_SECONDS=0),
             layout_parser=None,
-            http_client=None,
+            verification_service=object(),
         )
         service.resolution_calls = []
         service.attempts = {}
@@ -806,7 +806,7 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
             web3_provider=_NoopProvider(),
             settings=Settings(),
             layout_parser=None,
-            http_client=None,
+            verification_service=object(),
         )
         expected = ContractMetadata(chain_id=1, address=ADDRESS_A)
         resolver = SimpleNamespace(resolve=AsyncMock(return_value=expected))
@@ -835,7 +835,6 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
             1,
             ADDRESS_A,
             block_number=artifact().block_number,
-            sourcify_layout_only=False,
             follow_proxy=False,
             follow_delegation=True,
         )
@@ -856,7 +855,7 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
             web3_provider=_NoopProvider(),
             settings=tracer.settings,
             layout_parser=None,
-            http_client=None,
+            verification_service=object(),
         )
         service.resolution_calls = []
 
@@ -892,7 +891,7 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
             web3_provider=_NoopProvider(),
             settings=tracer.settings,
             layout_parser=None,
-            http_client=None,
+            verification_service=object(),
         )
 
         response = await get_transaction_storage_history(
@@ -944,7 +943,7 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
             web3_provider=_NoopProvider(),
             settings=tracer.settings,
             layout_parser=None,
-            http_client=None,
+            verification_service=object(),
         )
 
         response = await get_transaction_storage_history(

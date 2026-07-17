@@ -1,6 +1,16 @@
 """SQLAlchemy database models."""
 
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, BigInteger, Index
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import func
@@ -131,5 +141,32 @@ class HistoricalContractResolution(Base):
             address,
             block_number,
             unique=True,
+        ),
+    )
+
+
+class ContractSourceCache(Base):
+    """Normalized verification result for one exact runtime-code identity."""
+
+    __tablename__ = "contract_source_cache"
+
+    id = Column(Integer, primary_key=True)
+    chain_id = Column(Integer, nullable=False)
+    code_address = Column(String(42), nullable=False)
+    code_hash = Column(String(66), nullable=False)
+    status = Column(String(20), nullable=False)
+    result = Column(JSONB)
+    checked_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('verified', 'not_found')",
+            name="ck_contract_source_cache_status",
+        ),
+        UniqueConstraint(
+            "chain_id",
+            "code_address",
+            "code_hash",
+            name="uq_contract_source_cache_identity",
         ),
     )

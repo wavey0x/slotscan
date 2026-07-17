@@ -132,6 +132,91 @@ export interface StorageQueryLookup {
   decodedValue: unknown;
 }
 
+export interface ComparisonScope {
+  id: string;
+  kind: 'default' | 'erc7201';
+  root_slot: string;
+  formula: string | null;
+}
+
+export interface ComparisonLocation {
+  slot: string;
+  byte_offset: number;
+  byte_size: string;
+  end_slot: string;
+  is_root: boolean;
+}
+
+export interface ComparisonType {
+  label: string;
+  kind: string;
+  encoding: string;
+  byte_size: string;
+  array_length: string | null;
+  element_stride: string | null;
+}
+
+export interface ComparisonRegion {
+  scope: ComparisonScope;
+  location: ComparisonLocation;
+  path: string;
+  type: ComparisonType;
+}
+
+export interface ComparisonEntry {
+  id: string;
+  impact: 'conflict' | 'ambiguous' | 'none';
+  kind: string;
+  from_region: ComparisonRegion | null;
+  to_region: ComparisonRegion | null;
+  details: string[];
+}
+
+export interface ComparisonSummary {
+  conflicts: number;
+  ambiguous: number;
+  changes: number;
+  unchanged: number;
+}
+
+export interface ResolvedLayoutSubject {
+  input_address: string;
+  storage_address: string;
+  code_address: string;
+  kind: 'direct' | 'proxy' | 'eip7702';
+  block_ref: {
+    number: string;
+    hash: string;
+  };
+  name: string | null;
+  layout_status:
+    | 'ok'
+    | 'unverified'
+    | 'unsupported'
+    | 'non_exact'
+    | 'not_contract'
+    | 'invalid_layout';
+}
+
+export interface LayoutComparisonResponse {
+  chain_id: number;
+  verdict: 'no_conflicts' | 'conflicts' | 'indeterminate' | 'unavailable';
+  from_subject: ResolvedLayoutSubject | null;
+  to_subject: ResolvedLayoutSubject | null;
+  summary: ComparisonSummary | null;
+  entries: ComparisonEntry[];
+  limitations: string[];
+}
+
+export interface LayoutComparisonRequest {
+  fromAddress: string;
+  toAddress: string;
+  fromBlock?: string;
+  fromBlockHash?: string;
+  toBlock?: string;
+  toBlockHash?: string;
+}
+
 export interface StorageChangeResponse {
   // A single interim change (one SSTORE)
   before: ValuePair;

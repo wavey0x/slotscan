@@ -178,9 +178,10 @@ class StorageViewService:
         return ContractResolver(
             web3_provider=attempt,
             settings=self.resolver.settings,
+            verification_service=self.resolver.verification_service,
+            source_cache_repo=self.resolver.source_cache_repo,
             contract_repo=self.resolver.contract_repo,
             layout_parser=self.resolver.layout_parser,
-            http_client=self.resolver.http_client,
             compiler_artifact_repo=self.resolver.compiler_artifact_repo,
             use_binding_cache=False,
         )
@@ -234,7 +235,7 @@ class StorageViewService:
         selector: int | str,
     ) -> StorageContext:
         attempt = await self.web3_provider.create_storage_attempt(chain_id, selector)
-        return await self._prepare_attempt(attempt, address)
+        return await self.prepare_on_attempt(attempt, address)
 
     async def prepare_exact(
         self,
@@ -248,9 +249,9 @@ class StorageViewService:
             number,
             block_hash,
         )
-        return await self._prepare_attempt(attempt, address)
+        return await self.prepare_on_attempt(attempt, address)
 
-    async def _prepare_attempt(
+    async def prepare_on_attempt(
         self,
         attempt: StorageAttempt,
         address: str,

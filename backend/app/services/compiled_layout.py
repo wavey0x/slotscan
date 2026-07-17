@@ -8,7 +8,7 @@ import json
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from app.models.domain import StorageLayout, StorageType, StorageVariable
+from app.models.domain import StorageLayout, StorageScope, StorageType, StorageVariable
 from app.services.storage_rules import (
     StorageRules,
     UnsupportedStorageRules,
@@ -57,6 +57,17 @@ class CompiledDeclaration:
     label: str
     provenance: str
     confidence: str
+    scope_id: str
+
+
+@dataclass(frozen=True)
+class CompiledScope:
+    id: str
+    kind: str
+    root_slot: int
+    formula: str | None
+    provenance: str
+    confidence: str
 
 
 @dataclass(frozen=True)
@@ -64,6 +75,8 @@ class CompiledLayout:
     """A deep-copied, immutable, identity-bound runtime layout."""
 
     contract_name: str
+    language: str | None
+    scopes: tuple[CompiledScope, ...]
     variables: tuple[CompiledDeclaration, ...]
     types: Mapping[str, CompiledType]
     storage_rules: StorageRules
@@ -83,7 +96,12 @@ class CompiledLayout:
         )
 
     def canonical_wire(self) -> dict[str, Any]:
-        return _canonical_wire(self.variables, self.types, self.storage_rules)
+        return _canonical_wire(
+            self.scopes,
+            self.variables,
+            self.types,
+            self.storage_rules,
+        )
 
 
 def _validate_slot(value: int, label: str) -> None:
@@ -165,6 +183,24 @@ def _copy_type(type_id: str, source: StorageType) -> CompiledType:
     )
 
 
+def _copy_scope(source: StorageScope) -> CompiledScope:
+    if not source.id:
+        raise UnsupportedCompiledLayout("Storage scope has no id")
+    if source.kind not in {"default", "erc7201", "unstructured", "custom"}:
+        raise UnsupportedCompiledLayout(
+            f"Storage scope {source.id} has unsupported kind {source.kind}"
+        )
+    _validate_slot(source.root_slot, f"Storage scope {source.id} root")
+    return CompiledScope(
+        id=source.id,
+        kind=source.kind,
+        root_slot=source.root_slot,
+        formula=source.formula,
+        provenance=source.provenance,
+        confidence=source.confidence,
+    )
+
+
 def _type_references(type_info: CompiledType) -> tuple[str, ...]:
     references = [
         type_info.base_type,
@@ -209,11 +245,23 @@ def _type_wire(type_info: CompiledType) -> dict[str, Any]:
 
 
 def _canonical_wire(
+    scopes: tuple[CompiledScope, ...],
     variables: tuple[CompiledDeclaration, ...],
     types: Mapping[str, CompiledType],
     storage_rules: StorageRules,
 ) -> dict[str, Any]:
     return {
+        "scopes": [
+            {
+                "id": scope.id,
+                "kind": scope.kind,
+                "root_slot": hex(scope.root_slot),
+                "formula": scope.formula,
+                "provenance": scope.provenance,
+                "confidence": scope.confidence,
+            }
+            for scope in scopes
+        ],
         "variables": [
             {
                 "declaration_id": declaration.declaration_id,
@@ -225,6 +273,7 @@ def _canonical_wire(
                 "type_label": declaration.label,
                 "provenance": declaration.provenance,
                 "confidence": declaration.confidence,
+                "scope_id": declaration.scope_id,
             }
             for declaration in variables
         ],
@@ -245,9 +294,29 @@ def compile_layout(layout: StorageLayout) -> CompiledLayout:
         rules = storage_rules_for_layout(layout)
     except UnsupportedStorageRules as exc:
         raise UnsupportedCompiledLayout(str(exc)) from exc
+    copied_scopes = tuple(
+        sorted(
+            (_copy_scope(scope) for scope in layout.scopes),
+            key=lambda scope: (
+                scope.root_slot,
+                scope.kind,
+                scope.id,
+            ),
+        )
+    )
+    scope_ids = {scope.id for scope in copied_scopes}
+    if len(scope_ids) != len(copied_scopes):
+        raise UnsupportedCompiledLayout("Layout contains duplicate storage scope ids")
+    default_scopes = [scope for scope in copied_scopes if scope.kind == "default"]
+    if len(default_scopes) != 1 or default_scopes[0].root_slot != 0:
+        raise UnsupportedCompiledLayout(
+            "Layout must contain exactly one default scope rooted at slot zero"
+        )
+
     ordered_variables = sorted(
         layout.variables,
         key=lambda variable: (
+            variable.scope_id,
             variable.slot,
             variable.offset,
             variable.name,
@@ -268,6 +337,10 @@ def compile_layout(layout: StorageLayout) -> CompiledLayout:
         )
         if not variable.name or not variable.type_id:
             raise UnsupportedCompiledLayout("Layout contains an incomplete variable")
+        if variable.scope_id not in scope_ids:
+            raise UnsupportedCompiledLayout(
+                f"Variable {variable.name} references missing scope {variable.scope_id}"
+            )
         declarations.append(
             CompiledDeclaration(
                 declaration_id=f"decl:{ordinal}",
@@ -279,6 +352,7 @@ def compile_layout(layout: StorageLayout) -> CompiledLayout:
                 label=variable.label,
                 provenance=variable.provenance,
                 confidence=variable.confidence,
+                scope_id=variable.scope_id,
             )
         )
         pending_type_ids.append(variable.type_id)
@@ -303,7 +377,7 @@ def compile_layout(layout: StorageLayout) -> CompiledLayout:
         {type_id: copied_types[type_id] for type_id in sorted(copied_types)}
     )
     variables = tuple(declarations)
-    wire = _canonical_wire(variables, immutable_types, rules)
+    wire = _canonical_wire(copied_scopes, variables, immutable_types, rules)
     canonical_bytes = json.dumps(
         wire,
         sort_keys=True,
@@ -315,6 +389,8 @@ def compile_layout(layout: StorageLayout) -> CompiledLayout:
 
     return CompiledLayout(
         contract_name=layout.contract_name,
+        language=layout.language,
+        scopes=copied_scopes,
         variables=variables,
         types=immutable_types,
         storage_rules=rules,

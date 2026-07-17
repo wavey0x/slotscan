@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { EntityHeader } from '@/components/layout/EntityHeader';
 import { LayoutTable } from '@/components/layout/LayoutTable';
 import { CopyButton } from '@/components/ui/CopyButton';
@@ -9,7 +10,7 @@ import { ViewSwitch } from '@/components/ui/ViewSwitch';
 import { APIError } from '@/lib/api';
 import { getAddressExplorerUrl, getBlockExplorerUrl } from '@/lib/constants';
 import { useStorageView } from '@/lib/hooks/useStorageView';
-import { truncateAddress, truncateHash, updateRecentSearchName } from '@/lib/utils';
+import { truncateAddress, updateRecentSearchName } from '@/lib/utils';
 
 interface ContractPageProps {
   chain: string;
@@ -114,7 +115,15 @@ export function ContractPage({ chain, address }: ContractPageProps) {
 
       <section>
         <div className="mb-4">
-          <h2 className="text-base font-medium text-gray-900">Storage layout</h2>
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <h2 className="text-base font-medium text-gray-900">Storage layout</h2>
+              <Link
+                href={`/${chain}/compare?from=${encodeURIComponent(address)}`}
+                className="text-[10px] text-gray-500"
+              >
+                Compare layout →
+              </Link>
+            </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-5 gap-y-1 text-[10px] text-gray-500">
             <span>
               Block{' '}
@@ -125,10 +134,6 @@ export function ContractPage({ chain, address }: ContractPageProps) {
               >
                 {BigInt(blockNumber).toLocaleString()}
               </a>
-            </span>
-            <span className="inline-flex items-center gap-0.5" title={view.block_ref.hash}>
-              Hash {truncateHash(view.block_ref.hash, 6)}
-              <CopyButton value={view.block_ref.hash} label="Copy block hash" className="-my-1" />
             </span>
             <span>{view.layout.variables.length} variables</span>
             {isFetching && <span>Refreshing…</span>}

@@ -12,6 +12,10 @@ class ApiSurfaceTests(unittest.TestCase):
             paths,
         )
         self.assertIn("/api/slotscan/storage/query", paths)
+        self.assertIn(
+            "/api/slotscan/layout-comparisons/{chain_id}",
+            paths,
+        )
         self.assertIn("/api/slotscan/tx/{chain_id}/{tx_hash}", paths)
         obsolete = {
             "/api/slotscan/contracts/{chain_id}/{address}",
@@ -28,6 +32,13 @@ class ApiSurfaceTests(unittest.TestCase):
         ]
 
         self.assertNotIn("analysis_version", schema["properties"])
+
+    def test_comparison_response_has_no_schema_version(self):
+        schema = create_app().openapi()["components"]["schemas"][
+            "LayoutComparisonResponse"
+        ]
+
+        self.assertNotIn("schema_version", schema["properties"])
 
 
 if __name__ == "__main__":

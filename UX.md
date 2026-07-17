@@ -8,11 +8,52 @@ expose evidence clearly without guessing or hiding uncertainty.
 - `/` is the universal address/transaction lookup.
 - `/{chain}/{address}` is the contract layout and state surface.
 - `/{chain}/tx/{hash}` is the only transaction surface.
+- `/{chain}/compare` is the only storage-layout comparison surface.
 - `?focus={address}` may open and scroll to one owner while retaining the full
   transaction.
 - View and value-mode choices are shareable query parameters.
 
 Do not add legacy redirects or a second contract-scoped transaction UI.
+
+## Layout comparison
+
+- Add a quiet `Compare layout` action beside the contract page’s Storage layout
+  heading. It prefills the inspected input address without replacing a proxy or
+  EIP-7702 authority with its code address.
+- Keep drafts local and put only submitted addresses plus optional exact block
+  references in the URL. Submission pushes browser history; back and forward
+  restore prior reports.
+- Focus To after contract-page prefill and otherwise focus the first empty
+  address. Validate addresses and decimal block selectors inline, submit on
+  Enter, and resolve only on submission.
+- `Swap` is explicit text plus direction and swaps both addresses, visible
+  selectors, and still-valid exact hashes. Editing an address or selector drops
+  that side’s hidden stale hash.
+- Keep optional blocks in one secondary disclosure with Latest placeholders.
+  `Copy exact link` replaces mutable selectors with the exact number/hash pairs
+  returned for both subjects.
+- Show resolved From and To subjects as compact columns. Direct contracts show
+  one contract address; proxies and EIP-7702 subjects keep Storage and Code
+  identities visibly separate.
+- Announce one factual verdict through a polite live region and show
+  non-overlapping change, conflict, ambiguity, and unchanged counts. Available
+  reports always state that values, initialization, authorization, downstream
+  calls, and overall safety are outside scope.
+- Default the evidence table to Changes, with Conflicts and All views. Search
+  appears only at 20 rows or more and covers paths, types, scopes, and slots.
+- The table has exactly `Location / From / To`. Location is formatted from both
+  structured regions, including packed extents, inclusive ranges, roots,
+  moves, additions, removals, and scope-root changes. Do not add a Result,
+  Change, Review, or Breaking column.
+- Group scopes under Default storage or their proven ERC-7201 identifier. Every
+  changed row exposes all backend-owned objective details in one keyboard
+  accessible disclosure.
+- Mark conflicts with text for assistive technology and a restrained visual
+  indicator; never rely on color. Stack inputs and subjects on narrow screens
+  and preserve dark theme and reduced-motion behavior.
+- Distinguish no code, unverified source, unsupported/non-exact/invalid
+  layouts, bounded analysis, and upstream failures. Keep a successfully
+  resolved side visible when the other side is unavailable.
 
 ## Contract page
 

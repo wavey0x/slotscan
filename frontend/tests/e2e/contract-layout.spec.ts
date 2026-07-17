@@ -126,9 +126,12 @@ test('direct contracts render one coherent exact-block response', async ({ page 
   await expect(header.getByRole('heading', { name: 'MockVault' })).toBeVisible();
   await expect(header.getByText(/Verified/)).toBeVisible();
   await expect(page.getByText('Block 123')).toBeVisible();
-  await expect(page.getByTitle(BLOCK_HASH)).toBeVisible();
   await expect(page.getByText('42', { exact: true })).toBeVisible();
   await expect(page.getByRole('group', { name: 'Values' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Compare layout →' })).toHaveAttribute(
+    'href',
+    `/1/compare?from=${ADDRESS}`,
+  );
 });
 
 test('proxy and delegated views keep storage and effective code addresses distinct', async ({ page }) => {

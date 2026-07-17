@@ -1,7 +1,19 @@
 """Domain models for SlotScan."""
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from typing import Optional, Any
+
+
+@dataclass
+class StorageScope:
+    """One independently rooted persistent-storage scope."""
+
+    id: str
+    kind: str  # "default", "erc7201", "unstructured", or "custom"
+    root_slot: int
+    formula: Optional[str] = None
+    provenance: str = "compiler_layout"
+    confidence: str = "exact"
 
 
 @dataclass
@@ -16,6 +28,7 @@ class StorageVariable:
     label: str
     provenance: str = "compiler_layout"
     confidence: str = "exact"
+    scope_id: str = "default"
 
 
 @dataclass
@@ -51,6 +64,17 @@ class StorageLayout:
     language: Optional[str] = None
     compiler_version: Optional[str] = None
     storage_scheme: Optional[str] = None
+    scopes: list[StorageScope] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.scopes:
+            self.scopes = [
+                StorageScope(
+                    id="default",
+                    kind="default",
+                    root_slot=0,
+                )
+            ]
 
     def get_variable_by_slot(
         self, slot: int, offset: int = 0
@@ -163,6 +187,7 @@ class StorageLayout:
             "language": self.language,
             "compiler_version": self.compiler_version,
             "storage_scheme": self.storage_scheme,
+            "scopes": [asdict(scope) for scope in self.scopes],
             "variables": [asdict(v) for v in self.variables],
             "types": {
                 k: {
@@ -176,6 +201,7 @@ class StorageLayout:
     @classmethod
     def from_dict(cls, data: dict) -> "StorageLayout":
         """Deserialize from dictionary."""
+        scopes = [StorageScope(**scope) for scope in data["scopes"]]
         types = {}
         for k, v in data["types"].items():
             members = None
@@ -202,6 +228,7 @@ class StorageLayout:
             language=data.get("language"),
             compiler_version=data.get("compiler_version"),
             storage_scheme=data.get("storage_scheme"),
+            scopes=scopes,
         )
 
 
@@ -292,6 +319,7 @@ class ContractMetadata:
     is_delegated: bool = False
     delegate_address: Optional[str] = None
     delegate_code_hash: Optional[str] = None
+    delegation_status: Optional[str] = None
     is_proxy: bool = False
     proxy_type: Optional[str] = None
     implementation_address: Optional[str] = None
@@ -328,3 +356,32 @@ class VerificationResult:
     sources: Optional[dict[str, str]] = None
     storage_layout: Optional[dict] = None
     language: str = "Solidity"  # "Solidity" or "Vyper"
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the normalized provider result for persistent caching."""
+        return {
+            "source": self.source,
+            "match_type": self.match_type,
+            "name": self.name,
+            "compilation_target": self.compilation_target,
+            "compiler_version": self.compiler_version,
+            "compiler_settings": self.compiler_settings,
+            "sources": self.sources,
+            "storage_layout": self.storage_layout,
+            "language": self.language,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "VerificationResult":
+        """Deserialize a normalized provider result from persistent caching."""
+        return cls(
+            source=data["source"],
+            match_type=data["match_type"],
+            name=data.get("name"),
+            compilation_target=data.get("compilation_target"),
+            compiler_version=data.get("compiler_version"),
+            compiler_settings=data.get("compiler_settings"),
+            sources=data.get("sources"),
+            storage_layout=data.get("storage_layout"),
+            language=data.get("language") or "Solidity",
+        )

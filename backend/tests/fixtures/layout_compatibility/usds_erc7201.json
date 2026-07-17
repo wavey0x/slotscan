@@ -1,0 +1,156 @@
+{
+  "provenance": {
+    "description": "Ethereum mainnet USDS implementation compiler evidence captured from Sourcify",
+    "chain_id": 1,
+    "proxy_address": "0xdC035D45d973E3EC169d2276DDab16f1e407384F",
+    "implementation_address": "0x1923DfeE706A8E78157416C29cBCCFDe7cdF4102",
+    "block_ref": {
+      "number": 25553969,
+      "hash": "0xe9cccd91a0f1af6a08856d9f389a4ff3d2916307234a428529fb715ff9b9cd29"
+    },
+    "match": "match",
+    "compiler_version": "0.8.21+commit.d9974bed",
+    "fully_qualified_name": "src/Usds.sol:Usds"
+  },
+  "storage_layout": {
+    "storage": [
+      {
+        "astId": 1140,
+        "contract": "src/Usds.sol:Usds",
+        "label": "wards",
+        "offset": 0,
+        "slot": "0",
+        "type": "t_mapping(t_address,t_uint256)"
+      },
+      {
+        "astId": 1154,
+        "contract": "src/Usds.sol:Usds",
+        "label": "totalSupply",
+        "offset": 0,
+        "slot": "1",
+        "type": "t_uint256"
+      },
+      {
+        "astId": 1158,
+        "contract": "src/Usds.sol:Usds",
+        "label": "balanceOf",
+        "offset": 0,
+        "slot": "2",
+        "type": "t_mapping(t_address,t_uint256)"
+      },
+      {
+        "astId": 1164,
+        "contract": "src/Usds.sol:Usds",
+        "label": "allowance",
+        "offset": 0,
+        "slot": "3",
+        "type": "t_mapping(t_address,t_mapping(t_address,t_uint256))"
+      },
+      {
+        "astId": 1168,
+        "contract": "src/Usds.sol:Usds",
+        "label": "nonces",
+        "offset": 0,
+        "slot": "4",
+        "type": "t_mapping(t_address,t_uint256)"
+      }
+    ],
+    "types": {
+      "t_address": {
+        "encoding": "inplace",
+        "label": "address",
+        "numberOfBytes": "20"
+      },
+      "t_mapping(t_address,t_mapping(t_address,t_uint256))": {
+        "encoding": "mapping",
+        "key": "t_address",
+        "label": "mapping(address => mapping(address => uint256))",
+        "numberOfBytes": "32",
+        "value": "t_mapping(t_address,t_uint256)"
+      },
+      "t_mapping(t_address,t_uint256)": {
+        "encoding": "mapping",
+        "key": "t_address",
+        "label": "mapping(address => uint256)",
+        "numberOfBytes": "32",
+        "value": "t_uint256"
+      },
+      "t_uint256": {
+        "encoding": "inplace",
+        "label": "uint256",
+        "numberOfBytes": "32"
+      }
+    }
+  },
+  "annotated_sources": {
+    "lib/openzeppelin-contracts-upgradeable/contracts/proxy/utils/Initializable.sol": "pragma solidity ^0.8.20;\nabstract contract Initializable {\n    /**\n     * @custom:storage-location erc7201:openzeppelin.storage.Initializable\n     */\n    struct InitializableStorage {\n        uint64 _initialized;\n        bool _initializing;\n    }\n    // keccak256(abi.encode(uint256(keccak256(\"openzeppelin.storage.Initializable\")) - 1)) & ~bytes32(uint256(0xff))\n    bytes32 private constant INITIALIZABLE_STORAGE = 0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00;\n    function _getInitializableStorage() private pure returns (InitializableStorage storage $) {\n        assembly { $.slot := INITIALIZABLE_STORAGE }\n    }\n}\n"
+  },
+  "compiler_output": {
+    "sources": {
+      "lib/openzeppelin-contracts-upgradeable/contracts/proxy/utils/Initializable.sol": {
+        "ast": {
+          "nodeType": "SourceUnit",
+          "nodes": [
+            {
+              "canonicalName": "Initializable.InitializableStorage",
+              "documentation": {
+                "nodeType": "StructuredDocumentation",
+                "text": "@custom:storage-location erc7201:openzeppelin.storage.Initializable"
+              },
+              "name": "InitializableStorage",
+              "nodeType": "StructDefinition"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "namespace_harness": "pragma solidity >=0.8.20;\nimport * as SlotScanSource0 from \"lib/openzeppelin-contracts-upgradeable/contracts/proxy/utils/Initializable.sol\";\ncontract SlotScanNamespaceHarness {\n    SlotScanSource0.Initializable.InitializableStorage private namespace_0;\n}",
+  "namespace_storage_layout": {
+    "storage": [
+      {
+        "astId": 5,
+        "contract": "__slotscan__/NamespaceHarness.sol:SlotScanNamespaceHarness",
+        "label": "namespace_0",
+        "offset": 0,
+        "slot": "0",
+        "type": "t_struct(InitializableStorage)17_storage"
+      }
+    ],
+    "types": {
+      "t_bool": {
+        "encoding": "inplace",
+        "label": "bool",
+        "numberOfBytes": "1"
+      },
+      "t_struct(InitializableStorage)17_storage": {
+        "encoding": "inplace",
+        "label": "struct Initializable.InitializableStorage",
+        "members": [
+          {
+            "astId": 13,
+            "contract": "__slotscan__/NamespaceHarness.sol:SlotScanNamespaceHarness",
+            "label": "_initialized",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_uint64"
+          },
+          {
+            "astId": 16,
+            "contract": "__slotscan__/NamespaceHarness.sol:SlotScanNamespaceHarness",
+            "label": "_initializing",
+            "offset": 8,
+            "slot": "0",
+            "type": "t_bool"
+          }
+        ],
+        "numberOfBytes": "32"
+      },
+      "t_uint64": {
+        "encoding": "inplace",
+        "label": "uint64",
+        "numberOfBytes": "8"
+      }
+    }
+  }
+}

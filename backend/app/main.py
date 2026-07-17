@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from app.api.routes import contracts, storage, transactions
+from app.api.routes import contracts, layout_comparisons, storage, transactions
 from app.config import get_settings
 from app.db import engine
 from app.models.database import Base
@@ -75,6 +75,7 @@ def create_app() -> FastAPI:
 
     # Routes
     app.include_router(contracts.router)
+    app.include_router(layout_comparisons.router)
     app.include_router(storage.router)
     app.include_router(transactions.router)
 
