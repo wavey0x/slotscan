@@ -375,7 +375,7 @@ function packedMappingStructSlot({ index, changeBoth = false }: { index: number;
     ...base.after,
     value_decoded: { processed: true, quorum: changeBoth ? 4 : 3 },
   };
-  const slotByte = index === 20 ? 'b1' : 'b2';
+  const slotByte = (0x9d + index).toString(16);
 
   return {
     ...base,
@@ -418,6 +418,25 @@ function packedMappingStructSlot({ index, changeBoth = false }: { index: number;
       ],
     },
     changes: base.changes.map((change) => ({ ...change, before, after })),
+  };
+}
+
+function packedDynamicArrayStructSlot({
+  index,
+  changeBoth = false,
+}: {
+  index: number;
+  changeBoth?: boolean;
+}) {
+  return {
+    ...packedMappingStructSlot({ index, changeBoth }),
+    type_label: 'struct ProposalData[]',
+    params: null,
+    mapping_base_slot: null,
+    is_mapping: false,
+    is_dynamic_array: true,
+    array_index: index,
+    encoding: 'dynamic_array',
   };
 }
 
@@ -637,6 +656,83 @@ test('timeline promotes one packed member into a compact canonical mobile path',
   expect(await scroll.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
 });
 
+test('grouped view preserves keyed parents and compacts one changed packed member', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  const singleMemberSlot = packedDynamicArrayStructSlot({ index: 20 });
+  const multiMemberSlot = packedDynamicArrayStructSlot({ index: 21, changeBoth: true });
+  const mappingMemberSlot = packedMappingStructSlot({ index: 22 });
+  const contract = resolutionContract({
+    storage_address: '0x6666666666666666666666666666666666666666',
+    code_addresses: ['0x6666666666666666666666666666666666666666'],
+    name: 'Voter',
+    is_verified: true,
+    layout_available: true,
+    counts: {
+      slots_written: 3,
+      sstore_events: 3,
+      net_changed_slots: 3,
+      restored_slots: 0,
+      reverted_only_slots: 0,
+      noop_only_slots: 0,
+      reverted_writes: 0,
+      noop_writes: 0,
+    },
+    slots: [singleMemberSlot, multiMemberSlot, mappingMemberSlot],
+  });
+  await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
+    await route.fulfill({ json: resolutionResponse([contract]) });
+  });
+
+  await page.goto(`/1/tx/${RESOLUTION_TX}?view=grouped`);
+  const contractSection = page.getByRole('heading', { name: 'Voter' }).locator('xpath=ancestor::section');
+  await contractSection.getByTestId('contract-toggle').click();
+
+  const singlePath = contractSection.getByTestId('keyed-variable-primary').filter({
+    hasText: /^proposalData\[20\]\.processed$/,
+  });
+  await expect(singlePath).toHaveCount(1);
+  const singleRow = singlePath.locator('xpath=ancestor::tr');
+  await expect(singleRow.getByTestId('value-before')).toContainText('false');
+  await expect(singleRow.getByTestId('value-after')).toContainText('true');
+  await expect(contractSection.getByTestId('keyed-variable-primary').filter({
+    hasText: /^proposalData\[20\]$/,
+  })).toHaveCount(0);
+
+  const multiParent = contractSection.getByTestId('keyed-variable-primary').filter({
+    hasText: /^proposalData\[21\]$/,
+  });
+  await expect(multiParent).toHaveCount(1);
+  await expect(multiParent.locator('xpath=ancestor::tr')).toContainText('ProposalData');
+  await expect(contractSection.getByText('quorum', { exact: true })).toBeVisible();
+
+  await expect(contractSection.getByTestId('keyed-variable-primary').filter({
+    hasText: /^proposalData\[22\]\.processed$/,
+  })).toHaveCount(1);
+
+  await singlePath.click();
+  const pathDetail = page.getByRole('dialog');
+  await expect(pathDetail).toContainText('proposalData[20].processed');
+  await pathDetail.getByRole('button', { name: 'Copy full path' }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(
+    'proposalData[20].processed',
+  );
+  await page.keyboard.press('Escape');
+
+  const scroll = page.getByTestId('data-table-scroll');
+  expect(await scroll.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+
+  await page.getByRole('button', { name: 'Hex' }).click();
+  const hexSinglePath = contractSection.getByTestId('keyed-variable-primary').filter({
+    hasText: /^proposalData\[20\]$/,
+  });
+  await expect(hexSinglePath).toHaveCount(1);
+  await expect(contractSection.getByTestId('keyed-variable-leaf')).toHaveCount(0);
+  await expect(hexSinglePath.locator('xpath=ancestor::tr').getByTestId('value-before')).toContainText(
+    singleMemberSlot.before.value_encoded,
+  );
+});
+
 test('timeline names struct members and stays readable on mobile', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const oldRate = '0x1972B5D65A690De0BC36278AC93D47fd98Bc14f7';
@@ -824,9 +920,9 @@ test('timeline names struct members and stays readable on mobile', async ({ page
   await page.getByRole('button', { name: 'Grouped' }).click();
   const contractSection = page.getByRole('heading', { name: 'ResupplyPairDeployer' }).locator('xpath=ancestor::section');
   await contractSection.getByTestId('contract-toggle').click();
-  const groupedAddressRow = contractSection.getByText('rateCalculator', { exact: true }).locator('xpath=ancestor::tr');
-  const groupedNoopRow = contractSection.getByText('oracle', { exact: true }).locator('xpath=ancestor::tr');
-  const groupedBooleanRow = contractSection.getByText('processed', { exact: true }).locator('xpath=ancestor::tr');
+  const groupedAddressRow = contractSection.getByText('_defaultConfigData.rateCalculator', { exact: true }).locator('xpath=ancestor::tr');
+  const groupedNoopRow = contractSection.getByText('_defaultConfigData.oracle', { exact: true }).locator('xpath=ancestor::tr');
+  const groupedBooleanRow = contractSection.getByText('_defaultConfigData.processed', { exact: true }).locator('xpath=ancestor::tr');
   const groupedSmallNumberRow = contractSection.getByText('_status', { exact: true }).locator('xpath=ancestor::tr');
   await expect(groupedAddressRow.getByTestId('value-diff').getByRole('button', { name: 'Copy value' })).toHaveCount(2);
   await expect(groupedNoopRow.getByTestId('value-noop-indicator')).toBeVisible();
@@ -848,7 +944,7 @@ test('timeline names struct members and stays readable on mobile', async ({ page
   }));
   expect(addressDetailMetrics.scrollWidth).toBeLessThanOrEqual(addressDetailMetrics.clientWidth);
   expect(addressDetailMetrics.right).toBeLessThanOrEqual(383);
-  await groupedAddressRow.getByText('rateCalculator', { exact: true }).hover();
+  await groupedAddressRow.getByText('_defaultConfigData.rateCalculator', { exact: true }).hover();
   await expect(addressDetail).toHaveCount(0);
   // The slot column (and its copy action) is hidden at mobile widths.
   await expect(groupedSmallNumberRow.getByRole('button', { name: 'Copy value' })).toHaveCount(0);

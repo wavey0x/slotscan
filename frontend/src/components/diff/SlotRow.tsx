@@ -49,6 +49,8 @@ export function SlotRow({
   const {
     hasInterimChanges,
     hasPacked,
+    baseVariablePath,
+    displayVariablePath,
     variableDisplayName,
     variableLabel,
     hasKeyedVariablePath,
@@ -70,7 +72,13 @@ export function SlotRow({
     </span>
   ) : null;
 
-  const variableDetail = <StorageEvidenceDetail slot={slot} chainId={chainId} />;
+  const variableDetail = (
+    <StorageEvidenceDetail
+      slot={slot}
+      chainId={chainId}
+      displayPath={displayVariablePath || baseVariablePath}
+    />
+  );
 
   // Expand button element
   const expandButton = (
@@ -87,17 +95,30 @@ export function SlotRow({
   return (
     <>
       {/* PACKED FIELDS: Struct header row (if has struct definition) */}
-      {showPackedAsTree && slot.struct_definition?.name && (
+      {showPackedAsTree && !showHex && slot.struct_definition?.name && (
         <tr className={cn('hover:bg-gray-50/50', expanded && 'bg-gray-50/30', slotBorderClass)}>
           <td className={cn('px-1 py-0.5 w-5 align-top', isFirst && 'pt-1')}>
             {canExpand ? expandButton : <span className="w-4 h-4 inline-block" />}
           </td>
           <td className={cn('px-1 py-0.5 align-top', isFirst && 'pt-1')} colSpan={2}>
             <DetailPopover content={variableDetail} delay={200} maxWidth="max-w-sm">
-              <span className="text-xs font-mono leading-tight no-underline decoration-transparent">
-                <span className="text-gray-400">{slot.struct_definition.name}</span>{' '}
-                <span className="text-gray-900 font-medium">{slot.variable_name}</span>
-              </span>
+              {baseVariablePath?.includes('[') ? (
+                <div className="flex min-w-0 items-baseline gap-1 font-mono leading-tight">
+                  <span className="shrink-0 text-xs text-gray-400">{slot.struct_definition.name}</span>
+                  <KeyedVariablePath
+                    path={baseVariablePath}
+                    chainId={chainId}
+                    showCopyAction={false}
+                  />
+                </div>
+              ) : (
+                <span className="text-xs font-mono leading-tight no-underline decoration-transparent">
+                  <span className="text-gray-400">{slot.struct_definition.name}</span>{' '}
+                  <span className="text-gray-900 font-medium">
+                    {baseVariablePath || slot.variable_name}
+                  </span>
+                </span>
+              )}
             </DetailPopover>
             {revertedNotice && <div>{revertedNotice}</div>}
           </td>
@@ -148,12 +169,18 @@ export function SlotRow({
 
           <td className={cn('px-1 py-0.5 align-top w-48 whitespace-normal', isFirst && 'pt-1')}>
             <DetailPopover content={variableDetail} delay={200} maxWidth="max-w-sm">
-              {hasKeyedVariablePath && slot.variable_path ? (
+              {hasKeyedVariablePath && displayVariablePath ? (
                 <KeyedVariablePath
-                  path={slot.variable_path}
+                  path={displayVariablePath}
                   typeLabel={resolvedLeafType}
                   chainId={chainId}
+                  canonicalLeaf={Boolean(singlePackedField && !showHex)}
+                  showCopyAction={!singlePackedField || showHex}
                 />
+              ) : singlePackedField && !showHex && displayVariablePath ? (
+                <span className="block break-words font-mono text-xs font-medium leading-tight text-gray-900">
+                  {displayVariablePath}
+                </span>
               ) : (
                 <span className="space-y-0 break-words block no-underline decoration-transparent">
                   {/* Struct type + variable name */}

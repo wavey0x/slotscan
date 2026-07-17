@@ -5,6 +5,7 @@ import { CopyButton } from '@/components/ui/CopyButton';
 import { DetailPopover } from '@/components/ui/DetailPopover';
 import { getAddressExplorerUrl } from '@/lib/constants';
 import { isAddress, truncateAddress, truncateHash } from '@/lib/utils';
+import { canonicalVariablePath } from './slotDisplay';
 
 interface PathSegment {
   name: string;
@@ -19,10 +20,6 @@ interface KeyedVariablePathProps {
   canonicalLeaf?: boolean;
   /** Allow the parent surface to own path disclosure and copy actions. */
   showCopyAction?: boolean;
-}
-
-function canonicalPath(path: string): string {
-  return path.replace(/\s+\([^)]+\)\s*$/, '').trim();
 }
 
 function splitPath(path: string): string[] {
@@ -157,7 +154,7 @@ export function KeyedVariablePath({
   canonicalLeaf = false,
   showCopyAction = true,
 }: KeyedVariablePathProps) {
-  const fullPath = canonicalPath(path);
+  const fullPath = canonicalVariablePath(path);
   const segments = splitPath(fullPath).map(parseSegment);
   const finalSegment = segments.at(-1) ?? { name: fullPath, keys: [] };
   const hasLeafField = finalSegment.keys.length === 0 && segments.length > 1;

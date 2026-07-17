@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { ExternalLink } from 'lucide-react';
 import { SlotHistoryTable } from '@/components/diff/DiffTable';
 import { KeyedVariablePath } from '@/components/diff/KeyedVariablePath';
+import { slotVariablePath } from '@/components/diff/slotDisplay';
 import { StorageTable, StorageTableColumns, StorageTableHeader, storageCellClass } from '@/components/diff/StorageTable';
 import { CopyableValue, deriveStructuredValueFields, isStructuredDecodedValue, StructuredValueDiff, ValueDiff } from '@/components/diff/ValueDiff';
 import { CopyButton } from '@/components/ui/CopyButton';
@@ -58,12 +59,6 @@ function timelineStructMember(slot: SlotChangeResponse, changedFields: string[])
   return packedFields.find((field) => field.name === changedField)
     ?? slot.struct_definition.members.find((field) => field.name === changedField)
     ?? null;
-}
-
-function timelineVariablePath(slot: SlotChangeResponse, memberName?: string) {
-  const base = slot.variable_path || slot.variable_name;
-  if (!base || !memberName || base.endsWith(`.${memberName}`)) return base;
-  return `${base}.${memberName}`;
 }
 
 export function ContractSection({
@@ -193,7 +188,7 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
               )
             : null;
           const structMember = timelineStructMember(slot, structuredFields?.changedFields ?? []);
-          const variablePath = timelineVariablePath(slot, structMember?.name);
+          const variablePath = slotVariablePath(slot, structMember?.name);
           const memberSuffix = structMember ? `.${structMember.name}` : null;
           const memberBasePath = memberSuffix && variablePath?.endsWith(memberSuffix)
             ? variablePath.slice(0, -memberSuffix.length)

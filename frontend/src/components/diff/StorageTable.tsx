@@ -40,7 +40,7 @@ export function StorageTableColumns({
         ? (showContract ? 'w-[38%] sm:w-[30%]' : 'w-[42%] sm:w-[38%]')
         : (showContract ? 'w-[30%]' : 'w-[38%]')} />
       <col />
-      <col className={showSlotOnMobile ? 'w-16 sm:w-28' : 'hidden w-28 sm:table-column'} />
+      <col className={showSlotOnMobile ? 'w-20 sm:w-28' : 'hidden w-28 sm:table-column'} />
       {showStep && <col className="hidden w-16 sm:table-column" />}
     </colgroup>
   );

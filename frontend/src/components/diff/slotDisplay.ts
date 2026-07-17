@@ -22,6 +22,23 @@ export function packedFieldChanged(field: PackedFieldResponse): boolean {
   return !valuesEqual(field.before.value_decoded, field.after.value_decoded);
 }
 
+export function canonicalVariablePath(path: string): string {
+  return path.replace(/\s+\([^)]+\)\s*$/, '').trim();
+}
+
+export function slotVariablePath(
+  slot: Pick<SlotChangeResponse, 'variable_name' | 'variable_path'>,
+  memberName?: string | null,
+): string | null {
+  const rawBase = slot.variable_path || slot.variable_name;
+  if (!rawBase) return null;
+
+  const base = canonicalVariablePath(rawBase);
+  if (!base) return null;
+  if (!memberName || base.endsWith(`.${memberName}`)) return base;
+  return `${base}.${memberName}`;
+}
+
 export function storageValueIsZero(encoded: string | null, decoded: unknown): boolean {
   if (encoded === `0x${'0'.repeat(64)}` || encoded === '0x0' || encoded === '0x00') return true;
   if (decoded === 0 || decoded === '0' || decoded === BigInt(0)) return true;
@@ -71,19 +88,21 @@ export function deriveSlotDisplay(slot: SlotChangeResponse, showHex: boolean) {
   const displayedPackedFields = changedPackedFields.length > 0
     ? changedPackedFields
     : packedFields;
-  const showPackedAsTree = hasPacked && (
-    Boolean(slot.struct_definition?.name) || displayedPackedFields.length > 1
-  );
+  const showPackedAsTree = hasPacked && displayedPackedFields.length > 1;
   const singlePackedField = hasPacked && !showPackedAsTree && displayedPackedFields.length === 1
     ? displayedPackedFields[0]
     : null;
-  const variablePath = slot.variable_path?.match(/^([^(]+)/)?.[1]?.trim();
+  const baseVariablePath = slotVariablePath(slot);
+  const displayVariablePath = singlePackedField && !showHex
+    ? slotVariablePath(slot, singlePackedField.name)
+    : baseVariablePath;
   const variableLabel = slot.variable_path?.match(/\(([^)]+)\)$/)?.[1] ?? null;
-  const resolvedLeafType = slot.struct_field && slot.struct_definition
+  const resolvedLeafType = (!showHex ? singlePackedField?.type_label : null)
+    || (slot.struct_field && slot.struct_definition
     ? slot.struct_definition.members.find((member) => member.name === slot.struct_field)?.type_label
       || slot.value_type
       || slot.type_label
-    : slot.value_type || slot.type_label;
+    : slot.value_type || slot.type_label);
   const isStaticArray = slot.array_index !== null && slot.array_index !== undefined
     && !slot.is_mapping && !slot.is_dynamic_array;
   const isDynamicArray = Boolean(slot.is_dynamic_array && slot.array_index !== null);
@@ -94,9 +113,11 @@ export function deriveSlotDisplay(slot: SlotChangeResponse, showHex: boolean) {
     hasParams: Boolean(slot.params?.length),
     isDynamicArray,
     isStaticArray,
-    variableDisplayName: variablePath || slot.variable_name || formatSlotShort(slot.slot, 4),
+    baseVariablePath,
+    displayVariablePath,
+    variableDisplayName: displayVariablePath || slot.variable_name || formatSlotShort(slot.slot, 4),
     variableLabel,
-    hasKeyedVariablePath: Boolean(slot.variable_path?.includes('[')),
+    hasKeyedVariablePath: Boolean(displayVariablePath?.includes('[')),
     resolvedLeafType,
     slotNumber: slotReferenceDisplay(slot.slot, showHex),
     firstStep: slot.changes[0]?.step ?? null,

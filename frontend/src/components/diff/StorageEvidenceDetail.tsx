@@ -1,5 +1,6 @@
 import { SlotChangeResponse, StructDefinitionResponse } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { CopyButton } from '@/components/ui/CopyButton';
 import { HoverCell } from '@/components/ui/HoverCell';
 import { DetailDivider, DetailSection } from '@/components/ui/DetailPopover';
 import { packedFieldChanged, storageKeyDisplay } from './slotDisplay';
@@ -34,9 +35,11 @@ function StructDetail({
 export function StorageEvidenceDetail({
   slot,
   chainId,
+  displayPath,
 }: {
   slot: SlotChangeResponse;
   chainId: string;
+  displayPath?: string | null;
 }) {
   const hasPacked = Boolean(slot.packed_fields?.length);
   const showTypeLabel = Boolean(slot.type_label && !slot.struct_definition && !hasPacked);
@@ -45,7 +48,20 @@ export function StorageEvidenceDetail({
 
   return (
     <div className="min-w-[280px] space-y-1.5">
-      {slot.variable_name && <div className="text-sm font-medium text-gray-900">{slot.variable_name}</div>}
+      {(displayPath || slot.variable_name) && (
+        <div className="flex items-start gap-1">
+          <div className="min-w-0 break-all font-mono text-sm font-medium text-gray-900">
+            {displayPath || slot.variable_name}
+          </div>
+          {displayPath && (
+            <CopyButton
+              value={displayPath}
+              label="Copy full path"
+              className="-my-1 shrink-0"
+            />
+          )}
+        </div>
+      )}
 
       <DetailSection title="Slot">
         <div className="select-all break-all font-mono text-xs text-gray-700">{slot.slot}</div>
