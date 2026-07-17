@@ -110,16 +110,6 @@ export function slotToHex(slot: bigint): string {
 }
 
 /**
- * Parse a slot from various formats to bigint.
- */
-export function parseSlot(slot: string | number | bigint): bigint {
-  if (typeof slot === 'bigint') return slot;
-  if (typeof slot === 'number') return BigInt(slot);
-  if (slot.startsWith('0x')) return BigInt(slot);
-  return BigInt(slot);
-}
-
-/**
  * Get human-readable key type hint for input placeholder.
  */
 export function getKeyTypeHint(keyType: string): string {

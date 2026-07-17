@@ -2,7 +2,6 @@
 
 import logging
 import re
-from typing import Optional
 
 from eth_abi import encode as abi_encode
 from web3 import Web3
@@ -137,40 +136,6 @@ class PreimageResolver:
             )
 
         return constant_lookup
-
-    def parse_mapping_preimage(
-        self, preimage: str, layout: Optional[StorageLayout]
-    ) -> tuple[str | None, str | None, int | None]:
-        """
-        Parse a 64-byte mapping preimage into (key, base_slot, struct_offset).
-
-        For mapping(key => value), preimage is: key (32 bytes) || base_slot (32 bytes)
-
-        Returns: (key_hex, variable_name, struct_offset)
-        """
-        if not preimage or not preimage.startswith("0x"):
-            return None, None, None
-
-        preimage_bytes = preimage[2:]
-
-        if len(preimage_bytes) == 128:  # 64 bytes * 2 hex chars
-            key_hex = "0x" + preimage_bytes[:64]
-            base_slot_hex = "0x" + preimage_bytes[64:]
-
-            base_slot_int = int(base_slot_hex, 16)
-            variable_name = None
-            struct_offset = None
-
-            if layout:
-                for var in layout.variables:
-                    var_slot = int(var.slot)
-                    if var_slot == base_slot_int:
-                        variable_name = var.label
-                        break
-
-            return key_hex, variable_name, struct_offset
-
-        return None, None, None
 
     def decode_mapping_key(self, key_hex: str) -> str:
         """

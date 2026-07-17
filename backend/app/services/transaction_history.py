@@ -15,7 +15,7 @@ from app.repositories.contracts import ContractRepository
 from app.repositories.trace_cache import TransactionTraceArtifactData
 from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
-from app.services.tracer import TransactionTracer
+from app.services.tracer import TransactionAnalysisService
 from app.services.tracer.journal import StorageJournal
 from app.services.web3_provider import Web3Provider
 
@@ -54,7 +54,7 @@ class TransactionHistoryService:
 
     def __init__(
         self,
-        tracer: TransactionTracer,
+        tracer: TransactionAnalysisService,
         web3_provider: Web3Provider,
         settings: Settings,
         layout_parser: LayoutParser,
@@ -220,6 +220,27 @@ class TransactionHistoryService:
                 if resolved.sources
             }
             fallback_layout = self._layout(metadata)
+            if (
+                metadata
+                and metadata.is_proxy
+                and fallback_layout
+                and fallback_layout.variables
+                and address.lower() in code_addresses
+            ):
+                direct_layout = layouts_by_code_address.get(address.lower())
+                proxy_layout = self._combine_layouts([
+                    fallback_layout,
+                    *([direct_layout] if direct_layout else []),
+                ])
+                if proxy_layout:
+                    # Writes attributed to a proxy's own address may originate
+                    # in its delegated implementation. Retain both layouts but
+                    # present the implementation identity selected by the
+                    # proxy-aware owner resolution.
+                    proxy_layout.contract_name = fallback_layout.contract_name
+                    layouts_by_code_address[address.lower()] = proxy_layout
+                if metadata.sources:
+                    sources_by_code_address[address.lower()] = metadata.sources
             if fallback_layout and fallback_layout.variables:
                 for target in code_addresses:
                     layouts_by_code_address.setdefault(target, fallback_layout)
@@ -399,7 +420,6 @@ class TransactionHistoryService:
             )),
             variables=list(variables.values()),
             types=types,
-            resolver_version=max(layout.resolver_version for layout in layouts),
             language=next(
                 (layout.language for layout in layouts if layout.language),
                 None,

@@ -51,7 +51,6 @@ export function SlotHistoryTable({
               chainId={chainId}
               showStep={executionOrderAvailable}
               isFirst={index === 0}
-              isLast={index === sortedSlots.length - 1}
             />
           ))}
         </tbody>

@@ -63,16 +63,6 @@ export function truncateTxHash(hash: string): string {
   return truncateHash(hash, 6);
 }
 
-export function formatSlot(slot: string): string {
-  if (!slot.startsWith('0x')) return slot;
-  try {
-    const intVal = BigInt(slot);
-    return `${slot} (${intVal.toString(10)})`;
-  } catch {
-    return slot;
-  }
-}
-
 export function formatSlotShort(slot: string, chars = 6): string {
   if (!slot.startsWith('0x')) return slot;
   return truncateHash(slot, chars);
@@ -81,12 +71,6 @@ export function formatSlotShort(slot: string, chars = 6): string {
 export function truncateSlot(slot: string): string {
   if (slot.length <= 18) return slot;
   return slot.substring(0, 10) + '...' + slot.substring(slot.length - 6);
-}
-
-export function formatNumber(value: number | string): string {
-  const num = typeof value === 'string' ? parseFloat(value) : value;
-  if (isNaN(num)) return String(value);
-  return num.toLocaleString();
 }
 
 function tryParseBigInt(value: string): bigint | null {
@@ -101,7 +85,7 @@ function tryParseBigInt(value: string): bigint | null {
   return null;
 }
 
-const RECENT_SEARCHES_KEY = 'slotscan_recent_inspections_v2';
+const RECENT_SEARCHES_KEY = 'slotscan_recent_inspections';
 const MAX_RECENT = 5;
 
 export interface RecentInspection {
@@ -166,112 +150,9 @@ export function updateRecentSearchName(chain: string, address: string, name: str
 }
 
 /**
- * Parse a variable path like "rewardData[0x...]" or "accountData[?]" into components
- * Now accepts optional API-provided mapping data for direct use
- */
-export interface ParsedVariable {
-  variableName: string;
-  mappingKey: string | null;
-  keyDisplay: string | null;
-  isUnknownKey: boolean;
-  isMapping: boolean;
-  encoding: string | null;
-}
-
-export interface ParseVariablePathOptions {
-  variablePath: string | null;
-  slot: string;
-  // New API-provided fields
-  mappingKey?: string | null;
-  isMapping?: boolean;
-  encoding?: string | null;
-  variableName?: string | null;
-}
-
-export function parseVariablePath(options: ParseVariablePathOptions): ParsedVariable {
-  const { variablePath, slot, mappingKey, isMapping, encoding, variableName: apiVariableName } = options;
-
-  // If API provides mapping_key directly, use it
-  if (mappingKey) {
-    const varName = apiVariableName || (variablePath?.replace(/\[.*\]$/, '') ?? formatSlotShort(slot, 6));
-    const isAddress = /^0x[a-fA-F0-9]{40}$/.test(mappingKey);
-    return {
-      variableName: varName,
-      mappingKey: mappingKey,
-      keyDisplay: isAddress ? truncateAddress(mappingKey) : mappingKey,
-      isUnknownKey: false,
-      isMapping: isMapping ?? true,
-      encoding: encoding ?? 'mapping',
-    };
-  }
-
-  if (!variablePath) {
-    return {
-      variableName: formatSlotShort(slot, 6),
-      mappingKey: null,
-      keyDisplay: null,
-      isUnknownKey: false,
-      isMapping: isMapping ?? false,
-      encoding: encoding ?? null,
-    };
-  }
-
-  // Match patterns like "varName[key]" or "varName[?]"
-  const match = variablePath.match(/^([^[]+)\[(.+)\]$/);
-  if (!match) {
-    return {
-      variableName: variablePath,
-      mappingKey: null,
-      keyDisplay: null,
-      isUnknownKey: false,
-      isMapping: isMapping ?? false,
-      encoding: encoding ?? null,
-    };
-  }
-
-  const [, varName, key] = match;
-
-  // Unknown key case
-  if (key === '?') {
-    return {
-      variableName: varName,
-      mappingKey: null,
-      keyDisplay: '...',
-      isUnknownKey: true,
-      isMapping: isMapping ?? true,
-      encoding: encoding ?? 'mapping',
-    };
-  }
-
-  // Known key - truncate if address
-  const isAddress = /^0x[a-fA-F0-9]{40}$/.test(key);
-  return {
-    variableName: varName,
-    mappingKey: key,
-    keyDisplay: isAddress ? truncateAddress(key) : key,
-    isUnknownKey: false,
-    isMapping: isMapping ?? true,
-    encoding: encoding ?? 'mapping',
-  };
-}
-
-/**
- * Format slot as decimal or hex
- */
-export function formatSlotDecimal(slot: string): string {
-  if (!slot.startsWith('0x')) return slot;
-  try {
-    const intVal = BigInt(slot);
-    return intVal.toString(10);
-  } catch {
-    return slot;
-  }
-}
-
-/**
  * Format a raw BigInt value with commas (no abbreviations)
  */
-export function formatBigNumber(value: string | number | bigint): string {
+function formatBigNumber(value: string | number | bigint): string {
   try {
     const str = String(value);
     // Handle decimal numbers
@@ -341,7 +222,7 @@ export function formatDecodedValue(value: unknown): string {
   return str;
 }
 // Render object fields as multi-line type name + value when both are available
-export function formatObjectMultiline(value: Record<string, unknown>): string {
+function formatObjectMultiline(value: Record<string, unknown>): string {
   return Object.entries(value)
     .map(([k, v]) => {
       // Try to infer simple type label for display

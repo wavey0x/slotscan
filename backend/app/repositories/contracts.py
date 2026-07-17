@@ -40,18 +40,6 @@ class ContractRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_by_implementation(
-        self, chain_id: int, implementation_address: str
-    ) -> list[Contract]:
-        """Get all proxies pointing to an implementation."""
-        result = await self.session.execute(
-            select(Contract).where(
-                Contract.chain_id == chain_id,
-                Contract.implementation_address == implementation_address.lower(),
-            )
-        )
-        return list(result.scalars().all())
-
     async def get_layout_by_code_hash(self, code_hash: str) -> Optional[Contract]:
         """Find any verified contract with this bytecode hash that has a layout."""
         result = await self.session.execute(
@@ -156,23 +144,6 @@ class ContractRepository:
         await self.session.execute(stmt)
         await self.session.commit()
         return await self.get_at_block(metadata.chain_id, metadata.address, block_number)
-
-    async def needs_verification_refresh(
-        self, chain_id: int, address: str, max_age_seconds: int = 15 * 60
-    ) -> bool:
-        """Check if verification status should be rechecked."""
-        contract = await self.get(chain_id, address)
-        if not contract:
-            return True
-
-        if contract.is_verified and contract.storage_layout:
-            return False
-
-        if not contract.source_checked_at:
-            return True
-
-        age = datetime.utcnow() - contract.source_checked_at
-        return age.total_seconds() > max_age_seconds
 
     def to_metadata(self, contract: Contract) -> ContractMetadata:
         """Convert database model to domain model."""

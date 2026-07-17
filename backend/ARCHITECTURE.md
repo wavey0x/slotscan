@@ -31,11 +31,20 @@ API presenters
 
 ## Persistence
 
-- Trace artifacts are transaction-scoped and keyed by `(chain_id, tx_hash, trace_schema_version)`.
+- Trace artifacts are transaction-scoped and keyed by `(chain_id, tx_hash)`.
 - Contract projections are derived and are not duplicated in the trace cache.
 - Historical address/proxy/layout associations are keyed by block.
 - Raw compiler input/output, AST, storage/transient layouts, settings, exact build identifier, and source hashes are retained by fingerprint.
-- Migration `004` preserves the obsolete trace rows in `cached_traces_legacy`.
+- Trace artifacts and parsed layouts use only the current application shape.
+  Incompatible changes invalidate those reproducible caches instead of adding
+  payload versions, dual readers, or retained legacy tables.
+
+## Development compatibility policy
+
+SlotScan is pre-launch. Refactors use hard cutovers for application-owned APIs,
+routes, caches, and internal names. Version-aware code is reserved for real
+input semantics such as compiler eras, EVM behavior, historical chain state,
+and external provider protocols.
 
 ## Compiler isolation
 

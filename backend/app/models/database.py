@@ -48,14 +48,13 @@ class Contract(Base):
 
 
 class TransactionTraceArtifact(Base):
-    """One versioned, contract-agnostic trace artifact per transaction."""
+    """One contract-agnostic trace artifact per transaction."""
 
     __tablename__ = "transaction_trace_artifacts"
 
     id = Column(Integer, primary_key=True)
     chain_id = Column(Integer, nullable=False)
     tx_hash = Column(String(66), nullable=False)
-    trace_schema_version = Column(Integer, nullable=False)
     block_number = Column(BigInteger, nullable=False)
     root_succeeded = Column(Boolean, nullable=False)
     transaction_from = Column(String(42))
@@ -78,34 +77,6 @@ class TransactionTraceArtifact(Base):
             "idx_transaction_trace_artifacts_lookup",
             chain_id,
             tx_hash,
-            trace_schema_version,
-            unique=True,
-        ),
-    )
-
-
-class LegacyCachedTrace(Base):
-    """Read-only schema marker for pre-v2 trace rows retained by migration 004."""
-
-    __tablename__ = "cached_traces_legacy"
-
-    id = Column(Integer, primary_key=True)
-    chain_id = Column(Integer, nullable=False)
-    tx_hash = Column(String(66), nullable=False)
-    contract_address = Column(String(42), nullable=False)
-    block_number = Column(BigInteger, nullable=False)
-    raw_changes = Column(JSONB, nullable=False)
-    preimage_lookup = Column(JSONB, nullable=False)
-    trace_step_count = Column(Integer)
-    change_count = Column(Integer)
-    created_at = Column(DateTime, server_default=func.now())
-
-    __table_args__ = (
-        Index(
-            "idx_cached_traces_lookup",
-            chain_id,
-            tx_hash,
-            contract_address,
             unique=True,
         ),
     )

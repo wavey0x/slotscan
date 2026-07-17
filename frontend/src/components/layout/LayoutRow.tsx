@@ -7,7 +7,6 @@ import {
   SlotValueResponse,
   ComputedSlotLookup,
 } from '@/lib/types';
-import { HoverCell } from '@/components/ui/HoverCell';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { DetailPopover } from '@/components/ui/DetailPopover';
 import { MappingKeyInput } from './MappingKeyInput';
@@ -23,17 +22,6 @@ interface LayoutRowProps {
   showHex: boolean;
   slotValue?: SlotValueResponse;
   storageLoading?: boolean;
-}
-
-function truncateType(label: string, maxLen: number = 40): string {
-  if (label.length <= maxLen) return label;
-  return label.substring(0, maxLen - 3) + '...';
-}
-
-// Format hex value for display (show full value)
-function formatHexValue(hex: string): string {
-  if (!hex) return '-';
-  return hex;
 }
 
 export const LayoutRow = memo(function LayoutRow({
@@ -118,19 +106,6 @@ export const LayoutRow = memo(function LayoutRow({
     if (lower.includes('bytes32')) return 'bytes32';
     if (lower.includes('bytes')) return 'bytes';
     return 'key';
-  };
-
-  // Get the final value type for nested mappings
-  const getFinalValueType = (): StorageTypeResponse | undefined => {
-    let currentType = varType;
-    while (currentType?.kind === 'mapping' && currentType.value_type) {
-      const nextType = types[currentType.value_type];
-      if (nextType?.kind !== 'mapping') {
-        return nextType;
-      }
-      currentType = nextType;
-    }
-    return currentType;
   };
 
   // Get element type for arrays
@@ -228,7 +203,6 @@ export const LayoutRow = memo(function LayoutRow({
             <MappingKeyInput
               baseSlot={variable.slot}
               keyTypes={getMappingKeyTypes()}
-              valueType={getFinalValueType()}
               chainId={chainId}
               address={address}
               lookups={lookups}

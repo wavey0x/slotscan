@@ -2,6 +2,10 @@
 
 Ethereum smart contract storage analyzer. View storage layouts, decode values, and trace transaction storage changes.
 
+SlotScan is in pre-launch development. Application-owned APIs and caches use
+hard cutovers rather than backwards-compatibility layers; compiler and chain
+version handling remains part of the analysis domain.
+
 ## Components
 
 - **Backend** (`/backend`): FastAPI API for fetching sources, parsing layouts, reading storage, and tracing txs.

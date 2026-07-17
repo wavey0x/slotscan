@@ -13,7 +13,6 @@ from app.models.domain import (
     StorageLayout,
     TransactionDiff,
 )
-from app.models.errors import TraceNotAvailableError
 from app.repositories.trace_cache import (
     TraceCacheRepository,
     TransactionTraceArtifactData,
@@ -22,7 +21,7 @@ from app.services.decoder import TypeDecoder
 from app.services.web3_provider import Web3Provider
 from app.services.tracer.rpc_client import TraceRPCClient
 from app.services.tracer.preimage_resolver import PreimageResolver
-from app.services.tracer.slot_resolver import SlotResolver
+from app.services.tracer.slot_resolver import SlotPathResolver
 from app.services.layout_index import array_packing
 from app.services.layout_index import LayoutIndex, StorageLocation, StorageNamespace
 from app.services.tracer.journal import StorageJournal, StorageJournalBuilder
@@ -51,43 +50,8 @@ class TransactionAnalysisService:
         self.rpc_client = TraceRPCClient(web3_provider)
         self.trace_extractor = TransactionTraceExtractor(self.rpc_client)
         self.preimage_resolver = PreimageResolver()
-        self.slot_resolver = SlotResolver()
+        self.slot_resolver = SlotPathResolver()
         self.journal_builder = StorageJournalBuilder()
-
-    async def trace_transaction(
-        self,
-        chain_id: int,
-        contract_address: str,
-        tx_hash: str,
-        layout: Optional[StorageLayout] = None,
-        sources: Optional[dict[str, str]] = None,
-    ) -> TransactionDiff:
-        """
-        Trace a transaction and extract storage changes for a contract.
-
-        Uses debug_traceTransaction with prestateTracer.
-        Caches raw trace data (after RPC, before decoding) for fast repeated access.
-        """
-        try:
-            artifact = await self.load_trace_artifact(chain_id, tx_hash)
-        except TraceNotAvailableError:
-            receipt = await self.rpc_client.get_receipt(chain_id, tx_hash)
-            return TransactionDiff(
-                chain_id=chain_id,
-                contract_address=Web3.to_checksum_address(contract_address),
-                tx_hash=tx_hash,
-                block_number=receipt["blockNumber"],
-                changes=[],
-                is_complete=False,
-                layout=layout,
-                trace_unavailable=True,
-            )
-        return self.project_trace_artifact(
-            artifact,
-            contract_address,
-            layout=layout,
-            sources=sources,
-        )
 
     async def load_trace_artifact(
         self,
@@ -331,59 +295,6 @@ class TransactionAnalysisService:
     @staticmethod
     def _optional_address(value) -> str | None:
         return str(value).lower() if value else None
-
-    async def get_transaction_block(self, chain_id: int, tx_hash: str) -> int:
-        """Get the block number a transaction was included in."""
-        if self.trace_cache_repo:
-            artifact = await self.trace_cache_repo.get(chain_id, tx_hash)
-            if artifact:
-                return artifact.block_number
-        receipt = await self.rpc_client.get_receipt(chain_id, tx_hash)
-        return receipt["blockNumber"]
-
-    def _build_changes_from_sstore_trace(
-        self,
-        sstore_trace: list[dict],
-        pre_state: dict,
-        contract_address: str,
-        *,
-        root_succeeded: bool = True,
-        evm_step_count: int | None = None,
-    ) -> tuple[
-        list[tuple[str, str | None, str, int | None, int]],
-        StorageJournal,
-        bool,
-    ]:
-        """Build a truthful legacy projection from the canonical write journal."""
-        journal = self.journal_builder.build(
-            sstore_trace,
-            pre_state,
-            root_succeeded=root_succeeded,
-            evm_step_count=evm_step_count,
-        )
-        contract_address_lower = contract_address.lower()
-        raw_changes: list[tuple[str, str | None, str, int | None, int]] = []
-        had_unknown_evidence = any(not op.get("address") for op in sstore_trace)
-
-        for history in journal.for_contract(
-            contract_address_lower,
-            StorageNamespace.PERSISTENT,
-        ):
-            for event in history.writes:
-                if event.value_before is None:
-                    had_unknown_evidence = True
-                raw_changes.append(
-                    (
-                        event.slot,
-                        event.value_before,
-                        event.value_after,
-                        event.pc,
-                        event.step,
-                    )
-                )
-
-        raw_changes.sort(key=lambda change: change[4])
-        return raw_changes, journal, had_unknown_evidence
 
     def _apply_journal_metadata(
         self,
@@ -733,8 +644,12 @@ class TransactionAnalysisService:
                             variable_path = variable.name
 
                             if var_type and var_type.encoding == "inplace" and var_type.array_length:
-                                static_arr_index = layout.get_static_array_index(variable, slot_int)
-                                if static_arr_index is not None:
+                                locations = layout.get_static_array_locations(
+                                    variable,
+                                    slot_int,
+                                )
+                                if locations:
+                                    static_arr_index = locations[0][0]
                                     stats["static_array"] += 1
                                     resolution_path = "static_array"
                                     variable_path = f"{variable.name}[{static_arr_index}]"
@@ -964,7 +879,10 @@ class TransactionAnalysisService:
 
                             # Try dynamic bytes
                             if not variable and dynamic_bytes_index:
-                                bytes_match = self.slot_resolver.try_match_dynamic_bytes_slot(slot_int, layout, dynamic_bytes_index)
+                                bytes_match = self.slot_resolver.try_match_dynamic_bytes_slot(
+                                    slot_int,
+                                    dynamic_bytes_index,
+                                )
                                 if bytes_match:
                                     stats["dynamic_bytes"] += 1
                                     resolution_path = "dynamic_bytes"
@@ -1325,8 +1243,3 @@ class TransactionAnalysisService:
                 )
             )
         return result
-
-
-# Backwards-compatible API name. New code should depend on the orchestration
-# role rather than treating this service as the raw trace extractor.
-TransactionTracer = TransactionAnalysisService

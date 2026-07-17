@@ -9,8 +9,8 @@ from app.services.layout_index import LayoutIndex, array_packing
 from app.services.namespace_storage import NamespaceStorageParser
 from app.config import Settings
 from app.services.decoder import TypeDecoder
-from app.services.tracer.tracer import TransactionTracer
-from app.services.tracer.slot_resolver import SlotResolver
+from app.services.tracer.tracer import TransactionAnalysisService
+from app.services.tracer.slot_resolver import SlotPathResolver
 from app.services.tracer.preimage_resolver import PreimageResolver
 from app.utils.slots import compute_mapping_slot, encode_mapping_key
 
@@ -42,7 +42,7 @@ class MappingSlotTests(unittest.TestCase):
             ),
         ]
 
-        changes = TransactionTracer(object(), Settings(), TypeDecoder())._decode_changes(
+        changes = TransactionAnalysisService(object(), Settings(), TypeDecoder())._decode_changes(
             raw_changes,
             layout,
             lookup,
@@ -93,7 +93,7 @@ start_epoch_supply: public(uint256)
             for index, slot in enumerate(expected_slots)
         ]
 
-        changes = TransactionTracer(object(), Settings(), TypeDecoder())._decode_changes(
+        changes = TransactionAnalysisService(object(), Settings(), TypeDecoder())._decode_changes(
             raw_changes,
             layout,
             lookup,
@@ -194,7 +194,7 @@ def five():
             encode(["uint256", "uint256"], [7, 1909353600])
         )
 
-        intermediate_index = SlotResolver().build_legacy_vyper_slot_index(
+        intermediate_index = SlotPathResolver().build_legacy_vyper_slot_index(
             layout,
             lookup,
             {locked_mapping, point_element, user_history_element},
@@ -230,7 +230,7 @@ def five():
             for index, (slot, _) in enumerate(slots_and_paths)
         ]
 
-        changes = TransactionTracer(object(), Settings(), TypeDecoder())._decode_changes(
+        changes = TransactionAnalysisService(object(), Settings(), TypeDecoder())._decode_changes(
             raw_changes,
             layout,
             lookup,
@@ -304,7 +304,7 @@ def five():
         )
         preimage = b"alice" + encode(["uint256"], [4])
         slot = Web3.keccak(preimage).hex()
-        match = SlotResolver().try_match_slot_from_preimage(
+        match = SlotPathResolver().try_match_slot_from_preimage(
             slot,
             "0x" + preimage.hex(),
             layout,
@@ -336,7 +336,7 @@ def five():
         segmented_preimage = "0x" + preimage[:5].hex() + "0x" + preimage[5:].hex()
         slot = Web3.keccak(preimage).hex()
 
-        match = SlotResolver().try_match_slot_from_preimage(
+        match = SlotPathResolver().try_match_slot_from_preimage(
             slot,
             segmented_preimage,
             layout,
@@ -389,7 +389,7 @@ def five():
             inner_hash: "0x" + inner_preimage.hex(),
         }
 
-        match = SlotResolver().try_match_slot_from_preimage(
+        match = SlotPathResolver().try_match_slot_from_preimage(
             inner_hash,
             lookup[inner_hash],
             layout,
@@ -536,7 +536,7 @@ def five():
             ),
         ]
 
-        changes = TransactionTracer(object(), Settings(), TypeDecoder())._decode_changes(
+        changes = TransactionAnalysisService(object(), Settings(), TypeDecoder())._decode_changes(
             raw_changes,
             layout,
             lookup,
@@ -613,7 +613,7 @@ def five():
             inner_hash: "0x" + inner_preimage.hex(),
         }
 
-        match = SlotResolver().try_match_slot_from_preimage(
+        match = SlotPathResolver().try_match_slot_from_preimage(
             inner_hash,
             lookup[inner_hash],
             layout,
@@ -656,21 +656,21 @@ def five():
         lookup = {slot: "0x" + preimage.hex()}
 
         self.assertEqual(
-            TransactionTracer._vyper_layout_evidence_conflicts(
+            TransactionAnalysisService._vyper_layout_evidence_conflicts(
                 layout,
                 raw_changes,
                 lookup,
             ),
             [24],
         )
-        tracer = TransactionTracer(None, Settings(), TypeDecoder())
+        tracer = TransactionAnalysisService(None, Settings(), TypeDecoder())
         self.assertIsNone(
             tracer._decode_changes(raw_changes, layout, lookup)[0].variable_path
         )
 
         variable.slot = 24
         self.assertEqual(
-            TransactionTracer._vyper_layout_evidence_conflicts(
+            TransactionAnalysisService._vyper_layout_evidence_conflicts(
                 layout,
                 raw_changes,
                 lookup,
@@ -727,7 +727,7 @@ def five():
             },
         }
 
-        class CountingResolver(SlotResolver):
+        class CountingResolver(SlotPathResolver):
             calls = 0
 
             def try_match_slot_from_preimage(self, *args, **kwargs):
@@ -828,7 +828,7 @@ def five():
             f"0x{method_hash:064x}": "0x" + inner_preimage.hex(),
         }
 
-        resolver = SlotResolver()
+        resolver = SlotPathResolver()
         matches = list(
             resolver.find_struct_offset_matches(target_slot, layout, lookup)
         )
@@ -848,7 +848,7 @@ def five():
         self.assertEqual(field_name, "lastExecutionTimestamp")
         self.assertIs(field_type, uint_type)
 
-        tracer = TransactionTracer(object(), Settings(), TypeDecoder())
+        tracer = TransactionAnalysisService(object(), Settings(), TypeDecoder())
         decoded = tracer._decode_changes(
             [
                 (
@@ -945,7 +945,7 @@ class PackedArrayLayoutTests(unittest.TestCase):
             variables=[variable],
             types={self.element.id: self.element, dynamic_array.id: dynamic_array},
         )
-        resolver = SlotResolver()
+        resolver = SlotPathResolver()
         index = resolver.build_dynamic_array_index(layout)
         data_start = next(iter(index))
 
@@ -979,7 +979,7 @@ class PackedArrayLayoutTests(unittest.TestCase):
             types={self.element.id: self.element, dynamic_array.id: dynamic_array},
         )
         data_start = int.from_bytes(Web3.keccak(encode(["uint256"], [3])), "big")
-        tracer = TransactionTracer(object(), Settings(), TypeDecoder())
+        tracer = TransactionAnalysisService(object(), Settings(), TypeDecoder())
         changes = tracer._decode_changes(
             [
                 (

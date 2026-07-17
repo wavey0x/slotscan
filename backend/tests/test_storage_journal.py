@@ -10,7 +10,7 @@ from app.services.tracer.rpc_client import TraceRPCClient
 from app.config import Settings
 from app.repositories.trace_cache import TransactionTraceArtifactData
 from app.services.decoder import TypeDecoder
-from app.services.tracer.tracer import TransactionTracer
+from app.services.tracer.tracer import TransactionAnalysisService
 from app.api.routes.transactions import _group_changes_by_slot
 
 
@@ -134,16 +134,6 @@ class StorageJournalTests(unittest.TestCase):
         self.assertIsNone(journal.events[0].value_before)
         self.assertFalse(journal.capabilities.write_old_values)
 
-        tracer = TransactionTracer(object(), Settings(), TypeDecoder())
-        changes, _, had_unknown = tracer._build_changes_from_sstore_trace(
-            [raw_write],
-            {"pre": {}, "post": {}},
-            ADDRESS,
-        )
-        self.assertEqual(len(changes), 1)
-        self.assertIsNone(changes[0][1])
-        self.assertTrue(had_unknown)
-
     def test_final_state_mismatch_downgrades_replay_capabilities(self):
         journal = self.builder.build(
             [write(6, 1, old_value=word(5))],
@@ -253,16 +243,16 @@ class TraceArtifactIntegrationTests(unittest.IsolatedAsyncioTestCase):
             capabilities={},
             trace_step_count=200,
         )
-        tracer = TransactionTracer(
+        tracer = TransactionAnalysisService(
             object(),
             Settings(),
             TypeDecoder(),
             trace_cache_repo=_ArtifactRepository(artifact),
         )
-        diff = await tracer.trace_transaction(
-            1,
+        cached = await tracer.load_trace_artifact(1, artifact.tx_hash)
+        diff = tracer.project_trace_artifact(
+            cached,
             ADDRESS,
-            artifact.tx_hash,
         )
         self.assertEqual(len(diff.changes), 2)
         self.assertEqual(diff.changes[0].state_initial_value, word(5))

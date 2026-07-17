@@ -120,7 +120,6 @@ class LayoutParser:
         contract_fqname: Optional[str] = None,
     ) -> tuple[StorageLayout, RawCompilerArtifact]:
         solc_output, standard_input = await self._compile_with_layout(
-            contract_name=contract_name,
             sources=sources,
             version=compiler_version,
             settings=compiler_settings,
@@ -138,13 +137,6 @@ class LayoutParser:
             sources=sources,
         )
         return layout, artifact
-
-    def parse_from_solc_output(
-        self, contract_name: str, solc_output: dict, contract_fqname: Optional[str] = None
-    ) -> StorageLayout:
-        """Parse storage layout from existing solc output."""
-        raw_layout = self._extract_layout(contract_name, solc_output, contract_fqname)
-        return self._normalize_layout(raw_layout, contract_name)
 
     def parse_from_raw_layout(self, contract_name: str, raw_layout: dict) -> StorageLayout:
         """
@@ -220,7 +212,6 @@ class LayoutParser:
 
     async def _compile_with_layout(
         self,
-        contract_name: str,
         sources: dict[str, str],
         version: str,
         settings: Optional[dict],

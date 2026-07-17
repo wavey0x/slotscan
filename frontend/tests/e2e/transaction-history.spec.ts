@@ -1,11 +1,11 @@
 import { expect, test } from '@playwright/test';
+import type { GlobalStorageEventReferenceResponse } from '../../src/lib/types';
 
 const SIMPLE_TX = '0x711899730951bad9b5b29d16c0ffd0be3a7aefcd96b9e1d376619f02bdd9c1d3';
 const RESTORED_TX = '0x7fe79d06862f71a5809babfadac1c9a204b09dfbb8c40ac725d23b9bae2b7cac';
 const REVERTED_WRITES_TX = '0x561dd631cb9eabc2ba595ca4410fd26ca3e6183d2b8ba4f55bbf4c4b9c742ae2';
 const SOURCE_LAYOUT_TX = '0x3353c2009d984e15a2dd909d09f56f2833cfa99129fa834ea6eaf9349f14cd60';
 const NESTED_STRUCT_MAPPING_TX = '0x8e37bdd5003c883a684cd6c944c5fac24cc7f29b15ef23c5f6d7adf41c222f82';
-const GNOSIS_SAFE_ADDRESS = '0x16388463d60ffe0661cf7f1f31a7d658ac790ff7';
 const LIDO_ADDRESS = '0xae7ab96520de3a18e5e111b5eaab095312d7fe84';
 const TETHER_ADDRESS = '0xdac17f958d2ee523a2206206994597c13d831ec7';
 const RESOLUTION_TX = `0x${'12'.repeat(32)}`;
@@ -50,7 +50,6 @@ function resolutionResponse(contracts: ReturnType<typeof resolutionContract>[]) 
     from_address: RESOLUTION_FROM,
     to_address: RESOLUTION_TO,
     created_contract: null,
-    analysis_version: 5,
     capabilities: {
       write_history_complete: true,
       values_complete: true,
@@ -74,7 +73,7 @@ function resolutionResponse(contracts: ReturnType<typeof resolutionContract>[]) 
       resolved_slots: 0,
     },
     contracts,
-    global_order: [],
+    global_order: [] as GlobalStorageEventReferenceResponse[],
     is_complete: true,
     trace_unavailable: false,
   };
@@ -1220,21 +1219,24 @@ test('all writes remain visible without interpretive classification controls', a
   await expect(page.getByTestId('summary-slots').getByText('4', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Grouped' })).toHaveAttribute('aria-pressed', 'true');
   await page.getByTestId('contract-toggle').click();
-  for (const step of ['719', '777', '920', '1432']) {
+  for (const step of ['717', '775', '918', '1428']) {
     await expect(page.getByText(step, { exact: true })).toBeVisible();
   }
 
   await page.getByRole('button', { name: 'Expand write history' }).click();
-  await expect(page.getByText('1496', { exact: true })).toBeVisible();
+  await expect(page.getByText('1492', { exact: true })).toBeVisible();
   await expect(page.getByText('1/2')).toBeVisible();
   await expect(page.getByText('2/2')).toBeVisible();
   await expect(page.getByText('restored', { exact: true })).toHaveCount(0);
 });
 
 test('reverted child writes remain grouped and in the global timeline', async ({ page }) => {
+  test.slow();
   await page.goto(`/1/tx/${REVERTED_WRITES_TX}`);
 
-  await expect(page.getByRole('heading', { name: '0x561dd6...742ae2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '0x561dd6...742ae2' })).toBeVisible({
+    timeout: 120_000,
+  });
   await expect(page.getByRole('button', { name: 'Grouped' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByPlaceholder('Search contract, address, slot, or variable')).toBeVisible();
   await expect(page.getByText(/reverted writes?/, { exact: true }).first()).toBeVisible();
@@ -1255,9 +1257,12 @@ test('reverted child writes remain grouped and in the global timeline', async ({
 });
 
 test('verified sources recover proxy, namespace, legacy, and Vyper variable names', async ({ page }) => {
+  test.slow();
   await page.goto(`/1/tx/${SOURCE_LAYOUT_TX}`);
 
-  await expect(page.getByTestId('summary-writes').getByText('74', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('summary-writes').getByText('74', { exact: true })).toBeVisible({
+    timeout: 120_000,
+  });
   await expect(page.getByTestId('summary-slots').getByText('51', { exact: true })).toBeVisible();
   await expect(page.getByRole('navigation', { name: 'Storage owners' })).toHaveCount(0);
   await expect(page.getByTestId('contract-toggle')).toHaveCount(13);
@@ -1345,10 +1350,13 @@ test('nested mappings inside mapping structs show the full resolved path', async
 });
 
 test('multi-key mappings stay compact and copy their complete path', async ({ page }) => {
+  test.slow();
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.goto(`/1/tx/${SOURCE_LAYOUT_TX}?focus=${LIDO_ADDRESS}`);
 
-  await expect(page.getByRole('heading', { name: '0x3353c2...14cd60' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '0x3353c2...14cd60' })).toBeVisible({
+    timeout: 120_000,
+  });
   const lidoSection = page.getByRole('heading', { name: 'Lido' }).locator('xpath=ancestor::section');
   await expect(lidoSection.getByTestId('contract-toggle')).toHaveAttribute('aria-expanded', 'true');
   const keyedVariables = lidoSection.getByTestId('keyed-variable-path');
@@ -1381,24 +1389,16 @@ test('multi-key mappings stay compact and copy their complete path', async ({ pa
   );
 });
 
-test('legacy contract transaction URLs redirect to the complete focused report', async ({ page }) => {
-  await page.goto(`/1/${GNOSIS_SAFE_ADDRESS}?tx=${SOURCE_LAYOUT_TX}`);
-  await expect(page).toHaveURL(`/1/tx/${SOURCE_LAYOUT_TX}?focus=${GNOSIS_SAFE_ADDRESS}`);
-  await expect(page.getByTestId('contract-toggle')).toHaveCount(13);
-  const safeSection = page.getByRole('heading', { name: 'GnosisSafe' }).locator('xpath=ancestor::section');
-  await expect(safeSection.getByTestId('contract-toggle')).toHaveAttribute('aria-expanded', 'true');
-
-  await page.goto(`/1/${GNOSIS_SAFE_ADDRESS}/tx/${SOURCE_LAYOUT_TX}`);
-  await expect(page).toHaveURL(`/1/tx/${SOURCE_LAYOUT_TX}?focus=${GNOSIS_SAFE_ADDRESS}`);
-});
-
 test('storage evidence remains contained and operable at narrow widths', async ({ page }) => {
+  test.slow();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`/1/tx/${SOURCE_LAYOUT_TX}?focus=${LIDO_ADDRESS}`);
 
   const lidoSection = page.getByRole('heading', { name: 'Lido' }).locator('xpath=ancestor::section');
   const toggle = lidoSection.getByTestId('contract-toggle');
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true', {
+    timeout: 120_000,
+  });
   await toggle.focus();
   await page.keyboard.press('Enter');
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');

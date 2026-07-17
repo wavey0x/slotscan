@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { StorageTypeResponse, ComputedSlotLookup } from '@/lib/types';
+import { ComputedSlotLookup } from '@/lib/types';
 import { fetchSlotValue } from '@/lib/api';
 import {
   computeMappingSlot,
@@ -17,7 +17,6 @@ import { LookupResultsTable } from './LookupResultsTable';
 interface MappingKeyInputProps {
   baseSlot: number;
   keyTypes: { type: string; label: string }[];
-  valueType?: StorageTypeResponse;
   chainId: string;
   address: string;
   lookups: ComputedSlotLookup[];
@@ -27,7 +26,6 @@ interface MappingKeyInputProps {
 export function MappingKeyInput({
   baseSlot,
   keyTypes,
-  valueType,
   chainId,
   address,
   lookups,

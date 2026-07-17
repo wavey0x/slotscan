@@ -1,6 +1,5 @@
 import type {
   ContractResponse,
-  LayoutErrorResponse,
   SlotValueResponse,
   StorageLayoutResponse,
   StorageSnapshotResponse,

@@ -19,7 +19,6 @@ from app.models.api import (
     StorageChangeResponse,
     StructDefinitionResponse,
     StructMemberResponse,
-    TransactionDiffResponse,
     TransactionCapabilitiesResponse,
     TransactionStorageHistoryResponse,
     TransactionSummaryResponse,
@@ -44,18 +43,10 @@ from app.utils.type_labels import (
     clean_type_label,
     normalize_contract_label,
     strip_type_prefix,
-    strip_struct_parent,
 )
 
 
 import re
-
-
-# Re-export with underscore prefix for backwards compatibility within this module
-_strip_type_prefix = strip_type_prefix
-_strip_struct_parent = strip_struct_parent
-_clean_type_label = clean_type_label
-_normalize_contract_label = normalize_contract_label
 
 
 def _extract_keys_from_path(variable_path: Optional[str]) -> Optional[str]:
@@ -92,7 +83,7 @@ def _get_mapping_key_types(
 
     while var_type and var_type.encoding == "mapping":
         if var_type.key_type:
-            key_types.append(_strip_type_prefix(var_type.key_type))
+            key_types.append(strip_type_prefix(var_type.key_type))
         if var_type.value_type:
             var_type = layout.get_type(var_type.value_type)
         else:
@@ -121,7 +112,7 @@ def _get_final_value_type(
 
     # If not a mapping, return the type's label directly
     if var_type.encoding != "mapping":
-        return _strip_type_prefix(var_type.label) if var_type.label else None
+        return strip_type_prefix(var_type.label) if var_type.label else None
 
     # Traverse nested mappings to find the final value type
     while var_type and var_type.encoding == "mapping":
@@ -135,7 +126,7 @@ def _get_final_value_type(
                     # Found the final value type
                     label = inner_type.label or var_type.value_type
                     # Clean up the label
-                    cleaned = _strip_type_prefix(label)
+                    cleaned = strip_type_prefix(label)
                     # Strip struct parent if present
                     if cleaned.startswith("struct ") and "." in cleaned:
                         parts = cleaned.rsplit(".", 1)
@@ -143,7 +134,7 @@ def _get_final_value_type(
                     return cleaned
             else:
                 # Can't resolve, return the type ID cleaned up
-                return _strip_type_prefix(var_type.value_type)
+                return strip_type_prefix(var_type.value_type)
         else:
             break
 
@@ -230,7 +221,7 @@ def _clean_value_type(value_type: Optional[str]) -> Optional[str]:
     if cleaned.lower().startswith("contract"):
         cleaned = "address"
 
-    return _clean_type_label(cleaned)
+    return clean_type_label(cleaned)
 
 
 def _preserve_large_ints(value: Any, threshold: int = 2**53) -> Any:
@@ -278,7 +269,7 @@ def _get_struct_definition(
                 members.append(
                     StructMemberResponse(
                         name=member.name,
-                        type_label=_clean_type_label(member_type.label if member_type else member.type_id),
+                        type_label=clean_type_label(member_type.label if member_type else member.type_id),
                         slot_offset=member.slot,  # In members, slot is the offset within the struct
                         byte_offset=member.offset,
                         size=member.size,
@@ -341,7 +332,7 @@ def _get_struct_definition_from_type_id(
         members.append(
             StructMemberResponse(
                 name=member.name,
-                type_label=_clean_type_label(member_type.label if member_type else member.type_id),
+                type_label=clean_type_label(member_type.label if member_type else member.type_id),
                 slot_offset=member.slot,  # In members, slot is the offset within the struct
                 byte_offset=member.offset,
                 size=member.size,
@@ -482,7 +473,7 @@ def _group_changes_by_slot(
             else first_var_type.kind if first_var_type else None
         )
         if resolved_value_type:
-            response_value_type = _clean_type_label(resolved_value_type.label)
+            response_value_type = clean_type_label(resolved_value_type.label)
         elif first.is_mapping and first.variable and layout:
             response_value_type = _get_final_value_type(first.variable, layout)
         else:
@@ -543,7 +534,7 @@ def _group_changes_by_slot(
                         packed_fields.append(
                             PackedFieldResponse(
                                 name=var.name,
-                                type_label=_clean_type_label(var_type.label if var_type else var.type_id),
+                                type_label=clean_type_label(var_type.label if var_type else var.type_id),
                                 offset=var.offset,
                                 size=var.size,
                                 before=ValuePairDecoded(
@@ -574,7 +565,7 @@ def _group_changes_by_slot(
                         members.append(
                             StructMemberResponse(
                                 name=member.name,
-                                type_label=_clean_type_label(member_type.label if member_type else member.type_id),
+                                type_label=clean_type_label(member_type.label if member_type else member.type_id),
                                 slot_offset=member.slot,
                                 byte_offset=member.offset,
                                 size=member.size,
@@ -626,7 +617,7 @@ def _group_changes_by_slot(
                             packed_fields.append(
                                 PackedFieldResponse(
                                     name=member.name,
-                                    type_label=_clean_type_label(member_type.label if member_type else member.type_id),
+                                    type_label=clean_type_label(member_type.label if member_type else member.type_id),
                                     offset=member.offset,
                                     size=member.size,
                                     before=ValuePairDecoded(
@@ -668,7 +659,7 @@ def _group_changes_by_slot(
                             packed_fields.append(
                                 PackedFieldResponse(
                                     name=member.name,
-                                    type_label=_clean_type_label(member_type.label if member_type else member.type_id),
+                                    type_label=clean_type_label(member_type.label if member_type else member.type_id),
                                     offset=member.offset,
                                     size=member.size,
                                     before=ValuePairDecoded(
@@ -715,7 +706,7 @@ def _group_changes_by_slot(
                                 packed_fields.append(
                                     PackedFieldResponse(
                                         name=member.name,
-                                        type_label=_clean_type_label(member_type.label if member_type else member.type_id),
+                                        type_label=clean_type_label(member_type.label if member_type else member.type_id),
                                         offset=member.offset,
                                         size=member.size,
                                         before=ValuePairDecoded(
@@ -783,7 +774,7 @@ def _group_changes_by_slot(
                 variable_name=first.variable.name if first.variable else None,
                 variable_path=first.variable_path,
                 resolved_paths=resolved_paths,
-                type_label=_normalize_contract_label(
+                type_label=normalize_contract_label(
                     response_type_label,
                     response_type_kind,
                 ) if first.variable else None,
@@ -1078,109 +1069,4 @@ async def get_transaction_storage_history(
         global_order=global_order,
         is_complete=response_complete,
         trace_unavailable=False,
-    )
-
-
-@router.get("/{chain_id}/{address}/{tx_hash}", response_model=TransactionDiffResponse)
-async def get_tx_diff(
-    chain_id: int,
-    address: str,
-    tx_hash: str,
-    history_service: TransactionHistoryService = Depends(
-        get_transaction_history_service
-    ),
-):
-    """
-    Get storage changes for a contract in a transaction.
-
-    Returns all SSTORE operations that modified the contract's storage,
-    with before/after values decoded if contract is verified.
-    """
-    # Validate tx_hash format
-    if not re.fullmatch(r"0x[a-fA-F0-9]{64}", tx_hash):
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "Invalid transaction hash", "code": "INVALID_TX_HASH"},
-        )
-    if not re.fullmatch(r"0x[a-fA-F0-9]{40}", address):
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "Invalid contract address", "code": "INVALID_ADDRESS"},
-        )
-    normalized_address = address.lower()
-
-    # Compatibility projection: use the exact transaction-wide analysis path
-    # and select only the requested storage owner.
-    try:
-        analysis = await history_service.analyze(
-            chain_id,
-            tx_hash,
-            storage_addresses=(normalized_address,),
-        )
-    except TransactionNotFoundError:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "Transaction not found", "code": "TX_NOT_FOUND"},
-        )
-    except TraceNotAvailableError:
-        receipt = await history_service.tracer.rpc_client.get_receipt(
-            chain_id,
-            tx_hash,
-        )
-        block_value = receipt.get("blockNumber", 0)
-        block_number = (
-            int(block_value, 16)
-            if isinstance(block_value, str)
-            else int(block_value)
-        )
-        return TransactionDiffResponse(
-            chain_id=chain_id,
-            address=normalized_address,
-            tx_hash=tx_hash.lower(),
-            block_number=block_number,
-            slots=[],
-            is_complete=False,
-            is_verified=False,
-            trace_unavailable=True,
-            execution_order_available=False,
-        )
-    except RPCError as e:
-        raise HTTPException(
-            status_code=502,
-            detail={"error": str(e), "code": "RPC_ERROR"},
-        )
-
-    projection = analysis.contracts[0]
-    metadata = projection.metadata
-    diff = projection.diff
-    if not diff.changes and any(
-        error.startswith("NotAContractError:") for error in projection.errors
-    ):
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "Not a contract", "code": "NOT_CONTRACT"},
-        )
-
-    grouped_slots = _group_changes_by_slot(
-        diff.changes,
-        diff.layout,
-        storage_address=projection.storage_address,
-    )
-
-    return TransactionDiffResponse(
-        chain_id=diff.chain_id,
-        address=diff.contract_address,
-        tx_hash=diff.tx_hash,
-        block_number=diff.block_number,
-        slots=grouped_slots,
-        is_complete=diff.is_complete,
-        is_verified=metadata.is_verified if metadata else False,
-        trace_unavailable=diff.trace_unavailable,
-        contract_name=metadata.name if metadata else None,
-        layout_available=diff.layout is not None,
-        execution_order_available=diff.execution_order_available,
-        frame_outcomes_available=diff.frame_outcomes_available,
-        write_old_values_available=diff.write_old_values_available,
-        final_state_values_available=diff.final_state_values_available,
-        trace_step_count=diff.trace_step_count,
     )

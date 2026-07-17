@@ -809,7 +809,6 @@ class SlotPathResolver:
     def try_match_dynamic_bytes_slot(
         self,
         slot_int: int,
-        layout: StorageLayout,
         dynamic_bytes_index: dict[int, StorageVariable],
     ) -> Optional[dict]:
         """Try to match a slot to dynamic bytes/string data."""
@@ -1178,6 +1177,3 @@ class SlotPathResolver:
             return f"0x{slot:064x}"
         slot_clean = slot[2:] if slot.startswith("0x") else slot
         return f"0x{slot_clean.lower().zfill(64)}"
-
-
-SlotResolver = SlotPathResolver

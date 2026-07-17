@@ -211,22 +211,3 @@ export function DetailSection({
 export function DetailDivider() {
   return <div className="my-1.5 border-t border-gray-200" />;
 }
-
-export function DetailRow({
-  label,
-  value,
-  labelClassName,
-  valueClassName,
-}: {
-  label: string;
-  value: ReactNode;
-  labelClassName?: string;
-  valueClassName?: string;
-}) {
-  return (
-    <div className="flex items-start gap-2 text-xs">
-      <span className={cn('shrink-0 text-gray-500', labelClassName)}>{label}</span>
-      <span className={cn('break-all font-mono text-gray-700', valueClassName)}>{value}</span>
-    </div>
-  );
-}

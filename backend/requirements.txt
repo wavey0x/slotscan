@@ -10,7 +10,7 @@ asyncpg>=0.29.0
 alembic>=1.13.0
 
 # Ethereum
-web3>=6.14.0
+web3>=7.14,<8
 eth-abi>=5.0.0
 
 # Solidity compiler

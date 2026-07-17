@@ -15,7 +15,7 @@ from app.services.decoder import TypeDecoder
 from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
 from app.services.storage import StorageReader
-from app.services.tracer import TransactionTracer
+from app.services.tracer import TransactionAnalysisService
 from app.services.transaction_history import TransactionHistoryService
 from app.services.web3_provider import Web3Provider
 
@@ -98,14 +98,14 @@ async def get_storage_reader(
     )
 
 
-async def get_transaction_tracer(
+async def get_transaction_analysis_service(
     web3_provider: Web3Provider = Depends(get_web3_provider),
     settings: Settings = Depends(get_settings),
     decoder: TypeDecoder = Depends(get_decoder),
     trace_cache_repo: TraceCacheRepository = Depends(get_trace_cache_repository),
-) -> TransactionTracer:
-    """Get TransactionTracer with dependencies."""
-    return TransactionTracer(
+) -> TransactionAnalysisService:
+    """Get the transaction analysis service with dependencies."""
+    return TransactionAnalysisService(
         web3_provider=web3_provider,
         settings=settings,
         decoder=decoder,
@@ -114,7 +114,7 @@ async def get_transaction_tracer(
 
 
 async def get_transaction_history_service(
-    tracer: TransactionTracer = Depends(get_transaction_tracer),
+    tracer: TransactionAnalysisService = Depends(get_transaction_analysis_service),
     web3_provider: Web3Provider = Depends(get_web3_provider),
     settings: Settings = Depends(get_settings),
     layout_parser: LayoutParser = Depends(get_layout_parser),

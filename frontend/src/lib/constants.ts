@@ -1,12 +1,8 @@
-export const CHAINS = [
-  { value: '1', label: 'Ethereum' },
-];
-
-export const CHAIN_NAMES: Record<string, string> = {
+const CHAIN_NAMES: Record<string, string> = {
   '1': 'Ethereum',
 };
 
-export const CHAIN_EXPLORERS: Record<string, string> = {
+const CHAIN_EXPLORERS: Record<string, string> = {
   '1': 'https://etherscan.io',
 };
 
@@ -14,7 +10,7 @@ export function getChainName(chainId: string | number): string {
   return CHAIN_NAMES[String(chainId)] || `Chain ${chainId}`;
 }
 
-export function getExplorerUrl(chainId: string | number): string {
+function getExplorerUrl(chainId: string | number): string {
   return CHAIN_EXPLORERS[String(chainId)] || 'https://etherscan.io';
 }
 

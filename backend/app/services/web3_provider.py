@@ -5,13 +5,7 @@ import logging
 from typing import Optional
 
 from web3 import AsyncWeb3, AsyncHTTPProvider, Web3
-
-# web3.py v7 renamed geth_poa_middleware to ExtraDataToPOAMiddleware
-# For async, v6 uses async_geth_poa_middleware, v7 uses ExtraDataToPOAMiddleware
-try:
-    from web3.middleware import ExtraDataToPOAMiddleware as POAMiddleware
-except ImportError:
-    from web3.middleware import async_geth_poa_middleware as POAMiddleware
+from web3.middleware import ExtraDataToPOAMiddleware
 
 from app.config import Settings
 from app.models.errors import RPCError
@@ -39,8 +33,7 @@ class Web3Provider:
                 request_kwargs={"timeout": self.settings.request_timeout_seconds},
             )
             w3 = AsyncWeb3(provider)
-            # Add POA middleware for chains that need it (web3.py v7+)
-            w3.middleware_onion.inject(POAMiddleware, layer=0)
+            w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
             self._instances[chain_id] = w3
 
         return self._instances[chain_id]
@@ -57,7 +50,7 @@ class Web3Provider:
                 request_kwargs={"timeout": self.settings.request_timeout_seconds},
             )
             w3 = AsyncWeb3(provider)
-            w3.middleware_onion.inject(POAMiddleware, layer=0)
+            w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
             self._backup_instances[chain_id] = w3
 
         return self._backup_instances[chain_id]
@@ -145,11 +138,7 @@ class Web3Provider:
     async def close(self) -> None:
         """Close every provider session created by this process."""
         for web3 in [*self._instances.values(), *self._backup_instances.values()]:
-            disconnect = getattr(web3.provider, "disconnect", None)
-            if disconnect:
-                result = disconnect()
-                if hasattr(result, "__await__"):
-                    await result
+            await web3.provider.disconnect()
         self._instances.clear()
         self._backup_instances.clear()
 

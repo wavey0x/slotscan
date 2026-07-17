@@ -44,8 +44,10 @@ EIP1967_BEACON_SLOT = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582
 # Standard beacon implementation() function selector
 BEACON_IMPL_SELECTOR = "0x5c60da1b"
 
+# Gnosis Safe proxy masterCopy() function selector
+GNOSIS_SAFE_MASTER_COPY_SELECTOR = "0xa619486e"
+
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
-LAYOUT_RESOLVER_VERSION = 5
 
 # EIP-7702 delegation designator: 0xef0100 || 20-byte delegate address.
 EIP7702_PREFIX = bytes.fromhex("ef0100")
@@ -140,11 +142,7 @@ class ContractResolver:
             ):
                 metadata = self.contract_repo.to_metadata(historical)
                 layout = metadata.storage_layout
-                if (
-                    isinstance(layout, StorageLayout)
-                    and self._cache_layout_is_usable(layout)
-                ):
-                    layout.resolver_version = LAYOUT_RESOLVER_VERSION
+                if isinstance(layout, StorageLayout) and layout.variables:
                     await self._hydrate_compiler_inputs(metadata)
                     return metadata
                 if (
@@ -167,11 +165,7 @@ class ContractResolver:
                 logger.debug(f"Cache hit for {address} on chain {chain_id}")
                 metadata = self.contract_repo.to_metadata(cached)
                 layout = metadata.storage_layout
-                if (
-                    isinstance(layout, StorageLayout)
-                    and self._cache_layout_is_usable(layout)
-                ):
-                    layout.resolver_version = LAYOUT_RESOLVER_VERSION
+                if isinstance(layout, StorageLayout) and layout.variables:
                     await self._hydrate_compiler_inputs(metadata)
                     return metadata
                 if (
@@ -205,8 +199,7 @@ class ContractResolver:
             if cached_by_bytecode and cached_by_bytecode.storage_layout:
                 logger.info(f"Bytecode cache hit for {address} (code_hash={code_hash[:16]}...)")
                 candidate_layout = StorageLayout.from_dict(cached_by_bytecode.storage_layout)
-                if self._cache_layout_is_usable(candidate_layout):
-                    candidate_layout.resolver_version = LAYOUT_RESOLVER_VERSION
+                if candidate_layout.variables:
                     parsed_layout = candidate_layout
 
         # Fetch verification only if we don't have a layout from bytecode cache
@@ -339,8 +332,6 @@ class ContractResolver:
                     parsed_layout.storage_scheme = vyper_storage_policy(
                         verification.compiler_version
                     ).storage_scheme
-            parsed_layout.resolver_version = LAYOUT_RESOLVER_VERSION
-
         # Build result - use bytecode cache metadata if verification was skipped
         if cached_by_bytecode and parsed_layout and not verification:
             # Reuse metadata from the cached contract with same bytecode
@@ -454,42 +445,6 @@ class ContractResolver:
         age = datetime.utcnow() - checked_at
         return age.total_seconds() <= self.settings.no_source_cache_ttl_seconds
 
-    @staticmethod
-    def _cache_layout_is_usable(layout: StorageLayout) -> bool:
-        if layout.resolver_version >= LAYOUT_RESOLVER_VERSION:
-            return bool(layout.variables)
-        # Exact compiler-produced variables do not change when the enrichment
-        # resolver changes. Preserve those valuable layouts (notably historical
-        # Vyper layouts).
-        if bool(layout.variables) and all(
-            variable.provenance == "compiler_layout"
-            for variable in layout.variables
-        ):
-            return True
-
-        # Resolver versions 3 and 4 corrected only Vyper source inference.
-        # Preserve compatible Solidity layouts instead of discarding verified
-        # names when Sourcify does not cover the address. New layouts carry an
-        # explicit language; legacy rows fall back to their stable type-ID
-        # distinction (Vyper source spellings versus Solidity ``t_*`` IDs).
-        if layout.resolver_version >= 2:
-            inferred = [
-                variable
-                for variable in layout.variables
-                if variable.provenance == "source_inference"
-            ]
-            is_vyper_source_layout = layout.language == "Vyper" or (
-                layout.language is None
-                and bool(inferred)
-                and any(
-                    not variable.type_id.startswith("t_")
-                    for variable in inferred
-                )
-            )
-            return bool(layout.variables) and not is_vyper_source_layout
-
-        return False
-
     async def _hydrate_compiler_inputs(self, metadata: ContractMetadata) -> None:
         """Restore sources/settings retained with the raw compiler artifact."""
         if not (
@@ -506,19 +461,6 @@ class ContractResolver:
             for filename, source in artifact.standard_input.get("sources", {}).items()
         }
         metadata.compiler_settings = artifact.standard_input.get("settings")
-
-    async def is_contract(
-        self,
-        chain_id: int,
-        address: str,
-        block_number: Optional[int] = None,
-    ) -> bool:
-        """Quick check if address is a contract."""
-        try:
-            await self._check_is_contract(chain_id, address, block_number)
-            return True
-        except NotAContractError:
-            return False
 
     async def _check_is_contract(
         self, chain_id: int, address: str, block: Optional[int]
@@ -579,6 +521,8 @@ class ContractResolver:
         1. EIP-1167 minimal proxy (bytecode pattern)
         2. EIP-1967 implementation slot
         3. EIP-1822 UUPS slot
+        4. ZeppelinOS and beacon slots
+        5. Bytecode-advertised implementation getters
         """
         block_id = block if block is not None else "latest"
 
@@ -677,6 +621,46 @@ class ContractResolver:
                 except Exception as e:
                     logger.warning(f"Failed to get implementation from beacon {beacon_address}: {e}")
 
+            # Aragon AppProxyUpgradeable and Gnosis Safe proxies expose their
+            # implementation through getters instead of a standard proxy slot.
+            # Only call selectors embedded in delegate-calling proxy bytecode,
+            # avoiding speculative eth_call requests against ordinary contracts.
+            if bytecode and b"\xf4" in bytecode:
+                callable_proxies = (
+                    ("aragon", BEACON_IMPL_SELECTOR),
+                    ("gnosis_safe", GNOSIS_SAFE_MASTER_COPY_SELECTOR),
+                )
+                for proxy_type, selector in callable_proxies:
+                    if bytes.fromhex(selector[2:]) not in bytecode:
+                        continue
+                    try:
+                        result = await self.web3_provider.eth_call(
+                            chain_id,
+                            {"to": address, "data": selector},
+                            block_id,
+                        )
+                        callable_address = self._extract_address(bytes(result))
+                        if not callable_address or callable_address == ZERO_ADDRESS:
+                            continue
+                        implementation_code = await self.web3_provider.get_code(
+                            chain_id,
+                            callable_address,
+                            block_id,
+                        )
+                        if implementation_code:
+                            return ProxyInfo(
+                                proxy_type=proxy_type,
+                                implementation_address=callable_address,
+                                admin_address=None,
+                            )
+                    except Exception as e:
+                        logger.debug(
+                            "Callable proxy detection failed for %s via %s: %s",
+                            address,
+                            selector,
+                            e,
+                        )
+
         except Exception as e:
             logger.warning(f"Proxy detection failed for {address}: {e}")
 
@@ -722,7 +706,6 @@ class ContractResolver:
                 for variable in merged_variables
             }.values()),
             types=merged_types,
-            resolver_version=LAYOUT_RESOLVER_VERSION,
             language=standard_layout.language or namespace_layout.language,
             compiler_version=(
                 standard_layout.compiler_version or namespace_layout.compiler_version

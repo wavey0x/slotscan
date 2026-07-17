@@ -39,14 +39,6 @@ export function slotVariablePath(
   return `${base}.${memberName}`;
 }
 
-export function storageValueIsZero(encoded: string | null, decoded: unknown): boolean {
-  if (encoded === `0x${'0'.repeat(64)}` || encoded === '0x0' || encoded === '0x00') return true;
-  if (decoded === 0 || decoded === '0' || decoded === BigInt(0)) return true;
-  if (decoded === null || decoded === undefined) return false;
-  const value = String(decoded);
-  return value === '0' || value === '0x0' || /^0x0+$/.test(value);
-}
-
 export function storageDisplayValue(
   decoded: unknown,
   encoded: string | null,

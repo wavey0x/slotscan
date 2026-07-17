@@ -1,5 +1,5 @@
-"""Transaction tracer package for extracting storage changes from transactions."""
+"""Transaction analysis package."""
 
-from app.services.tracer.tracer import TransactionAnalysisService, TransactionTracer
+from app.services.tracer.tracer import TransactionAnalysisService
 
-__all__ = ["TransactionAnalysisService", "TransactionTracer"]
+__all__ = ["TransactionAnalysisService"]

@@ -16,7 +16,7 @@ from app.models.domain import (
 from app.models.errors import VerificationProviderError
 from app.services.namespace_storage import NamespaceStorageParser
 from app.services.resolver import ContractResolver
-from app.services.tracer.slot_resolver import SlotResolver
+from app.services.tracer.slot_resolver import SlotPathResolver
 from app.utils.vyper import (
     LEGACY_HASHED_STORAGE,
     LOCK_AFTER_GLOBALS,
@@ -117,10 +117,14 @@ def two():
             for variable in layout.variables
             if variable.name == "nonreentrant.lock"
         ]
+        point_history = next(
+            variable for variable in layout.variables
+            if variable.name == "point_history"
+        )
         self.assertEqual([variable.slot for variable in locks], [0xFFFFFF])
-        self.assertEqual(layout.get_variable_by_name("point_history").size, 32)
+        self.assertEqual(point_history.size, 32)
         point_type = layout.get_type(
-            layout.get_type(layout.get_variable_by_name("point_history").type_id).element_type
+            layout.get_type(point_history.type_id).element_type
         )
         self.assertEqual(
             [(member.name, member.slot) for member in point_type.members],
@@ -207,9 +211,11 @@ total_idle: uint256
         self.assertEqual(slots["use_default_queue"], 16)
         self.assertEqual(slots["total_debt"], 20)
         self.assertEqual(slots["total_idle"], 21)
-        strategy_mapping = layout.types[
-            layout.get_variable_by_name("strategies").type_id
-        ]
+        strategies = next(
+            variable for variable in layout.variables
+            if variable.name == "strategies"
+        )
+        strategy_mapping = layout.types[strategies.type_id]
         strategy_type = layout.types[strategy_mapping.value_type]
         self.assertEqual(
             [(member.name, member.slot) for member in strategy_type.members],
@@ -288,7 +294,7 @@ symbol: public(String[32])
         account = "0x" + "11" * 20
         preimage = encode(["uint256", "address"], [24, account])
         slot = "0x" + Web3.keccak(preimage).hex()
-        match = SlotResolver().try_match_slot_from_preimage(
+        match = SlotPathResolver().try_match_slot_from_preimage(
             slot,
             "0x" + preimage.hex(),
             layout,
@@ -393,14 +399,16 @@ def seven():
         self.assertEqual(slots["reward_integral_for"], 36)
         self.assertEqual(slots["claim_data"], 37)
         self.assertEqual(slots["initialized"], 41)
-        reward_tokens_type = layout.get_type(
-            layout.get_variable_by_name("reward_tokens").type_id
+        reward_tokens = next(
+            variable for variable in layout.variables
+            if variable.name == "reward_tokens"
         )
+        reward_tokens_type = layout.get_type(reward_tokens.type_id)
         self.assertEqual(reward_tokens_type.array_length, 8)
 
         user = "0x" + "11" * 20
         reward_token = "0x" + "22" * 20
-        resolver = SlotResolver()
+        resolver = SlotPathResolver()
 
         balance_preimage = encode(["uint256", "address"], [12, user])
         balance_slot = "0x" + Web3.keccak(balance_preimage).hex()
@@ -551,6 +559,51 @@ class _Resolver(ContractResolver):
             storage_layout={"storage": [], "types": {}},
             language="Solidity",
         )
+
+
+class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
+    async def _detect_callable_proxy(self, selector: str):
+        implementation = Web3.to_checksum_address("0x" + "22" * 20)
+
+        class Provider:
+            async def get_storage_at(self, chain_id, address, slot, block):
+                return b"\x00" * 32
+
+            async def eth_call(self, chain_id, transaction, block):
+                self.selector = transaction["data"]
+                return b"\x00" * 12 + bytes.fromhex(implementation[2:])
+
+            async def get_code(self, chain_id, address, block):
+                return b"\x60\x00"
+
+        provider = Provider()
+        resolver = ContractResolver(provider, Settings(), http_client=object())
+        bytecode = b"\x63" + bytes.fromhex(selector[2:]) + b"\xf4"
+        detected = await resolver.detect_proxy(
+            1,
+            Web3.to_checksum_address(ADDRESS),
+            block=123,
+            bytecode=bytecode,
+        )
+        return provider, detected, implementation
+
+    async def test_aragon_implementation_getter_is_detected(self):
+        provider, detected, implementation = await self._detect_callable_proxy(
+            "0x5c60da1b"
+        )
+
+        self.assertEqual(provider.selector, "0x5c60da1b")
+        self.assertEqual(detected.proxy_type, "aragon")
+        self.assertEqual(detected.implementation_address, implementation)
+
+    async def test_gnosis_safe_master_copy_getter_is_detected(self):
+        provider, detected, implementation = await self._detect_callable_proxy(
+            "0xa619486e"
+        )
+
+        self.assertEqual(provider.selector, "0xa619486e")
+        self.assertEqual(detected.proxy_type, "gnosis_safe")
+        self.assertEqual(detected.implementation_address, implementation)
 
 
 class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
@@ -811,7 +864,6 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
                         "num_bytes": 20,
                     }
                 },
-                "resolver_version": 5,
                 "language": "Vyper",
                 "compiler_version": "0.3.7",
                 "storage_scheme": "vyper_sequential",
@@ -839,70 +891,6 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
         metadata = await resolver.resolve(1, ADDRESS, block_number=123)
         self.assertEqual(repo.lookup[2], 123)
         self.assertEqual(metadata.storage_layout.contract_name, "Cached")
-
-    def test_v2_vyper_source_inference_cache_is_invalidated(self):
-        value_type = StorageType(
-            "uint256",
-            "uint256",
-            "value",
-            "inplace",
-            32,
-        )
-        layout = StorageLayout(
-            contract_name="LegacyVyper",
-            variables=[StorageVariable(
-                "value",
-                0,
-                0,
-                32,
-                value_type.id,
-                value_type.label,
-                provenance="source_inference",
-            )],
-            types={value_type.id: value_type},
-            resolver_version=2,
-            language="Vyper",
-        )
-        self.assertFalse(ContractResolver._cache_layout_is_usable(layout))
-        layout.resolver_version = 3
-        self.assertFalse(ContractResolver._cache_layout_is_usable(layout))
-        layout.resolver_version = 4
-        self.assertFalse(ContractResolver._cache_layout_is_usable(layout))
-        layout.resolver_version = 5
-        self.assertTrue(ContractResolver._cache_layout_is_usable(layout))
-
-    def test_v2_solidity_source_inference_cache_is_preserved(self):
-        value_type = StorageType(
-            "t_uint256",
-            "uint256",
-            "value",
-            "inplace",
-            32,
-        )
-        layout = StorageLayout(
-            contract_name="borgCore",
-            variables=[StorageVariable(
-                "nativeCooldown",
-                0,
-                0,
-                32,
-                value_type.id,
-                value_type.label,
-                provenance="source_inference",
-            )],
-            types={value_type.id: value_type},
-            resolver_version=2,
-            language="Solidity",
-        )
-
-        self.assertTrue(ContractResolver._cache_layout_is_usable(layout))
-
-        layout.resolver_version = 3
-        self.assertTrue(ContractResolver._cache_layout_is_usable(layout))
-
-        layout.resolver_version = 1
-        self.assertFalse(ContractResolver._cache_layout_is_usable(layout))
-
 
 if __name__ == "__main__":
     unittest.main()

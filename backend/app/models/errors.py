@@ -72,21 +72,3 @@ class TraceNotAvailableError(SlotScanError):
     def __init__(self, reason: str):
         self.reason = reason
         super().__init__(f"Tracing not available: {reason}")
-
-
-class DecodeError(SlotScanError):
-    """Raised when decoding fails."""
-
-    def __init__(self, type_label: str, reason: str):
-        self.type_label = type_label
-        self.reason = reason
-        super().__init__(f"Failed to decode {type_label}: {reason}")
-
-
-class SlotLimitExceeded(SlotScanError):
-    """Raised when too many slots requested."""
-
-    def __init__(self, requested: int, limit: int):
-        self.requested = requested
-        self.limit = limit
-        super().__init__(f"Requested {requested} slots, limit is {limit}")

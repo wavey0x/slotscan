@@ -23,10 +23,6 @@ class TypeDecoder:
         """Return an immutable-by-convention decoder for one layout."""
         return TypeDecoder(types)
 
-    def set_type_registry(self, types: dict[str, StorageType]) -> None:
-        """Set the type registry for looking up nested types during decoding."""
-        self._type_registry = types
-
     def decode(
         self,
         raw_value: bytes,
@@ -399,41 +395,6 @@ class TypeDecoder:
         if data[12:] == b"\x00" * 20:
             return False
         return True
-
-    def decode_dynamic_bytes(
-        self, length_slot_value: bytes, data_slot_values: list[bytes]
-    ) -> bytes:
-        """
-        Decode dynamic bytes/string.
-
-        Short encoding: length < 32, data in same slot (length * 2 in last byte)
-        Long encoding: length >= 32, data at keccak256(slot)
-        """
-        last_byte = length_slot_value[-1]
-        if last_byte & 1 == 0:
-            # Short encoding
-            length = last_byte // 2
-            return length_slot_value[:length]
-        else:
-            # Long encoding
-            full_value = int.from_bytes(length_slot_value, "big")
-            length = (full_value - 1) // 2
-            data = b"".join(data_slot_values)
-            return data[:length]
-
-    def decode_string(
-        self, length_slot_value: bytes, data_slot_values: list[bytes]
-    ) -> str:
-        """Decode dynamic string."""
-        raw_bytes = self.decode_dynamic_bytes(length_slot_value, data_slot_values)
-        try:
-            return raw_bytes.decode("utf-8")
-        except UnicodeDecodeError:
-            return "0x" + raw_bytes.hex()
-
-    def decode_array_length(self, slot_value: bytes) -> int:
-        """Decode dynamic array length from its base slot."""
-        return int.from_bytes(slot_value, "big")
 
     def decode_vyper_string(
         self, length_slot_value: bytes, data_slot_values: list[bytes], max_length: int

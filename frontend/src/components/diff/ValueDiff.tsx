@@ -17,7 +17,7 @@ interface ValueDiffProps {
  * Marks a value that an SSTORE rewrote without changing it. Replaces the
  * before → after arrow so no-op writes read as a single value.
  */
-export function UnchangedIndicator() {
+function UnchangedIndicator() {
   return (
     <DetailPopover
       content={<span className="whitespace-nowrap text-[10px] text-gray-600">Same value written</span>}

@@ -1,11 +1,11 @@
 // === Value Types ===
 
-export interface ValuePair {
+interface ValuePair {
   value_encoded: string | null;
   value_decoded: unknown;
 }
 
-export interface ValuePairDecoded {
+interface ValuePairDecoded {
   value_decoded: unknown;
 }
 
@@ -102,7 +102,7 @@ export interface PackedFieldResponse {
   after: ValuePairDecoded;
 }
 
-export interface StructMemberResponse {
+interface StructMemberResponse {
   // A single member of a struct definition
   name: string;
   type_label: string;
@@ -117,7 +117,7 @@ export interface StructDefinitionResponse {
   members: StructMemberResponse[];
 }
 
-export interface MappingParamResponse {
+interface MappingParamResponse {
   // A single mapping parameter (key) with its type and value
   type: string;  // Type of the key (e.g., "address", "uint256")
   value: string;  // The actual key value
@@ -162,7 +162,7 @@ export interface SlotChangeResponse {
   changes: StorageChangeResponse[];
 }
 
-export interface TransactionCapabilitiesResponse {
+interface TransactionCapabilitiesResponse {
   write_history_complete: boolean;
   values_complete: boolean;
   rollback_classification_complete: boolean;
@@ -173,7 +173,7 @@ export interface TransactionCapabilitiesResponse {
   code_attribution_complete: boolean;
 }
 
-export interface TransactionSummaryResponse {
+interface TransactionSummaryResponse {
   storage_owners: number;
   slots_written: number;
   sstore_events: number;
@@ -186,7 +186,7 @@ export interface TransactionSummaryResponse {
   resolved_slots: number;
 }
 
-export interface ContractHistoryCountsResponse {
+interface ContractHistoryCountsResponse {
   slots_written: number;
   sstore_events: number;
   net_changed_slots: number;
@@ -236,27 +236,12 @@ export interface TransactionStorageHistoryResponse {
   from_address: string | null;
   to_address: string | null;
   created_contract: string | null;
-  analysis_version: number;
   capabilities: TransactionCapabilitiesResponse;
   summary: TransactionSummaryResponse;
   contracts: ContractHistoryResponse[];
   global_order: GlobalStorageEventReferenceResponse[] | null;
   is_complete: boolean;
   trace_unavailable: boolean;
-}
-
-export interface ErrorResponse {
-  error: string;
-  code: string;
-  details?: Record<string, unknown>;
-}
-
-export interface LayoutErrorResponse {
-  error: string;
-  code: 'NOT_CONTRACT' | 'NOT_VERIFIED' | 'NO_LAYOUT' | 'PROXY_IMPL_NOT_VERIFIED' | 'DELEGATE_LAYOUT_UNAVAILABLE' | 'LAYOUT_PARSE_ERROR' | 'RPC_ERROR';
-  proxy_type?: string;
-  implementation_address?: string;
-  delegate_address?: string;
 }
 
 // === Layout Page Types ===

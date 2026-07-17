@@ -5,13 +5,7 @@ import logging
 from typing import Any, Optional, cast
 
 from web3 import Web3
-
-# web3.py v7 introduced Web3RPCError, v6 uses generic exceptions
-try:
-    from web3.exceptions import Web3RPCError
-except ImportError:
-    # Fallback for web3.py v6
-    Web3RPCError = Exception
+from web3.exceptions import Web3RPCError
 
 from app.config import Settings
 from app.models.errors import RPCError
@@ -472,7 +466,8 @@ class StorageReader:
                     # For static arrays, use element type and calculate index
                     if var_type.array_length and var_type.element_type:
                         decode_type = layout.get_type(var_type.element_type)
-                        array_index = layout.get_static_array_index(variable, slot)
+                        locations = layout.get_static_array_locations(variable, slot)
+                        array_index = locations[0][0] if locations else None
 
                     if decode_type:
                         try:

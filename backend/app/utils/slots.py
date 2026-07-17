@@ -1,7 +1,7 @@
 """Exact storage-slot algebra for mappings, arrays, and structs."""
 
 import re
-from typing import Any, Tuple
+from typing import Any
 
 from eth_abi import encode
 from web3 import Web3
@@ -134,91 +134,3 @@ def compute_mapping_slot(base_slot: int, key: Any, key_type: str) -> int:
     slot_hash = Web3.keccak(combined)
 
     return int.from_bytes(slot_hash, "big")
-
-
-def compute_mapping_slot_hex(base_slot: int, key: Any, key_type: str) -> str:
-    """Convenience: compute mapping slot and return hex string."""
-    return hex(compute_mapping_slot(base_slot, key, key_type))
-
-
-def compute_nested_mapping_slot(
-    base_slot: int, keys: list[tuple[Any, str]]
-) -> int:
-    """
-    Compute slot for nested mapping: mapping(K1 => mapping(K2 => V))
-
-    Args:
-        base_slot: Base slot of outermost mapping
-        keys: List of (key_value, key_type) tuples, outer to inner
-
-    Returns:
-        Final slot number
-    """
-    current_slot = base_slot
-    for key, key_type in keys:
-        current_slot = compute_mapping_slot(current_slot, key, key_type)
-    return current_slot
-
-
-def compute_dynamic_array_slot(base_slot: int, index: int, element_slots: int = 1) -> int:
-    """
-    Compute storage slot for a dynamic array element.
-
-    Array length is stored at base_slot.
-    Elements start at keccak256(base_slot).
-
-    Args:
-        base_slot: The slot where array length is stored
-        index: Array index (0-based)
-        element_slots: Number of slots per element
-
-    Returns:
-        Slot number for the element
-    """
-    encoded_slot = encode(["uint256"], [base_slot])
-    data_start = int.from_bytes(Web3.keccak(encoded_slot), "big")
-    return data_start + (index * element_slots)
-
-
-def compute_static_array_slot(base_slot: int, index: int, element_slots: int = 1) -> int:
-    """
-    Compute storage slot for a static array element.
-
-    Static arrays store elements contiguously from base_slot.
-
-    Args:
-        base_slot: The starting slot of the array
-        index: Array index (0-based)
-        element_slots: Number of slots per element
-
-    Returns:
-        Slot number for the element
-    """
-    return base_slot + (index * element_slots)
-
-
-def compute_struct_field_slot(
-    base_slot: int, field_slot_offset: int, field_byte_offset: int = 0
-) -> Tuple[int, int]:
-    """
-    Compute slot and byte offset for a struct field.
-
-    Args:
-        base_slot: Starting slot of the struct
-        field_slot_offset: Slot offset of field within struct
-        field_byte_offset: Byte offset within the slot
-
-    Returns:
-        (slot_number, byte_offset_within_slot)
-    """
-    return (base_slot + field_slot_offset, field_byte_offset)
-
-
-def compute_string_data_slot(base_slot: int) -> int:
-    """
-    Compute the starting slot for string/bytes data.
-
-    For strings > 31 bytes, data starts at keccak256(base_slot).
-    """
-    encoded_slot = encode(["uint256"], [base_slot])
-    return int.from_bytes(Web3.keccak(encoded_slot), "big")

@@ -1,4 +1,4 @@
-"""Versioned transaction-level trace artifact repository."""
+"""Transaction-level trace artifact repository."""
 
 import logging
 from dataclasses import dataclass
@@ -12,7 +12,6 @@ from app.models.database import TransactionTraceArtifact
 
 
 logger = logging.getLogger(__name__)
-TRACE_SCHEMA_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -29,7 +28,6 @@ class TransactionTraceArtifactData:
     transaction_to: str | None = None
     created_contract: str | None = None
     trace_step_count: int | None = None
-    trace_schema_version: int = TRACE_SCHEMA_VERSION
 
 
 class TraceCacheRepository:
@@ -42,13 +40,11 @@ class TraceCacheRepository:
         self,
         chain_id: int,
         tx_hash: str,
-        trace_schema_version: int = TRACE_SCHEMA_VERSION,
     ) -> TransactionTraceArtifactData | None:
         tx_hash_lower = tx_hash.lower()
         stmt = select(TransactionTraceArtifact).where(
             TransactionTraceArtifact.chain_id == chain_id,
             TransactionTraceArtifact.tx_hash == tx_hash_lower,
-            TransactionTraceArtifact.trace_schema_version == trace_schema_version,
         )
         result = await self.session.execute(stmt)
         row = result.scalar_one_or_none()
@@ -56,10 +52,9 @@ class TraceCacheRepository:
             return None
 
         logger.info(
-            "Trace artifact HIT for tx %s (%s writes, schema v%s)",
+            "Trace artifact HIT for tx %s (%s writes)",
             tx_hash_lower[:10],
             row.write_count,
-            row.trace_schema_version,
         )
         return TransactionTraceArtifactData(
             chain_id=row.chain_id,
@@ -74,7 +69,6 @@ class TraceCacheRepository:
             preimage_lookup=row.preimage_lookup,
             capabilities=row.capabilities,
             trace_step_count=row.trace_step_count,
-            trace_schema_version=row.trace_schema_version,
         )
 
     async def save(self, data: TransactionTraceArtifactData) -> None:
@@ -82,7 +76,6 @@ class TraceCacheRepository:
         values = {
             "chain_id": data.chain_id,
             "tx_hash": tx_hash_lower,
-            "trace_schema_version": data.trace_schema_version,
             "block_number": data.block_number,
             "root_succeeded": data.root_succeeded,
             "transaction_from": data.transaction_from,
@@ -97,7 +90,7 @@ class TraceCacheRepository:
         }
         stmt = insert(TransactionTraceArtifact).values(**values)
         stmt = stmt.on_conflict_do_update(
-            index_elements=["chain_id", "tx_hash", "trace_schema_version"],
+            index_elements=["chain_id", "tx_hash"],
             set_={
                 **values,
                 "created_at": datetime.utcnow(),
@@ -106,8 +99,7 @@ class TraceCacheRepository:
         await self.session.execute(stmt)
         await self.session.commit()
         logger.info(
-            "Trace artifact SAVE for tx %s (%s writes, schema v%s)",
+            "Trace artifact SAVE for tx %s (%s writes)",
             tx_hash_lower[:10],
             len(data.write_events),
-            data.trace_schema_version,
         )

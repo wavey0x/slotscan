@@ -15,22 +15,6 @@ class StorageNamespace(str, Enum):
     TRANSIENT = "transient"
 
 
-class ResolutionProvenance(str, Enum):
-    COMPILER_LAYOUT = "compiler_layout"
-    RUNTIME_PREIMAGE = "runtime_preimage"
-    TRANSIENT_LAYOUT = "transient_layout"
-    ERC7201_ANNOTATION = "erc7201_annotation"
-    SOURCE_INFERENCE = "source_inference"
-    HEURISTIC = "heuristic"
-    RAW = "raw"
-
-
-class ResolutionConfidence(str, Enum):
-    EXACT = "exact"
-    INFERRED = "inferred"
-    UNKNOWN = "unknown"
-
-
 @dataclass(frozen=True)
 class StorageLocation:
     """An exact word location plus a byte range within that word."""

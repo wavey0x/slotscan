@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, patch
 
 from app.api.routes.transactions import (
     _group_changes_by_slot,
-    get_tx_diff,
     get_transaction_storage_history,
 )
 from app.config import Settings
@@ -17,7 +16,6 @@ from app.models.domain import (
     StorageVariable,
 )
 from app.repositories.trace_cache import (
-    TRACE_SCHEMA_VERSION,
     TransactionTraceArtifactData,
 )
 from app.services.decoder import TypeDecoder
@@ -592,10 +590,6 @@ class Eip7702TraceTests(IsolatedAsyncioTestCase):
         self.assertIn((ADDRESS_A, True), service.delegation_calls)
         self.assertIn((CODE_A, False), service.delegation_calls)
 
-    def test_trace_schema_version_invalidates_pre_eip7702_artifacts(self):
-        self.assertEqual(TRACE_SCHEMA_VERSION, 6)
-
-
 class PrestateRecoveryTests(TestCase):
     def test_post_only_net_change_is_not_overwritten_by_initial_value(self):
         diff = {
@@ -625,6 +619,94 @@ class PrestateRecoveryTests(TestCase):
 
 
 class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
+    async def test_proxy_self_code_includes_implementation_layout(self):
+        value_type = StorageType(
+            "t_uint256",
+            "uint256",
+            "value",
+            "inplace",
+            32,
+        )
+
+        def layout(name, slot):
+            return StorageLayout(
+                name,
+                [
+                    StorageVariable(
+                        name,
+                        slot,
+                        0,
+                        32,
+                        value_type.id,
+                        value_type.label,
+                    )
+                ],
+                {value_type.id: value_type},
+            )
+
+        class ProxyHistoryService(TransactionHistoryService):
+            async def _resolve_metadata(
+                self,
+                chain_id,
+                address,
+                block_number,
+                *,
+                follow_proxy=True,
+                follow_delegation=True,
+            ):
+                return ContractMetadata(
+                    chain_id=chain_id,
+                    address=address,
+                    name="Implementation" if follow_proxy else "Proxy",
+                    is_verified=True,
+                    is_proxy=follow_proxy,
+                    implementation_address=CODE_A if follow_proxy else None,
+                    storage_layout=(
+                        layout("implementationValue", 1)
+                        if follow_proxy
+                        else layout("proxyValue", 2)
+                    ),
+                )
+
+        self_attributed = replace(
+            artifact(),
+            write_events=[
+                {
+                    **event,
+                    "code_address": ADDRESS_A,
+                }
+                for event in artifact().write_events
+            ],
+        )
+        tracer = TransactionAnalysisService(
+            _NoopProvider(),
+            Settings(MAX_SSTORE_OPS=100),
+            TypeDecoder(),
+            trace_cache_repo=_CachedArtifactRepository(self_attributed),
+        )
+        service = ProxyHistoryService(
+            tracer=tracer,
+            web3_provider=_NoopProvider(),
+            settings=tracer.settings,
+            layout_parser=None,
+            http_client=None,
+        )
+
+        result = await service.analyze(
+            1,
+            self_attributed.tx_hash,
+            storage_addresses=(ADDRESS_A,),
+        )
+
+        self.assertEqual(
+            [change.variable_path for change in result.contracts[0].diff.changes],
+            [
+                "implementationValue",
+                "implementationValue",
+                "implementationValue",
+            ],
+        )
+
     async def test_non_proxy_self_code_reuses_owner_resolution(self):
         tracer = TransactionAnalysisService(
             _NoopProvider(),
@@ -840,17 +922,6 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
             "reverted_only",
         )
         self.assertEqual(response.contracts[1].resolution_status, "failed")
-
-        single = await get_tx_diff(
-            chain_id=1,
-            address=ADDRESS_A.upper().replace("0X", "0x"),
-            tx_hash=artifact().tx_hash,
-            history_service=service,
-        )
-        self.assertEqual(
-            [slot.model_dump() for slot in single.slots],
-            [slot.model_dump() for slot in response.contracts[0].slots],
-        )
 
         without_timeline = await get_transaction_storage_history(
             chain_id=1,

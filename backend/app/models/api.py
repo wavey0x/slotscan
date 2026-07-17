@@ -203,26 +203,6 @@ class SlotChangeResponse(BaseModel):
     changes: list[StorageChangeResponse] = Field(default_factory=list)
 
 
-class TransactionDiffResponse(BaseModel):
-    """Storage changes in a transaction, grouped by slot."""
-
-    chain_id: int
-    address: str
-    tx_hash: str
-    block_number: int
-    slots: list[SlotChangeResponse]  # Changes grouped by slot
-    is_complete: bool
-    is_verified: bool
-    trace_unavailable: bool = False
-    contract_name: Optional[str] = None  # Name of the contract
-    layout_available: bool = False  # Whether storage layout was available
-    execution_order_available: bool = False  # True if step values are real EVM execution order
-    frame_outcomes_available: bool = False
-    write_old_values_available: bool = False
-    final_state_values_available: bool = False
-    trace_step_count: Optional[int] = None
-
-
 class TransactionCapabilitiesResponse(BaseModel):
     """Trace-wide evidence guarantees for transaction history."""
 
@@ -305,18 +285,9 @@ class TransactionStorageHistoryResponse(BaseModel):
     from_address: Optional[str] = None
     to_address: Optional[str] = None
     created_contract: Optional[str] = None
-    analysis_version: int = 5
     capabilities: TransactionCapabilitiesResponse
     summary: TransactionSummaryResponse
     contracts: list[ContractHistoryResponse] = Field(default_factory=list)
     global_order: Optional[list[GlobalStorageEventReferenceResponse]] = None
     is_complete: bool
     trace_unavailable: bool = False
-
-
-class ErrorResponse(BaseModel):
-    """Error response."""
-
-    error: str
-    code: str
-    details: Optional[dict] = None

@@ -32,7 +32,6 @@ interface SlotRowProps {
   chainId: string;
   showStep?: boolean;
   isFirst?: boolean;
-  isLast?: boolean;
 }
 
 export function SlotRow({
@@ -41,7 +40,6 @@ export function SlotRow({
   chainId,
   showStep = true,
   isFirst = false,
-  isLast = false,
 }: SlotRowProps) {
   const [expanded, setExpanded] = useState(false);
   // Add top border to separate slots (but not the first one)

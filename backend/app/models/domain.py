@@ -61,7 +61,6 @@ class StorageLayout:
     contract_name: str
     variables: list[StorageVariable]
     types: dict[str, StorageType]
-    resolver_version: int = 1
     language: Optional[str] = None
     compiler_version: Optional[str] = None
     storage_scheme: Optional[str] = None
@@ -137,32 +136,6 @@ class StorageLayout:
             if var.slot == slot:
                 result.append(var)
         return sorted(result, key=lambda v: v.offset)
-
-    def get_variable_by_name(self, name: str) -> Optional[StorageVariable]:
-        """Find variable by name."""
-        for var in self.variables:
-            if var.name == name:
-                return var
-        return None
-
-    def get_static_array_index(self, var: StorageVariable, slot: int) -> Optional[int]:
-        """
-        Calculate array index for a slot within a static array.
-        Returns None if slot doesn't belong to this array or type isn't static array.
-        """
-        var_type = self.get_type(var.type_id)
-        if not var_type or var_type.encoding != "inplace" or not var_type.array_length:
-            return None
-
-        # Skip Vyper String[N] types which have array_length but aren't real arrays
-        if var_type.element_type and var_type.element_type.lower() in ("string", "bytes"):
-            return None
-
-        # A packed slot can contain multiple array elements. This compatibility
-        # helper returns the first; callers that decode values must use
-        # ``get_static_array_locations`` and inspect every byte range.
-        locations = self.get_static_array_locations(var, slot)
-        return locations[0][0] if locations else None
 
     def get_static_array_locations(
         self, var: StorageVariable, slot: int
@@ -410,35 +383,10 @@ class StorageLayout:
 
         return None
 
-    def get_all_static_slots(self) -> list[tuple[int, StorageVariable]]:
-        """Get all statically-known slots."""
-        slots = []
-        for var in self.variables:
-            var_type = self.types.get(var.type_id)
-            if var_type and var_type.encoding not in ("mapping", "dynamic_array"):
-                slots.append((var.slot, var))
-                if var_type.num_bytes and var_type.num_bytes > 32:
-                    extra_slots = (var_type.num_bytes - 1) // 32
-                    for i in range(1, extra_slots + 1):
-                        slots.append((var.slot + i, var))
-        return slots
-
-    def get_base_slot_index(self) -> dict[int, StorageVariable]:
-        """Build index of base slot -> variable for mappings and arrays."""
-        index: dict[int, StorageVariable] = {}
-        for var in self.variables:
-            var_type = self.types.get(var.type_id)
-            if not var_type:
-                continue
-            if var_type.encoding in ("mapping", "dynamic_array", "array"):
-                index[var.slot] = var
-        return index
-
     def to_dict(self) -> dict:
         """Serialize to dictionary for JSON storage."""
         return {
             "contract_name": self.contract_name,
-            "resolver_version": self.resolver_version,
             "language": self.language,
             "compiler_version": self.compiler_version,
             "storage_scheme": self.storage_scheme,
@@ -456,7 +404,7 @@ class StorageLayout:
     def from_dict(cls, data: dict) -> "StorageLayout":
         """Deserialize from dictionary."""
         types = {}
-        for k, v in data.get("types", {}).items():
+        for k, v in data["types"].items():
             members = None
             if v.get("members"):
                 members = [StorageVariable(**m) for m in v["members"]]
@@ -476,9 +424,8 @@ class StorageLayout:
 
         return cls(
             contract_name=data["contract_name"],
-            variables=[StorageVariable(**v) for v in data.get("variables", [])],
+            variables=[StorageVariable(**v) for v in data["variables"]],
             types=types,
-            resolver_version=int(data.get("resolver_version", 1)),
             language=data.get("language"),
             compiler_version=data.get("compiler_version"),
             storage_scheme=data.get("storage_scheme"),
@@ -492,23 +439,6 @@ class DecodedValue:
     raw: str
     decoded: Any
     type_label: str
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "raw": self.raw,
-            "decoded": self.decoded,
-            "type_label": self.type_label,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "DecodedValue":
-        # Older cache rows may contain the removed presentation-only `display`
-        # property. Domain deserialization intentionally ignores it.
-        return cls(
-            raw=data["raw"],
-            decoded=data.get("decoded"),
-            type_label=data["type_label"],
-        )
 
 
 @dataclass
@@ -532,52 +462,6 @@ class StorageSnapshot:
     slots: list[SlotValue]
     is_complete: bool
     layout: Optional[StorageLayout] = None
-
-    def to_dict(self) -> dict:
-        """Serialize for caching."""
-        return {
-            "chain_id": self.chain_id,
-            "address": self.address,
-            "block_number": self.block_number,
-            "is_complete": self.is_complete,
-            "slots": [
-                {
-                    "slot": s.slot,
-                    "raw_value": s.raw_value,
-                    "variable_path": s.variable_path,
-                    "variable": asdict(s.variable) if s.variable else None,
-                    "decoded_value": s.decoded_value.to_dict() if s.decoded_value else None,
-                }
-                for s in self.slots
-            ],
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "StorageSnapshot":
-        """Deserialize from cache."""
-        slots = []
-        for s in data.get("slots", []):
-            variable = StorageVariable(**s["variable"]) if s.get("variable") else None
-            decoded = None
-            if s.get("decoded_value"):
-                decoded = DecodedValue.from_dict(s["decoded_value"])
-            slots.append(
-                SlotValue(
-                    slot=s["slot"],
-                    raw_value=s["raw_value"],
-                    variable=variable,
-                    decoded_value=decoded,
-                    variable_path=s.get("variable_path"),
-                )
-            )
-        return cls(
-            chain_id=data["chain_id"],
-            address=data["address"],
-            block_number=data["block_number"],
-            slots=slots,
-            is_complete=data["is_complete"],
-            layout=None,  # Layout not stored in cache
-        )
 
 
 @dataclass
@@ -633,117 +517,6 @@ class TransactionDiff:
     write_old_values_available: bool = False
     final_state_values_available: bool = False
     trace_step_count: Optional[int] = None
-
-    def to_dict(self) -> dict:
-        """Serialize for caching."""
-        return {
-            "chain_id": self.chain_id,
-            "contract_address": self.contract_address,
-            "tx_hash": self.tx_hash,
-            "block_number": self.block_number,
-            "is_complete": self.is_complete,
-            "trace_unavailable": self.trace_unavailable,
-            "contract_name": self.contract_name,
-            "execution_order_available": self.execution_order_available,
-            "frame_outcomes_available": self.frame_outcomes_available,
-            "write_old_values_available": self.write_old_values_available,
-            "final_state_values_available": self.final_state_values_available,
-            "trace_step_count": self.trace_step_count,
-            "changes": [
-                {
-                    "slot": c.slot,
-                    "mapping_base_slot": c.mapping_base_slot,
-                    "old_value": c.old_value,
-                    "new_value": c.new_value,
-                    "variable_path": c.variable_path,
-                    "variable": asdict(c.variable) if c.variable else None,
-                    "mapping_key": c.mapping_key,
-                    "is_mapping": c.is_mapping,
-                    "encoding": c.encoding,
-                    "key_type": c.key_type,
-                    "value_type": c.value_type,
-                    "element_type_id": c.element_type_id,
-                    "array_index": c.array_index,
-                    "change_index": c.change_index,
-                    "pc": c.pc,
-                    "effect": c.effect,
-                    "frame_id": c.frame_id,
-                    "depth": c.depth,
-                    "code_address": c.code_address,
-                    "changed_value": c.changed_value,
-                    "frame_outcome": c.frame_outcome,
-                    "opcode": c.opcode,
-                    "namespace": c.namespace,
-                    "state_initial_value": c.state_initial_value,
-                    "state_final_value": c.state_final_value,
-                    "state_values_known": c.state_values_known,
-                    "old_decoded": c.old_decoded.to_dict() if c.old_decoded else None,
-                    "new_decoded": c.new_decoded.to_dict() if c.new_decoded else None,
-                }
-                for c in self.changes
-            ],
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "TransactionDiff":
-        """Deserialize from cache."""
-        changes = []
-        for c in data.get("changes", []):
-            variable = StorageVariable(**c["variable"]) if c.get("variable") else None
-            old_decoded = (
-                DecodedValue.from_dict(c["old_decoded"]) if c.get("old_decoded") else None
-            )
-            new_decoded = (
-                DecodedValue.from_dict(c["new_decoded"]) if c.get("new_decoded") else None
-            )
-            changes.append(
-                StorageChange(
-                    slot=c["slot"],
-                    mapping_base_slot=c.get("mapping_base_slot"),
-                    old_value=c["old_value"],
-                    new_value=c["new_value"],
-                    variable=variable,
-                    variable_path=c.get("variable_path"),
-                    old_decoded=old_decoded,
-                    new_decoded=new_decoded,
-                    mapping_key=c.get("mapping_key"),
-                    is_mapping=c.get("is_mapping", False),
-                    encoding=c.get("encoding"),
-                    key_type=c.get("key_type"),
-                    value_type=c.get("value_type"),
-                    element_type_id=c.get("element_type_id"),
-                    array_index=c.get("array_index"),
-                    change_index=c.get("change_index", 0),
-                    pc=c.get("pc"),
-                    effect=c.get("effect", "applied"),
-                    frame_id=c.get("frame_id"),
-                    depth=c.get("depth"),
-                    code_address=c.get("code_address"),
-                    changed_value=c.get("changed_value"),
-                    frame_outcome=c.get("frame_outcome", "applied"),
-                    opcode=c.get("opcode", "SSTORE"),
-                    namespace=c.get("namespace", "persistent"),
-                    state_initial_value=c.get("state_initial_value"),
-                    state_final_value=c.get("state_final_value"),
-                    state_values_known=c.get("state_values_known", True),
-                )
-            )
-        return cls(
-            chain_id=data["chain_id"],
-            contract_address=data["contract_address"],
-            tx_hash=data["tx_hash"],
-            block_number=data["block_number"],
-            changes=changes,
-            is_complete=data["is_complete"],
-            trace_unavailable=data.get("trace_unavailable", False),
-            layout=None,
-            contract_name=data.get("contract_name"),
-            execution_order_available=data.get("execution_order_available", False),
-            frame_outcomes_available=data.get("frame_outcomes_available", False),
-            write_old_values_available=data.get("write_old_values_available", False),
-            final_state_values_available=data.get("final_state_values_available", False),
-            trace_step_count=data.get("trace_step_count"),
-        )
 
 
 @dataclass(frozen=True)
