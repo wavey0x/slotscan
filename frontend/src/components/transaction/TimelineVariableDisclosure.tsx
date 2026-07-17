@@ -7,7 +7,8 @@ import { DetailPopover, DetailSection } from '@/components/ui/DetailPopover';
 import { getAddressExplorerUrl } from '@/lib/constants';
 import { contractDisplayLabel } from '@/lib/contract-resolution';
 import type { ContractHistoryResponse } from '@/lib/types';
-import { cn, truncateAddress } from '@/lib/utils';
+import { cn, shouldShowCopyAction, truncateAddress } from '@/lib/utils';
+import { storageKeyDisplay } from '@/components/diff/slotDisplay';
 
 function DetailAddress({
   address,
@@ -87,7 +88,7 @@ function variableParts(variable: string): VariablePart[] {
       break;
     }
 
-    parts.push({ kind: 'key', value: variable.slice(open, close) });
+    parts.push({ kind: 'key', value: variable.slice(open + 1, close - 1) });
     cursor = close;
   }
 
@@ -121,12 +122,22 @@ function VariableDetailValue({
       {parts.map((part, index) => (
         <span key={`${part.kind}:${index}`} className="contents">
           {index > 0 && <wbr />}
-          <span
-            className={part.kind === 'key' ? 'text-xs text-gray-500' : undefined}
-            data-testid={part.kind === 'key' ? 'detail-variable-key' : 'detail-variable-name'}
-          >
-            {part.value}
-          </span>
+          {part.kind === 'key' ? (
+            <span className="inline-flex items-center text-xs text-gray-500">
+              [
+              <span data-testid="detail-variable-key">{part.value}</span>
+              {shouldShowCopyAction(part.value, storageKeyDisplay(part.value)?.display) && (
+                <CopyButton
+                  value={part.value}
+                  label={`Copy mapping key ${storageKeyDisplay(part.value)?.display ?? part.value}`}
+                  className="-my-1 p-1"
+                />
+              )}
+              ]
+            </span>
+          ) : (
+            <span data-testid="detail-variable-name">{part.value}</span>
+          )}
         </span>
       ))}
     </span>
@@ -166,11 +177,13 @@ export function TimelineVariableDisclosure({
           <DetailSection title={isRawSlot ? 'Raw slot' : 'Variable'}>
             <div className="flex min-w-0 items-start gap-1">
               <VariableDetailValue variable={variable} isRawSlot={isRawSlot} />
-              <CopyButton
-                value={variable}
-                label={isRawSlot ? 'Copy raw slot' : 'Copy full path'}
-                className="-my-1 shrink-0"
-              />
+              {isRawSlot && (
+                <CopyButton
+                  value={variable}
+                  label="Copy raw slot"
+                  className="-my-1 shrink-0"
+                />
+              )}
             </div>
             {typeLabel && (
               <div className="break-all font-mono text-[10px] text-gray-500">{typeLabel}</div>

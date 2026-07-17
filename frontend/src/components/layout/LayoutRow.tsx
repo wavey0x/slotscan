@@ -12,7 +12,7 @@ import { CopyButton } from '@/components/ui/CopyButton';
 import { DetailPopover } from '@/components/ui/DetailPopover';
 import { MappingKeyInput } from './MappingKeyInput';
 import { ArrayIndexInput } from './ArrayIndexInput';
-import { cn, formatDecodedValue, truncateHash } from '@/lib/utils';
+import { cn, formatDecodedValue, shouldShowCopyAction, truncateHash } from '@/lib/utils';
 
 interface LayoutRowProps {
   variable: StorageViewVariable;
@@ -127,6 +127,9 @@ export const LayoutRow = memo(function LayoutRow({
                 const compact = showHex
                   ? truncateHash(value.value_encoded!, 6)
                   : formatDecodedValue(value.value_decoded);
+                const copyValue = showHex
+                  ? value.value_encoded!
+                  : String(value.value_decoded ?? value.value_encoded);
                 return (
                   <div key={`${value.declaration_id}:${value.path}`} className="flex min-w-0 items-center gap-1">
                     {value.path !== variable.name && (
@@ -145,12 +148,12 @@ export const LayoutRow = memo(function LayoutRow({
                         </>
                       )}
                     </span>
-                    <CopyButton
-                      label={`Copy ${value.path} value`}
-                      value={showHex
-                        ? value.value_encoded!
-                        : String(value.value_decoded ?? value.value_encoded)}
-                    />
+                    {shouldShowCopyAction(value.value_decoded ?? value.value_encoded, compact) && (
+                      <CopyButton
+                        label={`Copy ${value.path} value`}
+                        value={copyValue}
+                      />
+                    )}
                   </div>
                 );
               })}

@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
+import { HoverCell } from '@/components/ui/HoverCell';
+import { storageKeyDisplay } from '@/components/diff/slotDisplay';
 import {
   StorageQueryLookup,
   StorageViewResponse,
@@ -145,7 +147,17 @@ export function MappingKeyInput({
         renderKey={(lookup) => (
           <span className="flex flex-col gap-0.5">
             {(lookup.keys ?? []).map((key, index) => (
-              <span key={`${key}:${index}`}>[{key}]</span>
+              <span key={`${key}:${index}`} className="inline-flex items-center">
+                [
+                <HoverCell
+                  display={storageKeyDisplay(key)?.display ?? key}
+                  value={key}
+                  chainId={chainId}
+                  copyLabel={`Copy mapping key ${storageKeyDisplay(key)?.display ?? key}`}
+                  colorClass="font-mono text-gray-700"
+                />
+                ]
+              </span>
             ))}
           </span>
         )}

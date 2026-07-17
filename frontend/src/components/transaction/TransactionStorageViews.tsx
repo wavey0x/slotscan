@@ -231,7 +231,6 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                       typeLabel={variableType}
                       chainId={chain}
                       canonicalLeaf={Boolean(memberBasePath)}
-                      showCopyAction={false}
                     />
                   ) : memberBasePath && structMember ? (
                     <div className="flex min-w-0 font-mono text-gray-900">

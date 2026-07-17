@@ -106,7 +106,6 @@ export function SlotRow({
                   <KeyedVariablePath
                     path={baseVariablePath}
                     chainId={chainId}
-                    showCopyAction={false}
                   />
                 </div>
               ) : (
@@ -173,7 +172,6 @@ export function SlotRow({
                   typeLabel={resolvedLeafType}
                   chainId={chainId}
                   canonicalLeaf={Boolean(singlePackedField && !showHex)}
-                  showCopyAction={!singlePackedField || showHex}
                 />
               ) : singlePackedField && !showHex && displayVariablePath ? (
                 <span className="block break-words font-mono text-xs font-medium leading-tight text-gray-900">

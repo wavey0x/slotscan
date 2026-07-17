@@ -704,10 +704,8 @@ test('timeline keeps packed paths compact and exposes contract identity across v
   await canonicalPath.click();
   const pathDetail = page.getByRole('dialog');
   await expect(pathDetail).toContainText('proposalData[20].processed');
-  await pathDetail.getByRole('button', { name: 'Copy full path' }).click();
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(
-    'proposalData[20].processed',
-  );
+  await expect(pathDetail.getByRole('button', { name: /Copy mapping key/ })).toHaveCount(0);
+  await page.keyboard.press('Escape');
 
   const multiRow = page.getByTestId('timeline-event').filter({ hasText: 'proposalData[21]' });
   await expect(multiRow.getByTestId('keyed-variable-leaf')).toHaveCount(0);
@@ -787,10 +785,7 @@ test('grouped view preserves keyed parents and compacts one changed packed membe
   await singlePath.click();
   const pathDetail = page.getByRole('dialog');
   await expect(pathDetail).toContainText('proposalData[20].processed');
-  await pathDetail.getByRole('button', { name: 'Copy full path' }).click();
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(
-    'proposalData[20].processed',
-  );
+  await expect(pathDetail.getByRole('button', { name: /Copy mapping key/ })).toHaveCount(0);
   await page.keyboard.press('Escape');
 
   const scroll = page.getByTestId('data-table-scroll');
@@ -971,7 +966,7 @@ test('timeline names struct members and stays readable on mobile', async ({ page
   await expect(scalarDetail).toContainText('_status');
   await expect(scalarDetail).toContainText('uint8');
   await expect(scalarDetail).toContainText(contract.storage_address);
-  await expect(scalarDetail.getByRole('button', { name: 'Copy full path' })).toBeVisible();
+  await expect(scalarDetail.getByRole('button', { name: /Copy (full path|mapping key)/ })).toHaveCount(0);
   await page.keyboard.press('Escape');
 
   const scroll = page.getByTestId('data-table-scroll');
@@ -1086,6 +1081,10 @@ test('timeline contains single-key mapping paths on mobile', async ({ page }) =>
   const disclosure = variableCell.locator('[aria-haspopup="dialog"]');
   await expect(primary).toContainText('balance_of');
   await expect(primary).toContainText('0xe538...aaf0');
+  const accountCopy = path.getByRole('button', { name: 'Copy mapping key 0xe538...aaf0' });
+  await expect(accountCopy).toBeVisible();
+  await accountCopy.click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(account);
   expect(await path.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   expect(await valueCell.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   const variableBox = await variableCell.boundingBox();
@@ -1144,8 +1143,8 @@ test('timeline contains single-key mapping paths on mobile', async ({ page }) =>
   expect(detailBox!.x + detailBox!.width).toBeLessThanOrEqual(383);
   expect(detailBox!.height).toBeLessThanOrEqual(180);
 
-  await pathDetail.getByRole('button', { name: 'Copy full path' }).click();
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(slot.variable_path);
+  await pathDetail.getByRole('button', { name: 'Copy mapping key 0xe538...aaf0' }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(account);
   await pathDetail.getByRole('button', { name: 'Copy storage contract address' }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(contract.storage_address);
   await pathDetail.getByRole('button', { name: `Copy implementation address 0x8888...8888` }).click();
@@ -1414,21 +1413,26 @@ test('nested mappings inside mapping structs show the full resolved path', async
   expect(contextBox!.y).toBeGreaterThan(primaryBox!.y);
   expect(methodsLineBox!.y).toBeGreaterThan(policyLineBox!.y);
 
-  const copy = variable.getByRole('button', { name: 'Copy full path' });
-  await expect(copy).toBeVisible();
-  await copy.click();
+  const ownerCopy = variable.getByRole('button', { name: 'Copy mapping key 0x40a2...130d' });
+  const selectorCopy = variable.getByRole('button', { name: 'Copy mapping key 0x8d80ff0a' });
+  await expect(ownerCopy).toBeVisible();
+  await expect(selectorCopy).toBeVisible();
+  await ownerCopy.click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(
-    'policy[0x40a2accbd92bca938b02010e17a5b8929b49130d].methods[0x8d80ff0a].lastExecutionTimestamp',
+    '0x40a2accbd92bca938b02010e17a5b8929b49130d',
   );
+  await selectorCopy.click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('0x8d80ff0a');
 
   await page.getByRole('button', { name: 'Timeline' }).click();
   await expect(page).toHaveURL(new RegExp(`/${NESTED_STRUCT_MAPPING_TX}\\?.*view=timeline`));
   const timelineVariable = page.getByTestId('keyed-variable-path');
   await expect(timelineVariable.getByTestId('keyed-variable-primary')).toHaveText('lastExecutionTimestamp');
   await expect(timelineVariable.getByTestId('keyed-variable-key-line')).toHaveCount(2);
+  await expect(timelineVariable.getByRole('button', { name: 'Copy mapping key 0x40a2...130d' })).toBeVisible();
 });
 
-test('multi-key mappings stay compact and copy their complete path', async ({ page }) => {
+test('multi-key mappings stay compact and copy their individual keys', async ({ page }) => {
   test.slow();
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.goto(`/1/tx/${SOURCE_LAYOUT_TX}?focus=${LIDO_ADDRESS}`);
@@ -1461,10 +1465,15 @@ test('multi-key mappings stay compact and copy their complete path', async ({ pa
   await expect(shares.getByTestId('keyed-variable-key-line')).toHaveCount(0);
   await expect(shares.getByTestId('keyed-variable-primary')).toContainText('shares[0x470e...7435]');
 
-  const copy = allowance.getByRole('button', { name: 'Copy full path' });
-  await copy.click();
+  const ownerCopy = allowance.getByRole('button', { name: 'Copy mapping key 0x470e...7435' });
+  const spenderCopy = allowance.getByRole('button', { name: 'Copy mapping key 0x889e...f9b1' });
+  await ownerCopy.click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(
-    'allowances[0x470e0e048f85cfd72eef325895e02c8d297e7435][0x889edc2edab5f40e902b864ad4d7ade8e412f9b1]',
+    '0x470e0e048f85cfd72eef325895e02c8d297e7435',
+  );
+  await spenderCopy.click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(
+    '0x889edc2edab5f40e902b864ad4d7ade8e412f9b1',
   );
 });
 

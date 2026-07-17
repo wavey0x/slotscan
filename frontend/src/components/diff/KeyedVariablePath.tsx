@@ -1,11 +1,9 @@
 'use client';
 
-import type { ReactNode } from 'react';
 import { CopyButton } from '@/components/ui/CopyButton';
-import { DetailPopover } from '@/components/ui/DetailPopover';
 import { getAddressExplorerUrl } from '@/lib/constants';
-import { isAddress, truncateAddress, truncateHash } from '@/lib/utils';
-import { canonicalVariablePath } from './slotDisplay';
+import { isAddress, shouldShowCopyAction } from '@/lib/utils';
+import { canonicalVariablePath, storageKeyDisplay } from './slotDisplay';
 
 interface PathSegment {
   name: string;
@@ -18,8 +16,6 @@ interface KeyedVariablePathProps {
   chainId: string;
   /** Keep a single leaf field in canonical order while truncating only its base name. */
   canonicalLeaf?: boolean;
-  /** Allow the parent surface to own path disclosure and copy actions. */
-  showCopyAction?: boolean;
 }
 
 function splitPath(path: string): string[] {
@@ -67,15 +63,12 @@ function parseSegment(segment: string): PathSegment {
   return { name: segment.slice(0, firstBracket), keys };
 }
 
-function abbreviateKey(key: string): string {
-  if (isAddress(key)) return truncateAddress(key);
-  if (key.length > 20) return truncateHash(key, 6);
-  return key;
-}
-
 function Key({ value, chainId }: { value: string; chainId: string }) {
+  const display = storageKeyDisplay(value)?.display ?? value;
+  const showCopy = shouldShowCopyAction(value, display);
+
   return (
-    <span className="whitespace-nowrap">
+    <span className="inline-flex items-center whitespace-nowrap">
       [
       {isAddress(value) ? (
         <a
@@ -84,10 +77,17 @@ function Key({ value, chainId }: { value: string; chainId: string }) {
           rel="noopener noreferrer"
           className="hover:text-gray-700 hover:underline"
         >
-          {abbreviateKey(value)}
+          {display}
         </a>
       ) : (
-        <span>{abbreviateKey(value)}</span>
+        <span>{display}</span>
+      )}
+      {showCopy && (
+        <CopyButton
+          value={value}
+          label={`Copy mapping key ${display}`}
+          className="-my-1 p-1 text-gray-400"
+        />
       )}
       ]
     </span>
@@ -125,34 +125,11 @@ function segmentLines(segment: PathSegment, separator: boolean): PathLine[] {
   }));
 }
 
-function PathDisclosure({
-  fullPath,
-  children,
-}: {
-  fullPath: string;
-  children: ReactNode;
-}) {
-  return (
-    <DetailPopover
-      className="w-full max-w-full"
-      content={(
-        <div className="flex max-w-xs items-start gap-1">
-          <span className="break-all font-mono text-xs">{fullPath}</span>
-          <CopyButton value={fullPath} label="Copy full path" className="-my-1 shrink-0" />
-        </div>
-      )}
-    >
-      {children}
-    </DetailPopover>
-  );
-}
-
 export function KeyedVariablePath({
   path,
   typeLabel,
   chainId,
   canonicalLeaf = false,
-  showCopyAction = true,
 }: KeyedVariablePathProps) {
   const fullPath = canonicalVariablePath(path);
   const segments = splitPath(fullPath).map(parseSegment);
@@ -193,9 +170,7 @@ export function KeyedVariablePath({
 
     return (
       <div className="min-w-0 font-mono leading-tight" data-testid="keyed-variable-path">
-        {showCopyAction
-          ? <PathDisclosure fullPath={fullPath}>{canonicalDisplay}</PathDisclosure>
-          : canonicalDisplay}
+        {canonicalDisplay}
       </div>
     );
   }
@@ -251,24 +226,8 @@ export function KeyedVariablePath({
 
   return (
     <div className="min-w-0 font-mono leading-tight" data-testid="keyed-variable-path">
-      {showCopyAction ? (
-        <>
-          <div className="flex min-w-0 items-center">
-            {primary}
-            <CopyButton
-              value={fullPath}
-              label="Copy full path"
-              className="-my-1 ml-0.5 shrink-0 p-1 text-gray-400"
-            />
-          </div>
-          {contextDisplay}
-        </>
-      ) : (
-        <>
-          {primary}
-          {contextDisplay}
-        </>
-      )}
+      {primary}
+      {contextDisplay}
     </div>
   );
 }

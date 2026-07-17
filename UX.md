@@ -80,8 +80,11 @@ Do not add legacy redirects or a second contract-scoped transaction UI.
 ## Evidence presentation
 
 - Encoded values remain copyable in decoded mode.
-- Large integers, addresses, hashes, paths, and slots have compact display text
-  plus access to full values.
+- Large integers, addresses, hashes, mapping keys, and slots have compact
+  display text plus access to full values.
+- Copy reusable values, not structural labels. Variable, field, struct, and
+  type names do not have copy actions. Keyed paths expose eligible keys
+  individually rather than copying the whole path.
 - Unknown values say `unknown`; they do not appear as zero.
 - Inferred and raw slot attribution remain distinguishable from exact compiler
   layout evidence.

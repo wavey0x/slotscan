@@ -127,6 +127,7 @@ test('direct contracts render one coherent exact-block response', async ({ page 
   await expect(header.getByText(/Verified/)).toBeVisible();
   await expect(page.getByText('Block 123')).toBeVisible();
   await expect(page.getByText('42', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Copy owner value' })).toHaveCount(0);
   await expect(page.getByRole('group', { name: 'Values' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Compare layout →' })).toHaveAttribute(
     'href',
@@ -231,6 +232,7 @@ test('packed values sharing one word remain separate logical rows', async ({ pag
 
   await expect(page.getByText('true', { exact: true })).toBeVisible();
   await expect(page.getByText('9', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Copy (enabled|count) value/ })).toHaveCount(0);
 });
 
 test('a value-read failure keeps the valid layout visible', async ({ page }) => {
@@ -268,6 +270,7 @@ test('a failed refresh keeps and labels the last exact response', async ({ page 
 });
 
 test('mapping queries send raw keys and exact identities, never a computed slot', async ({ page }) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   const mapping = {
     id: 'mapping',
     label: 'mapping(address => uint256)',
@@ -312,6 +315,10 @@ test('mapping queries send raw keys and exact identities, never a computed slot'
   await page.getByPlaceholder('0x… address').fill(ADDRESS);
   await page.getByRole('button', { name: 'Lookup' }).click();
   await expect(page.getByText('0xabc', { exact: true })).toBeVisible();
+  const keyCopy = page.getByRole('button', { name: 'Copy mapping key 0x1234...5678' });
+  await expect(keyCopy).toBeVisible();
+  await keyCopy.click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(ADDRESS);
 
   expect(requestBody).toMatchObject({
     chain_id: '1',
