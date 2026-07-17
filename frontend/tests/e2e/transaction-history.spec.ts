@@ -331,6 +331,72 @@ function packedStructSlot() {
   };
 }
 
+function packedMappingStructSlot({ index, changeBoth = false }: { index: number; changeBoth?: boolean }) {
+  const step = 1600 + index;
+  const base = configStructSlot({
+    slot: index,
+    member: 'processed',
+    typeLabel: 'bool',
+    beforeValue: false,
+    afterValue: true,
+    beforeEncoded: `0x${'00'.repeat(32)}`,
+    afterEncoded: `0x${'00'.repeat(31)}01`,
+    step,
+  });
+  const before = {
+    ...base.before,
+    value_decoded: { processed: false, quorum: 3 },
+  };
+  const after = {
+    ...base.after,
+    value_decoded: { processed: true, quorum: changeBoth ? 4 : 3 },
+  };
+  const slotByte = index === 20 ? 'b1' : 'b2';
+
+  return {
+    ...base,
+    slot: `0x${slotByte.repeat(32)}`,
+    slot_decimal: null,
+    is_static_slot: false,
+    provenance: 'trace',
+    variable_name: 'proposalData',
+    variable_path: `proposalData[${index}]`,
+    type_label: 'packed',
+    params: [{ type: 'uint256', value: String(index), label: null }],
+    mapping_base_slot: 4,
+    is_mapping: true,
+    encoding: 'mapping',
+    value_type: 'packed',
+    before,
+    after,
+    packed_fields: [
+      {
+        ...base.packed_fields[0],
+        size: 1,
+        before: { value_decoded: false },
+        after: { value_decoded: true },
+      },
+      {
+        name: 'quorum',
+        type_label: 'uint16',
+        offset: 1,
+        size: 2,
+        before: { value_decoded: 3 },
+        after: { value_decoded: changeBoth ? 4 : 3 },
+      },
+    ],
+    struct_field: null,
+    struct_definition: {
+      name: 'ProposalData',
+      members: [
+        { ...base.struct_definition.members[0], size: 1 },
+        { name: 'quorum', type_label: 'uint16', slot_offset: 0, byte_offset: 1, size: 2 },
+      ],
+    },
+    changes: base.changes.map((change) => ({ ...change, before, after })),
+  };
+}
+
 test('home search accepts a transaction hash and opens transaction-wide history', async ({ page }) => {
   await page.goto('/');
   await page.getByPlaceholder('Contract address or transaction hash (0x...)').fill(SIMPLE_TX);
@@ -457,6 +523,85 @@ test('packed change detection uses full values rather than compact display text'
   await expect(roundedRow.getByTestId('value-after')).toContainText('1.2345e15');
   await expect(roundedRow.getByTestId('value-arrow')).toBeVisible();
   await expect(page.getByText('anchor', { exact: true })).toBeVisible();
+});
+
+test('timeline promotes one packed member into a compact canonical mobile path', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  const singleMemberSlot = packedMappingStructSlot({ index: 20 });
+  const multiMemberSlot = packedMappingStructSlot({ index: 21, changeBoth: true });
+  const contract = resolutionContract({
+    storage_address: '0x6666666666666666666666666666666666666666',
+    code_addresses: ['0x6666666666666666666666666666666666666666'],
+    name: 'Voter',
+    is_verified: true,
+    layout_available: true,
+    counts: {
+      slots_written: 2,
+      sstore_events: 2,
+      net_changed_slots: 2,
+      restored_slots: 0,
+      reverted_only_slots: 0,
+      noop_only_slots: 0,
+      reverted_writes: 0,
+      noop_writes: 0,
+    },
+    slots: [singleMemberSlot, multiMemberSlot],
+  });
+  const response = resolutionResponse([
+    contract,
+    resolutionContract({
+      storage_address: '0x7777777777777777777777777777777777777777',
+      code_addresses: ['0x7777777777777777777777777777777777777777'],
+      name: 'OtherContract',
+    }),
+  ]);
+  response.global_order = [singleMemberSlot, multiMemberSlot].map((slot, ordinal) => ({
+    ordinal,
+    step: slot.changes[0].step,
+    storage_address: contract.storage_address,
+    slot: slot.slot,
+    event_index: 0,
+  }));
+  await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
+    await route.fulfill({ json: response });
+  });
+
+  await page.goto(`/1/tx/${RESOLUTION_TX}?view=timeline`);
+
+  const singleRow = page.getByTestId('timeline-event').filter({ hasText: 'proposalData[20].processed' });
+  const canonicalPath = singleRow.getByTestId('keyed-variable-primary');
+  await expect(canonicalPath).toHaveText('proposalData[20].processed');
+  await expect(canonicalPath.getByTestId('keyed-variable-base')).toHaveText('proposalData');
+  await expect(canonicalPath.getByTestId('keyed-variable-leaf')).toHaveText('.processed');
+  expect(await canonicalPath.getByTestId('keyed-variable-base').evaluate(
+    (element) => element.clientWidth,
+  )).toBeGreaterThanOrEqual(24);
+  await expect(singleRow.getByTestId('keyed-variable-context')).toHaveCount(0);
+  await expect(singleRow.getByTestId('timeline-value')).not.toContainText('processed');
+  await expect(singleRow.getByTestId('timeline-value')).toContainText('false');
+  await expect(singleRow.getByTestId('timeline-value')).toContainText('true');
+
+  await canonicalPath.click();
+  const pathDetail = page.getByRole('dialog');
+  await expect(pathDetail).toContainText('proposalData[20].processed');
+  await pathDetail.getByRole('button', { name: 'Copy full path' }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(
+    'proposalData[20].processed',
+  );
+
+  const multiRow = page.getByTestId('timeline-event').filter({ hasText: 'proposalData[21]' });
+  await expect(multiRow.getByTestId('keyed-variable-leaf')).toHaveCount(0);
+  await expect(multiRow.getByTestId('timeline-value')).toContainText('processed');
+  await expect(multiRow.getByTestId('timeline-value')).toContainText('quorum');
+
+  const singleBox = await singleRow.boundingBox();
+  const multiBox = await multiRow.boundingBox();
+  expect(singleBox).not.toBeNull();
+  expect(multiBox).not.toBeNull();
+  expect(singleBox!.height).toBeLessThan(multiBox!.height);
+  const scroll = page.getByTestId('data-table-scroll');
+  expect(await scroll.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
 });
 
 test('timeline names struct members and stays readable on mobile', async ({ page }) => {

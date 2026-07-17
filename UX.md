@@ -256,6 +256,7 @@ Do not merge the semantics. Reuse the presentation system.
 - at `sm` and above, tables keep a minimum readable width; horizontal scrolling engages only when the table exceeds its container, signaled by edge fades on the scrollable side;
 - when a table fits its container, column headers stick to the viewport top during vertical scroll;
 - abbreviate hashes, keys, and addresses in display (`0xa346...4150`), preserve the full value in copy and detail actions;
+- when one packed member changes in Timeline, promote it into the canonical variable path (`proposalData[20].processed`); at narrow widths truncate only the base name so the key and member suffix remain visible;
 - integers above 15 digits display compactly (`1e27`, `1.2345e21`); tooltips and copy actions carry full precision;
 - one-key mappings remain inline; multi-key mappings use one key per continuation line;
 - the before value and arrow occupy the first line; the after value begins at the same left edge on the second line;

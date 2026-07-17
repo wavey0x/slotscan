@@ -11,7 +11,7 @@ import { CopyButton } from '@/components/ui/CopyButton';
 import { HoverCell } from '@/components/ui/HoverCell';
 import { getAddressExplorerUrl } from '@/lib/constants';
 import { ContractHistoryResponse, SlotChangeResponse, StorageChangeResponse } from '@/lib/types';
-import { cn, formatDecodedValue, getCopyValue, truncateAddress, truncateHash } from '@/lib/utils';
+import { cn, formatDecodedValue, getCopyValue, truncateAddress, truncateHash, valuesEqual } from '@/lib/utils';
 import { slotReferenceDisplay } from '@/components/diff/slotDisplay';
 import {
   contractActivityStatus,
@@ -46,9 +46,24 @@ function eventRawValue(event: StorageChangeResponse, side: 'before' | 'after', s
   return showHex ? pair.value_encoded : pair.value_decoded ?? pair.value_encoded;
 }
 
-function timelineStructMember(slot: SlotChangeResponse) {
-  if (!slot.struct_definition || slot.packed_fields?.length !== 1) return null;
-  return slot.packed_fields[0];
+function timelineStructMember(slot: SlotChangeResponse, event: StorageChangeResponse) {
+  if (!slot.struct_definition) return null;
+
+  const packedFields = slot.packed_fields ?? [];
+  if (packedFields.length === 1) return packedFields[0];
+  if (!isStructuredDecodedValue(event.before.value_decoded)
+    || !isStructuredDecodedValue(event.after.value_decoded)) return null;
+
+  const before = event.before.value_decoded;
+  const after = event.after.value_decoded;
+  const fields = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]));
+  const changedFields = fields.filter((field) => !valuesEqual(before[field], after[field]));
+  if (changedFields.length !== 1) return null;
+
+  const changedField = changedFields[0];
+  return packedFields.find((field) => field.name === changedField)
+    ?? slot.struct_definition.members.find((field) => field.name === changedField)
+    ?? null;
 }
 
 function timelineVariablePath(slot: SlotChangeResponse, memberName?: string) {
@@ -170,8 +185,12 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
       <StorageTableHeader showContract={showContract} showSlotOnMobile />
       <tbody>
         {entries.map(({ contract, slot, event, ordinal }) => {
-          const structMember = timelineStructMember(slot);
+          const structMember = timelineStructMember(slot, event);
           const variablePath = timelineVariablePath(slot, structMember?.name);
+          const memberSuffix = structMember ? `.${structMember.name}` : null;
+          const memberBasePath = memberSuffix && variablePath?.endsWith(memberSuffix)
+            ? variablePath.slice(0, -memberSuffix.length)
+            : null;
           const unchanged = event.effect === 'noop';
 
           return (
@@ -190,7 +209,17 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                   </a>
                 )}
                 {variablePath?.includes('[') ? (
-                  <KeyedVariablePath path={variablePath} typeLabel={structMember?.type_label || slot.value_type || slot.type_label} chainId={chain} />
+                  <KeyedVariablePath
+                    path={variablePath}
+                    typeLabel={structMember?.type_label || slot.value_type || slot.type_label}
+                    chainId={chain}
+                    canonicalLeaf={Boolean(memberBasePath)}
+                  />
+                ) : memberBasePath && structMember ? (
+                  <div className="flex min-w-0 font-mono text-gray-900" title={variablePath ?? undefined}>
+                    <span className="min-w-0 truncate">{memberBasePath}</span>
+                    <span className="shrink-0">.{structMember.name}</span>
+                  </div>
                 ) : (
                   <div className="truncate font-mono text-gray-900" title={variablePath || slot.slot}>{variablePath || truncateHash(slot.slot, 7)}</div>
                 )}

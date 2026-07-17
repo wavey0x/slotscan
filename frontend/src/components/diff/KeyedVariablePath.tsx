@@ -1,6 +1,7 @@
 'use client';
 
 import { CopyButton } from '@/components/ui/CopyButton';
+import { DetailPopover } from '@/components/ui/DetailPopover';
 import { getAddressExplorerUrl } from '@/lib/constants';
 import { isAddress, truncateAddress, truncateHash } from '@/lib/utils';
 
@@ -13,6 +14,8 @@ interface KeyedVariablePathProps {
   path: string;
   typeLabel?: string | null;
   chainId: string;
+  /** Keep a single leaf field in canonical order while truncating only its base name. */
+  canonicalLeaf?: boolean;
 }
 
 function canonicalPath(path: string): string {
@@ -121,7 +124,12 @@ function segmentLines(segment: PathSegment, separator: boolean): PathLine[] {
   }));
 }
 
-export function KeyedVariablePath({ path, typeLabel, chainId }: KeyedVariablePathProps) {
+export function KeyedVariablePath({
+  path,
+  typeLabel,
+  chainId,
+  canonicalLeaf = false,
+}: KeyedVariablePathProps) {
   const fullPath = canonicalPath(path);
   const segments = splitPath(fullPath).map(parseSegment);
   const finalSegment = segments.at(-1) ?? { name: fullPath, keys: [] };
@@ -129,6 +137,9 @@ export function KeyedVariablePath({ path, typeLabel, chainId }: KeyedVariablePat
   const context = segments.slice(0, -1);
   const keyCount = segments.reduce((count, segment) => count + segment.keys.length, 0);
   const stackKeys = keyCount > 1;
+  const canonicalBase = canonicalLeaf && hasLeafField && context.length === 1 && keyCount <= 1
+    ? context[0]
+    : null;
   const stackedLines = stackKeys
     ? [
         ...context.flatMap((segment, index) => segmentLines(segment, index > 0)),
@@ -137,6 +148,38 @@ export function KeyedVariablePath({ path, typeLabel, chainId }: KeyedVariablePat
           : []),
       ]
     : [];
+
+  if (canonicalBase) {
+    return (
+      <div className="min-w-0 font-mono leading-tight" data-testid="keyed-variable-path">
+        <DetailPopover
+          className="max-w-full"
+          content={(
+            <div className="flex max-w-xs items-start gap-1">
+              <span className="break-all font-mono text-xs">{fullPath}</span>
+              <CopyButton value={fullPath} label="Copy full path" className="-my-1 shrink-0" />
+            </div>
+          )}
+        >
+          <span
+            className="flex min-w-0 items-center overflow-hidden whitespace-nowrap text-xs font-medium text-gray-900"
+            data-testid="keyed-variable-primary"
+            title={typeLabel ? `${fullPath} · ${typeLabel}` : fullPath}
+          >
+            <span className="min-w-0 truncate" data-testid="keyed-variable-base">
+              {canonicalBase.name}
+            </span>
+            {canonicalBase.keys.map((key, index) => (
+              <span key={`${key}:${index}`} className="shrink-0">
+                <Key value={key} chainId={chainId} />
+              </span>
+            ))}
+            <span className="shrink-0" data-testid="keyed-variable-leaf">.{finalSegment.name}</span>
+          </span>
+        </DetailPopover>
+      </div>
+    );
+  }
 
   return (
     <div className="min-w-0 font-mono leading-tight" data-testid="keyed-variable-path">
