@@ -12,17 +12,17 @@ function StructDetail({
   modifiedField: string | null;
 }) {
   return (
-    <div className="space-y-1">
-      <div className="font-medium text-gray-200">struct {definition.name}</div>
+    <div className="space-y-0.5">
+      <div className="font-medium text-gray-900">struct {definition.name}</div>
       <div className="space-y-0.5 pl-2 font-mono text-[10px]">
         {definition.members.map((member) => {
           const modified = member.name === modifiedField;
           return (
-            <div key={`${member.slot_offset}:${member.name}`} className={cn('flex gap-2', modified ? 'font-medium text-yellow-300' : 'text-gray-400')}>
+            <div key={`${member.slot_offset}:${member.name}`} className={cn('flex gap-1.5', modified ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-gray-500')}>
               <span className="text-gray-500">[{member.slot_offset}]</span>
               <span>{member.type_label}</span>
-              <span className={modified ? 'text-yellow-300' : 'text-gray-300'}>{member.name}</span>
-              {modified && <span className="ml-1 text-yellow-400">*</span>}
+              <span className={modified ? 'text-amber-700 dark:text-amber-300' : 'text-gray-700'}>{member.name}</span>
+              {modified && <span className="ml-0.5 text-amber-600 dark:text-amber-400">*</span>}
             </div>
           );
         })}
@@ -44,18 +44,18 @@ export function StorageEvidenceDetail({
   const hasParams = Boolean(slot.params?.length);
 
   return (
-    <div className="min-w-[280px] space-y-2">
-      {slot.variable_name && <div className="text-sm font-medium text-gray-100">{slot.variable_name}</div>}
+    <div className="min-w-[280px] space-y-1.5">
+      {slot.variable_name && <div className="text-sm font-medium text-gray-900">{slot.variable_name}</div>}
 
       <DetailSection title="Slot">
-        <div className="select-all break-all font-mono text-xs text-gray-300">{slot.slot}</div>
+        <div className="select-all break-all font-mono text-xs text-gray-700">{slot.slot}</div>
       </DetailSection>
 
       {showTypeLabel && (
         <>
           <DetailDivider />
           <DetailSection title="Type">
-            <div className="font-mono text-xs text-gray-300">{slot.type_label}</div>
+            <div className="font-mono text-xs text-gray-700">{slot.type_label}</div>
           </DetailSection>
         </>
       )}
@@ -64,7 +64,7 @@ export function StorageEvidenceDetail({
         <>
           <DetailDivider />
           <DetailSection title="Value type">
-            <div className="font-mono text-xs text-gray-300">{slot.value_type}</div>
+            <div className="font-mono text-xs text-gray-700">{slot.value_type}</div>
           </DetailSection>
         </>
       )}
@@ -80,14 +80,14 @@ export function StorageEvidenceDetail({
         <>
           <DetailDivider />
           <DetailSection title="Packed fields">
-            <div className="space-y-1 font-mono text-[10px]">
+            <div className="space-y-0.5 font-mono text-[10px]">
               {slot.packed_fields.map((field) => {
                 const changed = packedFieldChanged(field);
                 return (
-                  <div key={`${field.name}:${field.type_label}`} className={cn('flex gap-2', changed ? 'font-medium text-yellow-300' : 'text-gray-400')}>
+                  <div key={`${field.name}:${field.type_label}`} className={cn('flex gap-1.5', changed ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-gray-500')}>
                     <span className="text-gray-500">{field.type_label}</span>
-                    <span className={changed ? 'text-yellow-300' : 'text-gray-300'}>{field.name}</span>
-                    {changed && <span className="ml-1 text-yellow-400">*</span>}
+                    <span className={changed ? 'text-amber-700 dark:text-amber-300' : 'text-gray-700'}>{field.name}</span>
+                    {changed && <span className="ml-0.5 text-amber-600 dark:text-amber-400">*</span>}
                   </div>
                 );
               })}
@@ -106,7 +106,7 @@ export function StorageEvidenceDetail({
                 display={String(slot.array_index)}
                 value={String(slot.array_index)}
                 chainId={chainId}
-                colorClass="font-mono text-xs text-gray-200"
+                colorClass="font-mono text-xs text-gray-700"
               />
             </div>
           </DetailSection>
@@ -117,18 +117,18 @@ export function StorageEvidenceDetail({
         <>
           <DetailDivider />
           <DetailSection title={slot.params.length > 1 ? 'Mapping keys' : 'Mapping key'}>
-            <div className="space-y-1">
+            <div className="space-y-0.5">
               {slot.params.map((param, index) => {
                 const formatted = storageKeyDisplay(param.value);
                 return (
-                  <div key={`${param.type}:${param.value}:${index}`} className="flex items-center gap-2">
+                  <div key={`${param.type}:${param.value}:${index}`} className="flex items-center gap-1.5">
                     <span className="font-mono text-xs text-gray-500">{param.type}</span>
                     {formatted && (
                       <HoverCell
                         display={param.label || formatted.display}
                         value={formatted.full}
                         chainId={chainId}
-                        colorClass="font-mono text-xs text-gray-200"
+                        colorClass="font-mono text-xs text-gray-700"
                       />
                     )}
                   </div>

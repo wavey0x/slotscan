@@ -170,8 +170,8 @@ export const LayoutRow = memo(function LayoutRow({
             className="max-w-full"
             content={(
               <div className="space-y-1">
-                <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400">Slot</div>
-                <div className="break-all font-mono text-xs text-gray-200">{variable.slot}</div>
+                <div className="text-[10px] font-medium uppercase tracking-wide text-gray-500">Slot</div>
+                <div className="break-all font-mono text-xs text-gray-700">{variable.slot}</div>
               </div>
             )}
           >

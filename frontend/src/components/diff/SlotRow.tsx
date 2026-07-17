@@ -102,14 +102,12 @@ export function SlotRow({
             {revertedNotice && <div>{revertedNotice}</div>}
           </td>
           <td className={cn('hidden px-1 py-0.5 w-8 align-top sm:table-cell', isFirst && 'pt-1')}>
-            <DetailPopover content={<div className="font-mono text-xs text-gray-100 break-all">{slot.slot}</div>}>
-              <HoverCell display={slotNumber} value={slot.slot} colorClass="text-xs text-gray-500 font-mono" />
-            </DetailPopover>
+            <HoverCell display={slotNumber} value={slot.slot} colorClass="text-xs text-gray-500 font-mono" />
           </td>
           {showStep && (
             <td className={cn('hidden px-1 py-0.5 text-right w-8 align-top sm:table-cell', isFirst && 'pt-1')}>
               {firstStep !== null && firstStep !== undefined && (
-                <DetailPopover content={<div className="font-mono text-[10px] text-gray-100">Step: {firstStep}</div>}>
+                <DetailPopover content={<div className="font-mono text-[10px] text-gray-700">Step: {firstStep}</div>}>
                   <span className="text-[10px] text-gray-400 font-mono cursor-default">
                     {firstStep}
                   </span>
@@ -259,15 +257,13 @@ export function SlotRow({
           </td>
 
           <td className={cn('hidden px-1 py-0.5 w-8 align-top sm:table-cell', isFirst && 'pt-1')}>
-            <DetailPopover content={<div className="font-mono text-xs text-gray-100 break-all">{slot.slot}</div>}>
-              <HoverCell display={slotNumber} value={slot.slot} colorClass="text-xs text-gray-500 font-mono" />
-            </DetailPopover>
+            <HoverCell display={slotNumber} value={slot.slot} colorClass="text-xs text-gray-500 font-mono" />
           </td>
 
           {showStep && (
             <td className={cn('hidden px-1 py-0.5 text-right w-8 align-top sm:table-cell', isFirst && 'pt-1')}>
               {firstStep !== null && firstStep !== undefined && (
-                <DetailPopover content={<div className="font-mono text-[10px] text-gray-100">Step: {firstStep}</div>}>
+                <DetailPopover content={<div className="font-mono text-[10px] text-gray-700">Step: {firstStep}</div>}>
                   <span className="text-[10px] text-gray-400 font-mono cursor-default">
                     {firstStep}
                   </span>

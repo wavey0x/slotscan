@@ -20,7 +20,6 @@ interface DetailPopoverProps {
   dialogLabel?: string;
   delay?: number;
   maxWidth?: string;
-  variant?: 'dark' | 'surface';
 }
 
 /**
@@ -34,8 +33,7 @@ export function DetailPopover({
   contentClassName,
   dialogLabel,
   delay = 100,
-  maxWidth = 'max-w-md',
-  variant = 'dark',
+  maxWidth = 'max-w-sm',
 }: DetailPopoverProps) {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -133,11 +131,10 @@ export function DetailPopover({
       id={panelId}
       role="dialog"
       aria-label={dialogLabel}
+      data-testid="detail-popover"
       className={cn(
-        'fixed z-[99999] border text-xs',
-        variant === 'surface'
-          ? 'rounded-[0.75rem] border-gray-200 bg-white p-4 text-gray-700 shadow-[0_8px_24px_rgb(0_0_0/0.10),0_1px_3px_rgb(0_0_0/0.08)]'
-          : 'detail-popover border-gray-600 bg-gray-900 p-3 text-white',
+        'fixed z-[99999] rounded-[8px] border border-gray-200 bg-white px-[10px] py-[8px] text-xs text-gray-700',
+        'shadow-[0_6px_18px_rgb(0_0_0/0.08),0_1px_2px_rgb(0_0_0/0.06)]',
         maxWidth,
         contentClassName,
       )}
@@ -204,15 +201,15 @@ export function DetailSection({
   className?: string;
 }) {
   return (
-    <div className={cn('space-y-1', className)}>
-      {title && <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400">{title}</div>}
+    <div className={cn('space-y-0.5', className)}>
+      {title && <div className="text-[10px] font-medium uppercase tracking-wide text-gray-500">{title}</div>}
       {children}
     </div>
   );
 }
 
 export function DetailDivider() {
-  return <div className="my-2 border-t border-gray-700" />;
+  return <div className="my-1.5 border-t border-gray-200" />;
 }
 
 export function DetailRow({
@@ -228,8 +225,8 @@ export function DetailRow({
 }) {
   return (
     <div className="flex items-start gap-2 text-xs">
-      <span className={cn('shrink-0 text-gray-400', labelClassName)}>{label}</span>
-      <span className={cn('break-all font-mono text-gray-200', valueClassName)}>{value}</span>
+      <span className={cn('shrink-0 text-gray-500', labelClassName)}>{label}</span>
+      <span className={cn('break-all font-mono text-gray-700', valueClassName)}>{value}</span>
     </div>
   );
 }

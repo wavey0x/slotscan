@@ -1261,14 +1261,43 @@ test('storage evidence remains contained and operable at narrow widths', async (
   expect(await page.evaluate(() => getComputedStyle(document.documentElement).overflowX)).toBe('hidden');
 });
 
-test('storage detail disclosure supports focus and Escape', async ({ page }) => {
+test('storage detail disclosure matches the active theme and supports focus and Escape', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
   await page.goto(`/1/tx/${NESTED_STRUCT_MAPPING_TX}`);
   await page.getByPlaceholder('Search contract, address, slot, or variable').fill('lastExecutionTimestamp');
 
   const variable = page.getByTestId('keyed-variable-path');
+  await expect(variable.getByText('0x40a2...130d', { exact: true })).not.toHaveAttribute('title', /.+/);
   const disclosure = variable.locator('xpath=ancestor::*[@tabindex="0"][1]');
   await disclosure.focus();
-  await expect(page.getByRole('dialog')).toBeVisible();
+  const lightDetail = page.getByRole('dialog');
+  await expect(lightDetail).toBeVisible();
+  await expect(lightDetail).toHaveCount(1);
+  const lightStyle = await lightDetail.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      backgroundColor: style.backgroundColor,
+      borderRadius: style.borderRadius,
+      boxShadow: style.boxShadow,
+      color: style.color,
+      paddingTop: style.paddingTop,
+    };
+  });
+  expect(lightStyle).toMatchObject({
+    backgroundColor: 'rgb(255, 255, 255)',
+    borderRadius: '8px',
+    color: 'rgb(51, 51, 51)',
+    paddingTop: '8px',
+  });
+  expect(lightStyle.boxShadow).not.toBe('none');
+
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Switch to dark mode' }).click();
+  await disclosure.focus();
+  const darkDetail = page.getByRole('dialog');
+  await expect(darkDetail).toBeVisible();
+  await expect(darkDetail).toHaveCSS('background-color', 'rgb(17, 17, 17)');
+  await expect(darkDetail).toHaveCSS('color', 'rgb(211, 211, 211)');
 });

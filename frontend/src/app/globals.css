@@ -127,23 +127,6 @@
   .dark .theme-logo {
     filter: invert(1);
   }
-
-  /* Detail disclosures intentionally remain dark in both themes. Reset the
-     adaptive palette locally so their existing contrast remains intact. */
-  .detail-popover {
-    --color-black: 0 0 0;
-    --color-white: 255 255 255;
-    --color-gray-50: 250 250 250;
-    --color-gray-100: 245 245 245;
-    --color-gray-200: 229 229 229;
-    --color-gray-300: 204 204 204;
-    --color-gray-400: 163 163 163;
-    --color-gray-500: 102 102 102;
-    --color-gray-600: 82 82 82;
-    --color-gray-700: 51 51 51;
-    --color-gray-800: 38 38 38;
-    --color-gray-900: 17 17 17;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

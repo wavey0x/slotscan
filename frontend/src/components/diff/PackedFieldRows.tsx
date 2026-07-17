@@ -67,15 +67,13 @@ export function PackedFieldRow({
       </td>
       <td className="hidden w-8 px-1 py-0 align-top sm:table-cell">
         {slotInfo && (
-          <DetailPopover content={<div className="break-all font-mono text-xs text-gray-100">{slotInfo.full}</div>}>
-            <HoverCell display={slotInfo.display} value={slotInfo.full} colorClass="font-mono text-xs text-gray-500" />
-          </DetailPopover>
+          <HoverCell display={slotInfo.display} value={slotInfo.full} colorClass="font-mono text-xs text-gray-500" />
         )}
       </td>
       {showStep && (
         <td className="hidden w-8 px-1 py-0 text-right align-top sm:table-cell">
           {step !== null && step !== undefined && (
-            <DetailPopover content={<div className="font-mono text-[10px] text-gray-100">Step: {step}</div>}>
+            <DetailPopover content={<div className="font-mono text-[10px] text-gray-700">Step: {step}</div>}>
               <span className="cursor-default font-mono text-[10px] text-gray-400">{step}</span>
             </DetailPopover>
           )}

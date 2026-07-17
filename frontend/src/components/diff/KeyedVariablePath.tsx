@@ -86,12 +86,11 @@ function Key({ value, chainId }: { value: string; chainId: string }) {
           target="_blank"
           rel="noopener noreferrer"
           className="hover:text-gray-700 hover:underline"
-          title={value}
         >
           {abbreviateKey(value)}
         </a>
       ) : (
-        <span title={value}>{abbreviateKey(value)}</span>
+        <span>{abbreviateKey(value)}</span>
       )}
       ]
     </span>
@@ -182,9 +181,6 @@ export function KeyedVariablePath({
       <span
         className="flex min-w-0 items-center overflow-hidden whitespace-nowrap text-xs font-medium text-gray-900"
         data-testid="keyed-variable-primary"
-        title={showCopyAction
-          ? (typeLabel ? `${fullPath} · ${typeLabel}` : fullPath)
-          : undefined}
       >
         <span className="min-w-0 truncate" data-testid="keyed-variable-base">
           {canonicalBase.name}
@@ -211,7 +207,6 @@ export function KeyedVariablePath({
     <span
       className="block min-w-0 max-w-full overflow-hidden break-words text-xs font-medium text-gray-900"
       data-testid="keyed-variable-primary"
-      title={showCopyAction ? fullPath : undefined}
     >
       {hasLeafField || stackKeys
         ? finalSegment.name

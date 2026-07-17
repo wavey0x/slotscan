@@ -69,7 +69,6 @@ export function TimelineVariableDisclosure({
       contentClassName="w-[calc(100vw-1rem)] max-h-[calc(100vh-1rem)] overflow-y-auto"
       dialogLabel={`Variable details: ${variable}`}
       maxWidth="max-w-sm"
-      variant="surface"
       content={(
         <div data-testid="timeline-variable-detail" className="min-w-0">
           <DetailSection title="Contract">
@@ -83,7 +82,7 @@ export function TimelineVariableDisclosure({
           </DetailSection>
 
           {implementationAddresses.length > 0 && (
-            <div className="mt-3 border-t border-gray-200 pt-3">
+            <div className="mt-2 border-t border-gray-200 pt-2">
               <DetailSection title="Written via" className="space-y-1.5">
                 {implementationAddresses.map((address) => (
                   <DetailAddress
@@ -98,9 +97,9 @@ export function TimelineVariableDisclosure({
             </div>
           )}
 
-          <div className="my-3 border-t border-gray-200" />
+          <div className="my-2 border-t border-gray-200" />
           <DetailSection title={isRawSlot ? 'Raw slot' : 'Variable'}>
-            <div className="flex min-w-0 items-start gap-1 rounded-[0.5rem] bg-gray-50 px-2.5 py-2">
+            <div className="flex min-w-0 items-start gap-1 rounded-[0.375rem] bg-gray-50 px-2 py-1.5">
               <span className="min-w-0 break-all font-mono text-sm text-gray-900">{variable}</span>
               <CopyButton
                 value={variable}
