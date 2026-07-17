@@ -163,8 +163,6 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
     !data.capabilities.execution_order_available && 'Global execution order is unavailable.',
     !data.capabilities.code_attribution_complete
       && 'Effective code attribution is unavailable; raw slots are shown.',
-    hasRetryableContractResolution(data.contracts)
-      && 'Some contract names or storage layouts could not be resolved.',
   ].filter(Boolean) as string[];
   const retryableResolution = hasRetryableContractResolution(data.contracts);
 
@@ -172,19 +170,19 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
   const showSearch = data.summary.slots_written > 15 || data.contracts.length > 3;
   return (
     <div className="w-full" data-testid="transaction-report">
-      <TransactionHeader chain={chain} data={data} />
+      <TransactionHeader
+        chain={chain}
+        data={data}
+        resolutionRetry={retryableResolution && resolutionAutoRetryFinished ? {
+          onClick: () => { void refetch(); },
+          pending: isFetching,
+        } : undefined}
+      />
       {singleContract && !singleContract.layout_available && (
         <div className="-mt-4 mb-5 text-[10px] uppercase tracking-wide text-gray-500">Raw slots</div>
       )}
 
-      <DataQuality
-        warnings={warnings}
-        action={retryableResolution && resolutionAutoRetryFinished ? {
-          label: isFetching ? 'Retrying…' : 'Retry resolution',
-          onClick: () => { void refetch(); },
-          disabled: isFetching,
-        } : undefined}
-      />
+      <DataQuality warnings={warnings} />
 
       <div
         className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-gray-300 pb-3"

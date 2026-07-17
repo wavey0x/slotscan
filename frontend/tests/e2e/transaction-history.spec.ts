@@ -1211,8 +1211,11 @@ test('transient resolution retries once automatically and then offers a manual r
 
   await expect.poll(() => requests).toBe(2);
   await expect(page.getByRole('heading', { name: 'Resolution timed out' })).toBeVisible();
-  const retry = page.getByRole('button', { name: 'Retry resolution' });
+  await expect(page.getByText(/Data quality/)).toHaveCount(0);
+  const retry = page.getByRole('button', { name: 'Retry contract resolution' });
   await expect(retry).toBeVisible();
+  await expect(retry).toHaveAttribute('title', 'Retry unresolved contract names and storage layouts.');
+  await expect(retry.locator('svg')).toHaveCount(1);
   await retry.click();
   await expect(page.getByRole('heading', { name: 'RecoveredContract' })).toBeVisible();
   await expect(retry).toHaveCount(0);

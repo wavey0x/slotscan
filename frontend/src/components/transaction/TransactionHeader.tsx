@@ -1,3 +1,4 @@
+import { RefreshCw } from 'lucide-react';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { EntityKindBadge } from '@/components/ui/EntityKindBadge';
 import { MetadataItem, MetricList } from '@/components/ui/Metadata';
@@ -8,9 +9,14 @@ import { truncateAddress, truncateTxHash } from '@/lib/utils';
 export function TransactionHeader({
   chain,
   data,
+  resolutionRetry,
 }: {
   chain: string;
   data: TransactionStorageHistoryResponse;
+  resolutionRetry?: {
+    onClick: () => void;
+    pending: boolean;
+  };
 }) {
   const fromAddress = data.from_address;
   const toAddress = data.to_address || data.created_contract;
@@ -32,6 +38,25 @@ export function TransactionHeader({
               </a>
             </h1>
             <CopyButton value={data.tx_hash} label="Copy transaction hash" />
+            {resolutionRetry && (
+              <button
+                type="button"
+                onClick={resolutionRetry.onClick}
+                disabled={resolutionRetry.pending}
+                aria-label="Retry contract resolution"
+                aria-busy={resolutionRetry.pending}
+                title={resolutionRetry.pending
+                  ? 'Retrying contract resolution…'
+                  : 'Retry unresolved contract names and storage layouts.'}
+                className="touch-hitbox ml-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center text-gray-400 transition-colors hover:text-gray-900 focus-visible:text-gray-900 focus-visible:outline-none disabled:cursor-wait disabled:text-gray-400"
+              >
+                <RefreshCw
+                  size={12}
+                  strokeWidth={1.25}
+                  className={resolutionRetry.pending ? 'animate-spin' : undefined}
+                />
+              </button>
+            )}
           </div>
           {data.status === 'reverted' && (
             <span className="text-[10px] uppercase tracking-wide text-amber-600">
