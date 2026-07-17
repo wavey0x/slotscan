@@ -72,52 +72,67 @@ export function HoverCell({
     display,
   );
 
-  const detailContent = tooltip || (
-    <span className="font-mono break-all max-w-xs">{value}</span>
+  const detailValue = tooltip ?? value;
+  const detailText = typeof detailValue === 'string' ? detailValue : null;
+  const detailContent = detailText === null ? detailValue : (
+    <span className="block max-w-xs whitespace-normal break-all font-mono [overflow-wrap:anywhere]">
+      {detailText}
+    </span>
+  );
+  const hasSupplementalDetail = Boolean(detailValue) && (
+    (copyInDetail && showActions)
+    || detailText === null
+    || detailText !== display
   );
   const tooltipContent = copyInDetail && showActions ? (
     <div className="flex max-w-xs items-start gap-1">
-      <span className="min-w-0">{detailContent}</span>
+      <div className="min-w-0">{detailContent}</div>
       <CopyButton value={value} label={copyLabel} className="-my-1 shrink-0" />
     </div>
   ) : detailContent;
 
-  return (
-    <DetailPopover content={tooltipContent} delay={300} className={wrap ? 'min-w-0 max-w-full' : undefined}>
-      <span
-        className={cn(
-          'group/cell inline-flex max-w-full items-center cursor-default',
-          className
-        )}
-      >
-        {etherscanUrl ? (
-          <a
-            href={etherscanUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={cn(
-              'inline-block max-w-full align-bottom font-mono hover:underline',
-              wrap ? 'whitespace-pre-wrap break-words [overflow-wrap:anywhere]' : 'truncate',
-              colorClass,
-            )}
-          >
-            {display}
-          </a>
-        ) : (
-          <span className={cn(
+  const cell = (
+    <span
+      className={cn(
+        'group/cell inline-flex max-w-full items-center cursor-default',
+        className
+      )}
+    >
+      {etherscanUrl ? (
+        <a
+          href={etherscanUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={cn(
             'inline-block max-w-full align-bottom font-mono',
+            'hover:underline',
             wrap ? 'whitespace-pre-wrap break-words [overflow-wrap:anywhere]' : 'truncate',
             colorClass,
           )}>
-            {display}
-          </span>
-        )}
-        {showActions && !copyInDetail && (
-          <span className="ml-0.5 flex shrink-0 items-center">
-            <CopyButton value={value} label={copyLabel} />
-          </span>
-        )}
-      </span>
+          {display}
+        </a>
+      ) : (
+        <span className={cn(
+          'inline-block max-w-full align-bottom font-mono',
+          wrap ? 'whitespace-pre-wrap break-words [overflow-wrap:anywhere]' : 'truncate',
+          colorClass,
+        )}>
+          {display}
+        </span>
+      )}
+      {showActions && !copyInDetail && (
+        <span className="ml-0.5 flex shrink-0 items-center">
+          <CopyButton value={value} label={copyLabel} />
+        </span>
+      )}
+    </span>
+  );
+
+  if (!hasSupplementalDetail) return cell;
+
+  return (
+    <DetailPopover content={tooltipContent} delay={300} className={wrap ? 'min-w-0 max-w-full' : undefined}>
+      {cell}
     </DetailPopover>
   );
 }

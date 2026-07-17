@@ -800,6 +800,22 @@ test('timeline names struct members and stays readable on mobile', async ({ page
   await expect(groupedBooleanRow.getByTestId('value-diff').getByRole('button', { name: 'Copy value' })).toHaveCount(0);
   await expect(groupedBooleanRow.getByRole('link')).toHaveCount(0);
   await expect(groupedSmallNumberRow.getByTestId('value-diff').getByRole('button', { name: 'Copy value' })).toHaveCount(0);
+  await expect(groupedBooleanRow.getByTestId('value-diff').locator('[aria-haspopup="dialog"]')).toHaveCount(0);
+  await expect(groupedSmallNumberRow.getByTestId('value-diff').locator('[aria-haspopup="dialog"]')).toHaveCount(0);
+  const groupedAddressDisclosures = groupedAddressRow.getByTestId('value-diff').locator('[aria-haspopup="dialog"]');
+  await expect(groupedAddressDisclosures).toHaveCount(2);
+  await groupedAddressDisclosures.first().hover();
+  const addressDetail = page.getByRole('dialog');
+  await expect(addressDetail).toHaveText(oldRate);
+  const addressDetailMetrics = await addressDetail.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    right: element.getBoundingClientRect().right,
+  }));
+  expect(addressDetailMetrics.scrollWidth).toBeLessThanOrEqual(addressDetailMetrics.clientWidth);
+  expect(addressDetailMetrics.right).toBeLessThanOrEqual(383);
+  await groupedAddressRow.getByText('rateCalculator', { exact: true }).hover();
+  await expect(addressDetail).toHaveCount(0);
   // The slot column (and its copy action) is hidden at mobile widths.
   await expect(groupedSmallNumberRow.getByRole('button', { name: 'Copy value' })).toHaveCount(0);
 });

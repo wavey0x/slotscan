@@ -373,6 +373,7 @@ export function getCopyValue(decoded: unknown, encoded: string): string {
       }
       return decoded.toString();
     }
+    if (typeof decoded === 'boolean') return decoded.toString();
     if (typeof decoded === 'string') {
       const cleaned = decoded.replace(/,/g, '');
       if (/^-?\d+$/.test(cleaned)) return cleaned;
@@ -395,43 +396,7 @@ export function getCopyValue(decoded: unknown, encoded: string): string {
 }
 
 export function getTooltipValue(decoded: unknown, encoded: string): string {
-  if (decoded === null || decoded === undefined) return encoded;
-
-  // Displays truncate addresses and compact large numbers, so tooltips
-  // carry the full-precision value instead.
-  try {
-    if (typeof decoded === 'string' && /^0x[a-fA-F0-9]{40}$/.test(decoded)) {
-      return decoded;
-    }
-
-    let numValue: bigint | number;
-    if (typeof decoded === 'bigint') {
-      numValue = decoded;
-    } else if (typeof decoded === 'number') {
-      numValue = decoded;
-    } else if (typeof decoded === 'string') {
-      const cleaned = decoded.replace(/,/g, '');
-      if (/^-?\d+$/.test(cleaned)) {
-        numValue = BigInt(cleaned);
-      } else {
-        return encoded;
-      }
-    } else {
-      return encoded;
-    }
-
-    // Check if magnitude is >= 1e9 (1 billion)
-    const magnitude = typeof numValue === 'bigint'
-      ? (numValue < BigInt(0) ? -numValue : numValue)
-      : Math.abs(numValue);
-
-    const threshold = typeof numValue === 'bigint' ? BigInt(1e9) : 1e9;
-    if (magnitude >= threshold) {
-      return formatBigNumber(numValue);
-    }
-
-    return encoded;
-  } catch {
-    return encoded;
-  }
+  const fullValue = getCopyValue(decoded, encoded);
+  const cleaned = fullValue.replace(/,/g, '');
+  return /^-?\d+$/.test(cleaned) ? formatBigNumber(cleaned) : fullValue;
 }
