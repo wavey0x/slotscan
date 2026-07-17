@@ -9,6 +9,7 @@ import {
 } from '@/lib/types';
 import { HoverCell } from '@/components/ui/HoverCell';
 import { CopyButton } from '@/components/ui/CopyButton';
+import { DetailPopover } from '@/components/ui/DetailPopover';
 import { MappingKeyInput } from './MappingKeyInput';
 import { ArrayIndexInput } from './ArrayIndexInput';
 import { Skeleton } from '@/components/ui/Skeleton';
@@ -154,7 +155,9 @@ export const LayoutRow = memo(function LayoutRow({
           {isInteractive && (
             <button
               onClick={() => setExpanded(!expanded)}
-              className="w-4 h-4 text-xs text-gray-400 hover:text-gray-700 font-mono"
+              aria-label={expanded ? `Collapse ${variable.name}` : `Expand ${variable.name}`}
+              aria-expanded={expanded}
+              className="touch-hitbox w-4 h-4 text-xs text-gray-400 hover:text-gray-700 font-mono"
             >
               {expanded ? '−' : '+'}
             </button>
@@ -162,8 +165,18 @@ export const LayoutRow = memo(function LayoutRow({
         </td>
 
         {/* Name */}
-        <td className="px-1 py-2 truncate text-xs font-mono text-gray-900" title={variable.name}>
-          {variable.name}
+        <td className="px-1 py-2 text-xs font-mono text-gray-900">
+          <DetailPopover
+            className="max-w-full"
+            content={(
+              <div className="space-y-1">
+                <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400">Slot</div>
+                <div className="break-all font-mono text-xs text-gray-200">{variable.slot}</div>
+              </div>
+            )}
+          >
+            <span className="block truncate" title={variable.name}>{variable.name}</span>
+          </DetailPopover>
         </td>
 
         {/* Type */}
@@ -172,7 +185,7 @@ export const LayoutRow = memo(function LayoutRow({
         </td>
 
         {/* Slot */}
-        <td data-testid="layout-slot" className="break-all px-1 py-2 text-xs font-mono text-gray-500">
+        <td data-testid="layout-slot" className="hidden break-all px-1 py-2 text-xs font-mono text-gray-500 sm:table-cell">
           {variable.slot}
         </td>
 

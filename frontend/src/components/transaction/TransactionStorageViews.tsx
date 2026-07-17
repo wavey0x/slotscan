@@ -112,7 +112,7 @@ export function ContractSection({
               rel="noopener noreferrer"
               aria-label="View contract on Etherscan"
               title="View contract on Etherscan"
-              className="-my-1 inline-flex h-5 w-5 shrink-0 items-center justify-center text-gray-400 transition-colors hover:text-gray-900 focus-visible:text-gray-900 focus-visible:outline-none"
+              className="touch-hitbox -my-1 inline-flex h-5 w-5 shrink-0 items-center justify-center text-gray-400 transition-colors hover:text-gray-900 focus-visible:text-gray-900 focus-visible:outline-none"
             >
               <ExternalLink size={12} strokeWidth={1.25} />
             </a>
@@ -176,13 +176,18 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
           return (
             <tr key={`${contract.storage_address}:${slot.slot}:${event.step}:${ordinal}`} data-testid="timeline-event" className="border-b border-gray-200 text-xs hover:bg-gray-50">
               {showContract && (
-                <td className={storageCellClass}>
+                <td className={`${storageCellClass} hidden sm:table-cell`}>
                   <a href={getAddressExplorerUrl(chain, contract.storage_address)} target="_blank" rel="noopener noreferrer" className="block truncate text-gray-700 hover:underline" title={contract.storage_address}>
                     {contractDisplayLabel(contract)}
                   </a>
                 </td>
               )}
               <td className={storageCellClass}>
+                {showContract && (
+                  <a href={getAddressExplorerUrl(chain, contract.storage_address)} target="_blank" rel="noopener noreferrer" className="block truncate text-[10px] text-gray-500 hover:underline sm:hidden" title={contract.storage_address}>
+                    {contractDisplayLabel(contract)}
+                  </a>
+                )}
                 {variablePath?.includes('[') ? (
                   <KeyedVariablePath path={variablePath} typeLabel={structMember?.type_label || slot.value_type || slot.type_label} chainId={chain} />
                 ) : (
@@ -201,6 +206,7 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                   />
                 ) : (
                   <ValueDiff
+                    unchanged={unchanged}
                     before={(
                       <CopyableValue
                         value={eventRawValue(event, 'before', showHex)}
@@ -214,7 +220,7 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                         value={eventRawValue(event, 'after', showHex)}
                         display={eventValue(event, 'after', showHex)}
                         copyValue={eventCopyValue(event, 'after', showHex)}
-                        label="Copy new value"
+                        label={unchanged ? 'Copy value' : 'Copy new value'}
                       />
                     )}
                     beforeClassName="text-gray-400"
@@ -223,10 +229,10 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                 )}
                 {event.frame_outcome === 'reverted' && <div className="mt-0.5 text-[9px] uppercase tracking-wide text-amber-600">reverted</div>}
               </td>
-              <td className={`${storageCellClass} min-w-0 font-mono text-gray-500`} title={slot.slot}>
+              <td className={`${storageCellClass} hidden min-w-0 font-mono text-gray-500 sm:table-cell`} title={slot.slot}>
                 <span data-testid="slot-reference" className="block truncate">{slotReferenceDisplay(slot.slot, false)}</span>
               </td>
-              <td className={`${storageCellClass} overflow-hidden whitespace-nowrap font-mono text-gray-400`} data-testid="step-reference">
+              <td className={`${storageCellClass} hidden overflow-hidden whitespace-nowrap font-mono text-gray-400 sm:table-cell`} data-testid="step-reference">
                 {event.step ?? '—'}
               </td>
             </tr>

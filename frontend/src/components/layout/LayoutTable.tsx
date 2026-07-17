@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { StorageLayoutResponse, SlotValueResponse } from '@/lib/types';
 import { LayoutRow } from './LayoutRow';
 import { useStorage } from '@/lib/hooks/useStorage';
+import { cn } from '@/lib/utils';
 import { DataTable, dataTableHeadCellClass } from '@/components/ui/DataTable';
 
 interface LayoutTableProps {
@@ -42,19 +43,19 @@ export function LayoutTable({
           <col className="w-6" />
           <col className="w-[100px]" />
           <col className="w-[120px]" />
-          <col className="w-[72px]" />
+          <col className="hidden w-[72px] sm:table-column" />
           <col />
         </colgroup>
         <thead>
           <tr className="border-b border-gray-300">
-            <th className="px-2 py-1.5"></th>
+            <th className={cn(dataTableHeadCellClass, 'w-6')}></th>
             <th className={dataTableHeadCellClass}>
               Name
             </th>
             <th className={dataTableHeadCellClass}>
               Type
             </th>
-            <th className={dataTableHeadCellClass}>
+            <th className={cn(dataTableHeadCellClass, 'hidden sm:table-cell')}>
               Slot
             </th>
             <th className={dataTableHeadCellClass}>

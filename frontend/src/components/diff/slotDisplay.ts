@@ -6,6 +6,7 @@ import {
   getTooltipValue,
   truncateAddress,
   truncateHash,
+  valuesEqual,
 } from '@/lib/utils';
 
 export function storageHoverProps(decoded: unknown, encoded: string | null) {
@@ -18,7 +19,7 @@ export function storageHoverProps(decoded: unknown, encoded: string | null) {
 }
 
 export function packedFieldChanged(field: PackedFieldResponse): boolean {
-  return formatDecodedValue(field.before.value_decoded) !== formatDecodedValue(field.after.value_decoded);
+  return !valuesEqual(field.before.value_decoded, field.after.value_decoded);
 }
 
 export function storageValueIsZero(encoded: string | null, decoded: unknown): boolean {
@@ -58,15 +59,21 @@ export function slotReferenceDisplay(slotHex: string, showHex: boolean): string 
 }
 
 export function deriveSlotDisplay(slot: SlotChangeResponse, showHex: boolean) {
-  const hasPacked = Boolean(slot.packed_fields?.length);
+  const packedFields = slot.packed_fields ?? [];
+  const hasPacked = packedFields.length > 0;
   const changedPackedFields = hasPacked
-    ? (slot.packed_fields ?? []).filter(packedFieldChanged)
+    ? packedFields.filter(packedFieldChanged)
     : [];
+  // Preserve the compact changed-fields view, but a fully no-op packed write
+  // must still show the values that were rewritten.
+  const displayedPackedFields = changedPackedFields.length > 0
+    ? changedPackedFields
+    : packedFields;
   const showPackedAsTree = hasPacked && (
-    Boolean(slot.struct_definition?.name) || changedPackedFields.length > 1
+    Boolean(slot.struct_definition?.name) || displayedPackedFields.length > 1
   );
-  const singlePackedField = hasPacked && !showPackedAsTree && changedPackedFields.length === 1
-    ? changedPackedFields[0]
+  const singlePackedField = hasPacked && !showPackedAsTree && displayedPackedFields.length === 1
+    ? displayedPackedFields[0]
     : null;
   const variablePath = slot.variable_path?.match(/^([^(]+)/)?.[1]?.trim();
   const variableLabel = slot.variable_path?.match(/\(([^)]+)\)$/)?.[1] ?? null;
@@ -91,7 +98,7 @@ export function deriveSlotDisplay(slot: SlotChangeResponse, showHex: boolean) {
     resolvedLeafType,
     slotNumber: slotReferenceDisplay(slot.slot, showHex),
     firstStep: slot.changes[0]?.step ?? null,
-    changedPackedFields,
+    displayedPackedFields,
     showPackedAsTree,
     singlePackedField,
     initialValue: singlePackedField && !showHex

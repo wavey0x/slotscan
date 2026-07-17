@@ -1,6 +1,6 @@
 import { ReactNode } from 'react';
 import { CopyButton } from '@/components/ui/CopyButton';
-import { cn, formatDecodedValue, shouldShowCopyAction } from '@/lib/utils';
+import { cn, formatDecodedValue, shouldShowCopyAction, valuesEqual } from '@/lib/utils';
 
 interface ValueDiffProps {
   before: ReactNode;
@@ -8,11 +8,31 @@ interface ValueDiffProps {
   className?: string;
   beforeClassName?: string;
   afterClassName?: string;
+  /** The write happened but the value did not change; show it once. */
+  unchanged?: boolean;
+}
+
+/**
+ * Marks a value that an SSTORE rewrote without changing it. Replaces the
+ * before → after arrow so no-op writes read as a single value.
+ */
+export function UnchangedIndicator() {
+  return (
+    <span
+      data-testid="value-noop-indicator"
+      title="Written, value unchanged"
+      className="shrink-0 cursor-default text-gray-400"
+    >
+      <span aria-hidden="true">↺</span>
+      <span className="sr-only">written, value unchanged</span>
+    </span>
+  );
 }
 
 /**
  * A compact two-line value diff with a shared left edge.
  * The arrow follows the old value without shifting the new value below it.
+ * No-op writes collapse to a single value with an unchanged indicator.
  */
 export function ValueDiff({
   before,
@@ -20,7 +40,28 @@ export function ValueDiff({
   className,
   beforeClassName,
   afterClassName,
+  unchanged = false,
 }: ValueDiffProps) {
+  if (unchanged) {
+    return (
+      <span
+        data-testid="value-diff"
+        className={cn(
+          'inline-flex max-w-full items-start gap-1 font-mono text-xs leading-tight',
+          className
+        )}
+      >
+        <span
+          data-testid="value-unchanged"
+          className={cn('min-w-0 whitespace-pre-wrap break-words text-left [overflow-wrap:anywhere]', afterClassName)}
+        >
+          {after}
+        </span>
+        <UnchangedIndicator />
+      </span>
+    );
+  }
+
   return (
     <span
       data-testid="value-diff"
@@ -56,16 +97,6 @@ export function ValueDiff({
 
 export function isStructuredDecodedValue(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-export function valuesEqual(before: unknown, after: unknown) {
-  if (Object.is(before, after)) return true;
-  if (typeof before !== 'object' || typeof after !== 'object') return false;
-  try {
-    return JSON.stringify(before) === JSON.stringify(after);
-  } catch {
-    return false;
-  }
 }
 
 function fieldDisplay(value: unknown) {
@@ -119,7 +150,13 @@ export function CopyableValue({
 }) {
   return (
     <span className="inline-flex min-w-0 max-w-full items-start">
-      <span data-testid="copyable-value-text" className={cn('min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]', className)}>{display}</span>
+      <span
+        data-testid="copyable-value-text"
+        title={copyValue !== display ? copyValue : undefined}
+        className={cn('min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]', className)}
+      >
+        {display}
+      </span>
       {shouldShowCopyAction(value, display) && (
         <CopyButton value={copyValue} label={label} className="-my-1" />
       )}
@@ -142,8 +179,10 @@ export function StructuredValueDiff({
   showFieldNames?: boolean;
   showUnchanged?: boolean;
 }) {
-  const fields = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
-    .filter((field) => showUnchanged || !valuesEqual(before[field], after[field]));
+  const allFields = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]));
+  const changedFields = allFields.filter((field) => !valuesEqual(before[field], after[field]));
+  // A fully no-op struct write still shows its values, marked unchanged.
+  const fields = showUnchanged || changedFields.length === 0 ? allFields : changedFields;
 
   if (fields.length === 0) {
     return <span className="font-mono text-xs text-gray-400">—</span>;
@@ -167,6 +206,7 @@ export function StructuredValueDiff({
               <span className="min-w-0 break-words text-gray-500 [overflow-wrap:anywhere]">{field}</span>
             )}
             <ValueDiff
+              unchanged={unchanged}
               before={(
                 <FieldValue
                   value={before[field]}
@@ -178,7 +218,7 @@ export function StructuredValueDiff({
                 <FieldValue
                   value={after[field]}
                   className={unchanged ? beforeClassName : afterClassName}
-                  label={`Copy new ${field}`}
+                  label={unchanged ? `Copy ${field}` : `Copy new ${field}`}
                 />
               )}
             />

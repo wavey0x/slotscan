@@ -270,6 +270,67 @@ function configScalarSlot({
   };
 }
 
+function packedStructSlot() {
+  const base = configStructSlot({
+    slot: 10,
+    member: 'anchor',
+    typeLabel: 'uint128',
+    beforeValue: '1',
+    afterValue: '2',
+    beforeEncoded: `0x${'00'.repeat(31)}01`,
+    afterEncoded: `0x${'00'.repeat(31)}02`,
+    step: 1500,
+  });
+  const before = {
+    ...base.before,
+    value_decoded: {
+      rounded: '1234500000000000',
+      anchor: '1',
+    },
+  };
+  const after = {
+    ...base.after,
+    value_decoded: {
+      rounded: '1234599999999999',
+      anchor: '2',
+    },
+  };
+
+  return {
+    ...base,
+    variable_name: 'packedData',
+    variable_path: 'packedData',
+    before,
+    after,
+    packed_fields: [
+      {
+        name: 'rounded',
+        type_label: 'uint128',
+        offset: 0,
+        size: 16,
+        before: { value_decoded: before.value_decoded.rounded },
+        after: { value_decoded: after.value_decoded.rounded },
+      },
+      {
+        name: 'anchor',
+        type_label: 'uint128',
+        offset: 16,
+        size: 16,
+        before: { value_decoded: before.value_decoded.anchor },
+        after: { value_decoded: after.value_decoded.anchor },
+      },
+    ],
+    struct_definition: {
+      name: 'PackedData',
+      members: [
+        { name: 'rounded', type_label: 'uint128', slot_offset: 0, byte_offset: 0, size: 16 },
+        { name: 'anchor', type_label: 'uint128', slot_offset: 0, byte_offset: 16, size: 16 },
+      ],
+    },
+    changes: base.changes.map((change) => ({ ...change, before, after })),
+  };
+}
+
 test('home search accepts a transaction hash and opens transaction-wide history', async ({ page }) => {
   await page.goto('/');
   await page.getByPlaceholder('Contract address or transaction hash (0x...)').fill(SIMPLE_TX);
@@ -362,7 +423,7 @@ test('structured values show only changed fields without spilling', async ({ pag
   await expect(diff.getByText('claimed', { exact: true })).toBeVisible();
   await expect(diff.getByText('duration', { exact: true })).toHaveCount(0);
   await expect(diff.getByText('amount', { exact: true })).toHaveCount(0);
-  await expect(diff).toContainText('2,000,000,000,000,000,000');
+  await expect(diff).toContainText('2e18');
   expect(await diff.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   const beforeBox = await diff.getByTestId('value-before').boundingBox();
   const afterBox = await diff.getByTestId('value-after').boundingBox();
@@ -373,6 +434,29 @@ test('structured values show only changed fields without spilling', async ({ pag
 
   await diff.getByRole('button', { name: 'Copy new claimed' }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('2000000000000000000');
+});
+
+test('packed change detection uses full values rather than compact display text', async ({ page }) => {
+  const contract = resolutionContract({
+    storage_address: '0x6666666666666666666666666666666666666666',
+    code_addresses: ['0x6666666666666666666666666666666666666666'],
+    name: 'PackedValues',
+    is_verified: true,
+    layout_available: true,
+    slots: [packedStructSlot()],
+  });
+  await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
+    await route.fulfill({ json: resolutionResponse([contract]) });
+  });
+
+  await page.goto(`/1/tx/${RESOLUTION_TX}`);
+  await page.getByTestId('contract-toggle').click();
+
+  const roundedRow = page.getByText('rounded', { exact: true }).locator('xpath=ancestor::tr');
+  await expect(roundedRow.getByTestId('value-before')).toContainText('1.2345e15');
+  await expect(roundedRow.getByTestId('value-after')).toContainText('1.2345e15');
+  await expect(roundedRow.getByTestId('value-arrow')).toBeVisible();
+  await expect(page.getByText('anchor', { exact: true })).toBeVisible();
 });
 
 test('timeline names struct members and stays readable on mobile', async ({ page }) => {
@@ -464,22 +548,32 @@ test('timeline names struct members and stays readable on mobile', async ({ page
 
   await page.goto(`/1/tx/${RESOLUTION_TX}?view=timeline`);
 
+  const truncatedOracle = `${oracle.slice(0, 6)}...${oracle.slice(-4)}`;
+  const truncatedOldRate = `${oldRate.slice(0, 6)}...${oldRate.slice(-4)}`;
+  const truncatedNewRate = `${newRate.slice(0, 6)}...${newRate.slice(-4)}`;
   const noopRow = page.getByTestId('timeline-event').filter({ hasText: '_defaultConfigData.oracle' });
   const changedRow = page.getByTestId('timeline-event').filter({ hasText: '_defaultConfigData.rateCalculator' });
   const booleanRow = page.getByTestId('timeline-event').filter({ hasText: '_defaultConfigData.processed' });
   const smallNumberRow = page.getByTestId('timeline-event').filter({ hasText: '_status' });
-  await expect(noopRow.getByTestId('timeline-value')).toContainText(`${oracle}→${oracle}`);
-  await expect(noopRow.getByRole('button', { name: 'Copy previous oracle' })).toBeVisible();
-  await expect(noopRow.getByRole('button', { name: 'Copy new oracle' })).toBeVisible();
-  await expect(changedRow.getByTestId('timeline-value')).toContainText(oldRate);
-  await expect(changedRow.getByTestId('timeline-value')).toContainText(newRate);
+
+  // No-op writes show the value once with an unchanged indicator, not an arrow.
+  await expect(noopRow.getByTestId('timeline-value')).toContainText(truncatedOracle);
+  await expect(noopRow.getByTestId('value-noop-indicator')).toBeVisible();
+  await expect(noopRow.getByTestId('value-arrow')).toHaveCount(0);
+  await expect(noopRow.getByRole('button', { name: 'Copy oracle' })).toBeVisible();
+  await expect(noopRow.getByRole('button', { name: 'Copy previous oracle' })).toHaveCount(0);
+
+  // Addresses middle-truncate in value cells; copy actions keep full values.
+  await expect(changedRow.getByTestId('timeline-value')).toContainText(truncatedOldRate);
+  await expect(changedRow.getByTestId('timeline-value')).toContainText(truncatedNewRate);
+  await expect(changedRow.getByTestId('timeline-value')).not.toContainText(oldRate);
   await expect(changedRow.getByTestId('timeline-value')).not.toContainText('rateCalculator');
   await expect(booleanRow.getByTestId('timeline-value')).toContainText('true→false');
   await expect(booleanRow.getByRole('button', { name: /Copy (previous|new)/ })).toHaveCount(0);
   await expect(smallNumberRow.getByTestId('timeline-value')).toContainText('1→2');
   await expect(smallNumberRow.getByRole('button', { name: /Copy (previous|new)/ })).toHaveCount(0);
 
-  for (const row of [noopRow, changedRow, booleanRow, smallNumberRow]) {
+  for (const row of [changedRow, booleanRow, smallNumberRow]) {
     const valueDiff = row.getByTestId('value-diff');
     const beforeBox = await valueDiff.getByTestId('value-before').boundingBox();
     const afterBox = await valueDiff.getByTestId('value-after').boundingBox();
@@ -488,14 +582,6 @@ test('timeline names struct members and stays readable on mobile', async ({ page
     expect(Math.abs(beforeBox!.x - afterBox!.x)).toBeLessThan(1);
     expect(afterBox!.y).toBeGreaterThan(beforeBox!.y);
   }
-
-  const noopBeforeColor = await noopRow.getByTestId('value-before').getByTestId('copyable-value-text').evaluate(
-    (element) => getComputedStyle(element).color,
-  );
-  const noopAfterColor = await noopRow.getByTestId('value-after').getByTestId('copyable-value-text').evaluate(
-    (element) => getComputedStyle(element).color,
-  );
-  expect(noopAfterColor).toBe(noopBeforeColor);
 
   const changedBeforeColor = await changedRow.getByTestId('value-before').getByTestId('copyable-value-text').evaluate(
     (element) => getComputedStyle(element).color,
@@ -508,19 +594,18 @@ test('timeline names struct members and stays readable on mobile', async ({ page
   const changedRowBox = await changedRow.boundingBox();
   expect(changedRowBox).not.toBeNull();
   expect(changedRowBox!.height).toBeLessThan(120);
+
+  // The mobile timeline drops slot/step, folds the contract into the
+  // variable cell, and fits the viewport without horizontal panning.
+  await expect(page.getByTestId('slot-reference').first()).toBeHidden();
+  await expect(page.getByTestId('step-reference').first()).toBeHidden();
+  await expect(changedRow.getByRole('link', { name: 'ResupplyPairDeployer' })).toBeVisible();
   const scroll = page.getByTestId('data-table-scroll');
-  const scrollState = await scroll.evaluate((element) => {
-    element.scrollLeft = element.scrollWidth;
-    return {
-      clientWidth: element.clientWidth,
-      scrollWidth: element.scrollWidth,
-      scrollLeft: element.scrollLeft,
-      overflowX: getComputedStyle(element).overflowX,
-    };
-  });
-  expect(scrollState.scrollWidth).toBeGreaterThan(scrollState.clientWidth);
-  expect(scrollState.scrollLeft).toBeGreaterThan(0);
-  expect(scrollState.overflowX).toBe('auto');
+  const scrollState = await scroll.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(scrollState.scrollWidth).toBeLessThanOrEqual(scrollState.clientWidth + 1);
   const valueBox = await changedRow.getByTestId('timeline-value').boundingBox();
   expect(valueBox).not.toBeNull();
   expect(valueBox!.width).toBeGreaterThan(200);
@@ -529,13 +614,17 @@ test('timeline names struct members and stays readable on mobile', async ({ page
   const contractSection = page.getByRole('heading', { name: 'ResupplyPairDeployer' }).locator('xpath=ancestor::section');
   await contractSection.getByTestId('contract-toggle').click();
   const groupedAddressRow = contractSection.getByText('rateCalculator', { exact: true }).locator('xpath=ancestor::tr');
+  const groupedNoopRow = contractSection.getByText('oracle', { exact: true }).locator('xpath=ancestor::tr');
   const groupedBooleanRow = contractSection.getByText('processed', { exact: true }).locator('xpath=ancestor::tr');
   const groupedSmallNumberRow = contractSection.getByText('_status', { exact: true }).locator('xpath=ancestor::tr');
   await expect(groupedAddressRow.getByTestId('value-diff').getByRole('button', { name: 'Copy value' })).toHaveCount(2);
+  await expect(groupedNoopRow.getByTestId('value-noop-indicator')).toBeVisible();
+  await expect(groupedNoopRow.getByTestId('value-arrow')).toHaveCount(0);
   await expect(groupedBooleanRow.getByTestId('value-diff').getByRole('button', { name: 'Copy value' })).toHaveCount(0);
   await expect(groupedBooleanRow.getByRole('link')).toHaveCount(0);
   await expect(groupedSmallNumberRow.getByTestId('value-diff').getByRole('button', { name: 'Copy value' })).toHaveCount(0);
-  await expect(groupedSmallNumberRow.getByRole('button', { name: 'Copy value' })).toHaveCount(1);
+  // The slot column (and its copy action) is hidden at mobile widths.
+  await expect(groupedSmallNumberRow.getByRole('button', { name: 'Copy value' })).toHaveCount(0);
 });
 
 test('transaction summary, controls, and copy actions stay compact at wide widths', async ({ page }) => {
@@ -703,7 +792,7 @@ test('reverted child writes remain grouped and in the global timeline', async ({
   await page.getByRole('button', { name: 'Hex' }).click();
   await expect(page).toHaveURL(new RegExp('values=hex'));
   await expect(page.getByRole('button', { name: 'Hex' })).toHaveAttribute('aria-pressed', 'true');
-  await expect(firstTimelineRow.getByTestId('value-before')).toContainText('0x');
+  await expect(firstTimelineRow.getByTestId('timeline-value')).toContainText('0x');
 });
 
 test('verified sources recover proxy, namespace, legacy, and Vyper variable names', async ({ page }) => {
@@ -729,6 +818,15 @@ test('verified sources recover proxy, namespace, legacy, and Vyper variable name
   await search.fill('nonreentrant.lock');
   await expect(page.getByTestId('contract-toggle')).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByText('nonreentrant.lock', { exact: true })).toBeVisible();
+  // The lock is written back to its starting value, so it renders once
+  // with the unchanged indicator instead of a before → after arrow.
+  await expect(page.getByTestId('value-noop-indicator').first()).toBeVisible();
+
+  await search.fill('current_debt');
+  await expect(page.getByText('current_debt', { exact: true })).toHaveCount(2);
+
+  await search.fill('lastRequestId');
+  await expect(page.getByText('lastRequestId', { exact: true })).toBeVisible();
 
   const valueDiff = page.getByTestId('value-diff').first();
   const beforeBox = await valueDiff.getByTestId('value-before').boundingBox();
@@ -741,12 +839,6 @@ test('verified sources recover proxy, namespace, legacy, and Vyper variable name
   expect(Math.abs(beforeBox!.y - arrowBox!.y)).toBeLessThan(1);
   expect(arrowBox!.x).toBeGreaterThanOrEqual(beforeBox!.x + beforeBox!.width);
   expect(afterBox!.y).toBeGreaterThan(beforeBox!.y);
-
-  await search.fill('current_debt');
-  await expect(page.getByText('current_debt', { exact: true })).toHaveCount(2);
-
-  await search.fill('lastRequestId');
-  await expect(page.getByText('lastRequestId', { exact: true })).toBeVisible();
 });
 
 test('nested mappings inside mapping structs show the full resolved path', async ({ page }) => {
@@ -856,7 +948,8 @@ test('storage evidence remains contained and operable at narrow widths', async (
 
   const scroller = lidoSection.getByTestId('data-table-scroll');
   await expect(scroller).toBeVisible();
-  expect(await scroller.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+  // With slot/step hidden at mobile widths the table fits the viewport.
+  expect(await scroller.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   const overflowing = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>('body *'))
     .filter((element) => (
       !element.closest('[data-testid="data-table-scroll"]')

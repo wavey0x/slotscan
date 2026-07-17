@@ -12,10 +12,11 @@ import { useState } from 'react';
 import { SlotChangeResponse } from '@/lib/types';
 import {
   cn,
+  valuesEqual,
 } from '@/lib/utils';
 import { HoverCell } from '@/components/ui/HoverCell';
 import { DetailPopover } from '@/components/ui/DetailPopover';
-import { isStructuredDecodedValue, StructuredValueDiff, ValueDiff, valuesEqual } from './ValueDiff';
+import { isStructuredDecodedValue, StructuredValueDiff, ValueDiff } from './ValueDiff';
 import { KeyedVariablePath } from './KeyedVariablePath';
 import { StorageEvidenceDetail } from './StorageEvidenceDetail';
 import { InterimPackedChangeRows, PackedFieldRow } from './PackedFieldRows';
@@ -54,7 +55,7 @@ export function SlotRow({
     resolvedLeafType,
     slotNumber,
     firstStep,
-    changedPackedFields,
+    displayedPackedFields,
     showPackedAsTree,
     singlePackedField,
     initialValue,
@@ -77,7 +78,7 @@ export function SlotRow({
       onClick={() => setExpanded(!expanded)}
       aria-label={expanded ? 'Collapse write history' : 'Expand write history'}
       aria-expanded={expanded}
-      className="w-4 h-4 flex items-center justify-center text-gray-400 hover:text-gray-700 text-xs font-mono leading-none"
+      className="touch-hitbox w-4 h-4 flex items-center justify-center text-gray-400 hover:text-gray-700 text-xs font-mono leading-none"
     >
       {expanded ? '−' : '+'}
     </button>
@@ -100,17 +101,13 @@ export function SlotRow({
             </DetailPopover>
             {revertedNotice && <div>{revertedNotice}</div>}
           </td>
-          <td className={cn('px-1 py-0.5 w-8 align-top', isFirst && 'pt-1')}>
+          <td className={cn('hidden px-1 py-0.5 w-8 align-top sm:table-cell', isFirst && 'pt-1')}>
             <DetailPopover content={<div className="font-mono text-xs text-gray-100 break-all">{slot.slot}</div>}>
-              <HoverCell
-                display={slotNumber}
-                value={slot.slot}
-                colorClass="text-xs text-gray-500 font-mono"
-              />
+              <HoverCell display={slotNumber} value={slot.slot} colorClass="text-xs text-gray-500 font-mono" />
             </DetailPopover>
           </td>
           {showStep && (
-            <td className={cn('px-1 py-0.5 text-right w-8 align-top', isFirst && 'pt-1')}>
+            <td className={cn('hidden px-1 py-0.5 text-right w-8 align-top sm:table-cell', isFirst && 'pt-1')}>
               {firstStep !== null && firstStep !== undefined && (
                 <DetailPopover content={<div className="font-mono text-[10px] text-gray-100">Step: {firstStep}</div>}>
                   <span className="text-[10px] text-gray-400 font-mono cursor-default">
@@ -124,12 +121,12 @@ export function SlotRow({
       )}
 
       {/* PACKED FIELDS: Individual field rows (only when showing as tree) */}
-      {showPackedAsTree && !showHex && changedPackedFields.map((field, idx) => (
+      {showPackedAsTree && !showHex && displayedPackedFields.map((field, idx) => (
         <PackedFieldRow
           key={idx}
           field={field}
-          isLast={idx === changedPackedFields.length - 1}
-          totalFields={changedPackedFields.length}
+          isLast={idx === displayedPackedFields.length - 1}
+          totalFields={displayedPackedFields.length}
           chainId={chainId}
           showStep={showStep}
           // Show slot/step on first field row only if no struct header
@@ -213,7 +210,7 @@ export function SlotRow({
               const beforeDecoded = singlePackedField ? singlePackedField.before.value_decoded : slot.before.value_decoded;
               const afterDecoded = singlePackedField ? singlePackedField.after.value_decoded : slot.after.value_decoded;
               const unchanged = valuesEqual(beforeDecoded, afterDecoded);
-              const afterClassName = unchanged ? 'text-gray-300' : 'text-gray-900';
+              const afterClassName = unchanged ? 'text-gray-400' : 'text-gray-900';
 
               if (!showHex && isStructuredDecodedValue(beforeDecoded) && isStructuredDecodedValue(afterDecoded)) {
                 return (
@@ -221,13 +218,14 @@ export function SlotRow({
                     before={beforeDecoded}
                     after={afterDecoded}
                     beforeClassName="text-gray-300"
-                    afterClassName={afterClassName}
+                    afterClassName={unchanged ? 'text-gray-300' : 'text-gray-900'}
                   />
                 );
               }
 
               return (
                 <ValueDiff
+                  unchanged={unchanged}
                   beforeClassName="text-gray-300"
                   afterClassName={afterClassName}
                   before={
@@ -253,18 +251,14 @@ export function SlotRow({
             })()}
           </td>
 
-          <td className={cn('px-1 py-0.5 w-8 align-top', isFirst && 'pt-1')}>
+          <td className={cn('hidden px-1 py-0.5 w-8 align-top sm:table-cell', isFirst && 'pt-1')}>
             <DetailPopover content={<div className="font-mono text-xs text-gray-100 break-all">{slot.slot}</div>}>
-              <HoverCell
-                display={slotNumber}
-                value={slot.slot}
-                colorClass="text-xs text-gray-500 font-mono"
-              />
+              <HoverCell display={slotNumber} value={slot.slot} colorClass="text-xs text-gray-500 font-mono" />
             </DetailPopover>
           </td>
 
           {showStep && (
-            <td className={cn('px-1 py-0.5 text-right w-8 align-top', isFirst && 'pt-1')}>
+            <td className={cn('hidden px-1 py-0.5 text-right w-8 align-top sm:table-cell', isFirst && 'pt-1')}>
               {firstStep !== null && firstStep !== undefined && (
                 <DetailPopover content={<div className="font-mono text-[10px] text-gray-100">Step: {firstStep}</div>}>
                   <span className="text-[10px] text-gray-400 font-mono cursor-default">
@@ -301,7 +295,7 @@ export function SlotRow({
         const oldVal = storageDisplayValue(change.before.value_decoded, change.before.value_encoded, showHex);
         const newVal = storageDisplayValue(change.after.value_decoded, change.after.value_encoded, showHex);
         const unchanged = valuesEqual(change.before.value_decoded, change.after.value_decoded);
-        const afterClassName = unchanged ? 'text-gray-300' : 'text-gray-900';
+        const afterClassName = unchanged ? 'text-gray-400' : 'text-gray-900';
 
         return (
           <tr key={idx} className={cn('bg-gray-100/80', !isFirstChange && 'border-t border-gray-300')}>
@@ -328,6 +322,7 @@ export function SlotRow({
                 />
               ) : (
                 <ValueDiff
+                  unchanged={unchanged}
                   beforeClassName="text-gray-300"
                   afterClassName={afterClassName}
                   before={
@@ -351,9 +346,9 @@ export function SlotRow({
                 />
               )}
             </td>
-            <td className="px-1 py-0.5 align-top" />
+            <td className="hidden px-1 py-0.5 align-top sm:table-cell" />
             {showStep && (
-              <td className="px-1 py-0.5 text-right align-top">
+              <td className="hidden px-1 py-0.5 text-right align-top sm:table-cell">
                 {change.step !== null && change.step !== undefined && (
                   <span className="text-[10px] text-gray-400 font-mono">
                     {change.step}

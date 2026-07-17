@@ -250,11 +250,16 @@ Do not merge the semantics. Reuse the presentation system.
 - no gray header fill unless a future contrast test proves it necessary;
 - top-align multi-line cells;
 - left-align decoded and raw values;
-- use `overflow-x-auto` with a minimum table width instead of allowing columns to overlap;
-- never solve narrow screens by silently dropping forensic data;
-- abbreviate hashes and keys in display, preserve the full value in copy and detail actions;
+- columns carry a priority: identity and value columns (contract, variable, value) are essential; reference columns (slot, step) are secondary;
+- below the `sm` breakpoint, secondary columns are dropped and the table fits the viewport with no horizontal panning; the contract folds into the variable cell in Timeline view;
+- dropping a secondary column must not orphan its data: the full slot stays reachable through the variable's evidence disclosure, which opens on tap as well as hover;
+- at `sm` and above, tables keep a minimum readable width; horizontal scrolling engages only when the table exceeds its container, signaled by edge fades on the scrollable side;
+- when a table fits its container, column headers stick to the viewport top during vertical scroll;
+- abbreviate hashes, keys, and addresses in display (`0xa346...4150`), preserve the full value in copy and detail actions;
+- integers above 15 digits display compactly (`1e27`, `1.2345e21`); tooltips and copy actions carry full precision;
 - one-key mappings remain inline; multi-key mappings use one key per continuation line;
-- the before value and arrow occupy the first line; the after value begins at the same left edge on the second line.
+- the before value and arrow occupy the first line; the after value begins at the same left edge on the second line;
+- a write whose value did not change shows the value once with the unchanged indicator (`↺`) instead of a before → after arrow, at every disclosure level (net row, timeline event, interim write, packed field).
 
 ### Canonical row building blocks
 
@@ -378,9 +383,11 @@ If authoritative backend progress becomes available later, expose actual stages.
 - Icon-only buttons have specific accessible names: “Copy transaction hash,” “Copy storage path,” and similar.
 - Expand/collapse controls expose `aria-expanded` and identify their target.
 - View switches expose a selected state and are represented in the URL.
-- Tooltips are supplemental; no required content is hover-only.
+- Tooltips are supplemental; no required content is hover-only. Detail disclosures open on tap and focus as well as hover.
 - Tables keep semantic headers and associations.
-- Data tables horizontally scroll below their minimum readable width.
+- Data tables horizontally scroll below their minimum readable width at `sm` and above; below `sm` they shed secondary columns instead and fit the viewport.
+- Small icon controls (copy, expand) use the `.touch-hitbox` recipe: an invisible hit area grown to a comfortable tap size on coarse pointers, exact on fine pointers.
+- The global header keeps an in-place search at every width; on narrow screens it expands from an icon into a full-width row.
 - The page itself should not acquire horizontal overflow.
 - Focus indicators remain visible against white and gray backgrounds.
 - Motion respects `prefers-reduced-motion`.

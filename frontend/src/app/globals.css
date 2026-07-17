@@ -47,10 +47,11 @@
     overflow-x: hidden;
   }
 
+  /* Horizontal overflow is clipped at the root only; overflow on body would
+     make it a scroll container and break position: sticky table headers. */
   body {
     @apply bg-white text-gray-700 font-mono antialiased;
     max-width: 100%;
-    overflow-x: hidden;
     transition: background-color 150ms ease, color 150ms ease;
   }
 
@@ -98,6 +99,25 @@
 @layer components {
   .tree-line {
     @apply border-l border-gray-300;
+  }
+
+  /* Grow small controls to a comfortable tap size on touch devices without
+     changing their visual footprint. Pointer-precise devices keep the exact
+     hit area so nearby text stays selectable. */
+  .touch-hitbox {
+    position: relative;
+  }
+
+  .touch-hitbox::after {
+    content: '';
+    position: absolute;
+    inset: -0.5rem;
+  }
+
+  @media (pointer: fine) {
+    .touch-hitbox::after {
+      inset: 0;
+    }
   }
 
   .theme-logo {

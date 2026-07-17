@@ -1,4 +1,5 @@
 import { ReactNode } from 'react';
+import { cn } from '@/lib/utils';
 import { DataTable, dataTableCellClass, dataTableHeadCellClass } from '@/components/ui/DataTable';
 
 interface StorageTableProps {
@@ -27,11 +28,11 @@ export function StorageTableColumns({
   return (
     <colgroup>
       {showExpand && <col className="w-6" />}
-      {showContract && <col className="w-[22%]" />}
+      {showContract && <col className="hidden w-[22%] sm:table-column" />}
       <col className={showContract ? 'w-[30%]' : 'w-[38%]'} />
       <col />
-      <col className="w-28" />
-      {showStep && <col className="w-16" />}
+      <col className="hidden w-28 sm:table-column" />
+      {showStep && <col className="hidden w-16 sm:table-column" />}
     </colgroup>
   );
 }
@@ -44,12 +45,12 @@ export function StorageTableHeader({
   return (
     <thead>
       <tr className="border-b border-gray-300">
-        {showExpand && <th aria-label="Row actions" className="w-6 px-1 py-1.5" />}
-        {showContract && <th className={dataTableHeadCellClass}>Contract</th>}
+        {showExpand && <th aria-label="Row actions" className={cn(dataTableHeadCellClass, 'w-6 px-1')} />}
+        {showContract && <th className={cn(dataTableHeadCellClass, 'hidden sm:table-cell')}>Contract</th>}
         <th className={dataTableHeadCellClass}>Variable</th>
         <th className={dataTableHeadCellClass}>Value diff</th>
-        <th className={dataTableHeadCellClass}>Slot</th>
-        {showStep && <th className={dataTableHeadCellClass}>Step</th>}
+        <th className={cn(dataTableHeadCellClass, 'hidden sm:table-cell')}>Slot</th>
+        {showStep && <th className={cn(dataTableHeadCellClass, 'hidden sm:table-cell')}>Step</th>}
       </tr>
     </thead>
   );

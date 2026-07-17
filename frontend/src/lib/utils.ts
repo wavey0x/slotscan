@@ -5,6 +5,16 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+export function valuesEqual(before: unknown, after: unknown): boolean {
+  if (Object.is(before, after)) return true;
+  if (typeof before !== 'object' || typeof after !== 'object') return false;
+  try {
+    return JSON.stringify(before) === JSON.stringify(after);
+  } catch {
+    return false;
+  }
+}
+
 export function isAddress(value: string): boolean {
   return /^0x[a-fA-F0-9]{40}$/.test(value);
 }
@@ -276,7 +286,28 @@ export function formatBigNumber(value: string | number | bigint): string {
 }
 
 /**
- * Format decoded value without abbreviations
+ * Digits above which integers display in compact scientific form.
+ * Full precision stays available via copy actions and tooltips.
+ */
+const COMPACT_NUMERIC_DIGITS = 15;
+
+/**
+ * Compact display for very large integers, e.g. 1e27 or 1.2345e21.
+ * Returns null when the value is small enough to display in full.
+ */
+function formatCompactNumber(value: bigint): string | null {
+  const negative = value < BigInt(0);
+  const digits = (negative ? -value : value).toString();
+  if (digits.length <= COMPACT_NUMERIC_DIGITS) return null;
+  const fraction = digits.slice(1, 5).replace(/0+$/, '');
+  const mantissa = fraction ? `${digits[0]}.${fraction}` : digits[0];
+  return `${negative ? '-' : ''}${mantissa}e${digits.length - 1}`;
+}
+
+/**
+ * Format decoded value for display. Very large integers compact to
+ * scientific notation and addresses middle-truncate; copy actions and
+ * tooltips keep the full value.
  */
 export function formatDecodedValue(value: unknown): string {
   if (value === null || value === undefined) return '';
@@ -294,7 +325,7 @@ export function formatDecodedValue(value: unknown): string {
   // Try BigInt parsing (handles comma-separated integers)
   const big = tryParseBigInt(str);
   if (big !== null) {
-    return formatBigNumber(big);
+    return formatCompactNumber(big) ?? formatBigNumber(big);
   }
 
   // If it's a number string, format with commas
@@ -302,9 +333,9 @@ export function formatDecodedValue(value: unknown): string {
     return formatBigNumber(str);
   }
 
-  // If it's an address, return as-is
+  // If it's an address, middle-truncate for display
   if (/^0x[a-fA-F0-9]{40}$/.test(str)) {
-    return str;
+    return truncateAddress(str);
   }
 
   return str;
@@ -363,33 +394,16 @@ export function getCopyValue(decoded: unknown, encoded: string): string {
   return encoded;
 }
 
-export function formatScientific(value: string | number | bigint): string | null {
-  try {
-    if (typeof value === 'bigint') {
-      const s = value < 0 ? (-value).toString() : value.toString();
-      if (s === '0') return '0';
-      const mantissa = s.length > 1 ? `${s[0]}.${s.slice(1, 5)}` : s;
-      const exp = s.length - 1;
-      return `${value < 0 ? '-' : ''}${mantissa}e${exp}`;
-    }
-    const str = typeof value === 'number' ? value.toString() : String(value);
-    const cleaned = str.replace(/,/g, '');
-    if (/^-?\d+$/.test(cleaned)) {
-      const big = BigInt(cleaned);
-      return formatScientific(big);
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 export function getTooltipValue(decoded: unknown, encoded: string): string {
   if (decoded === null || decoded === undefined) return encoded;
 
-  // Only show scientific notation for large numbers (>= 1e9)
-  // For smaller numbers, just show the value as-is
+  // Displays truncate addresses and compact large numbers, so tooltips
+  // carry the full-precision value instead.
   try {
+    if (typeof decoded === 'string' && /^0x[a-fA-F0-9]{40}$/.test(decoded)) {
+      return decoded;
+    }
+
     let numValue: bigint | number;
     if (typeof decoded === 'bigint') {
       numValue = decoded;
@@ -413,8 +427,7 @@ export function getTooltipValue(decoded: unknown, encoded: string): string {
 
     const threshold = typeof numValue === 'bigint' ? BigInt(1e9) : 1e9;
     if (magnitude >= threshold) {
-      const sci = formatScientific(numValue);
-      return sci ?? encoded;
+      return formatBigNumber(numValue);
     }
 
     return encoded;

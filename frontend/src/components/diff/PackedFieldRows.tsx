@@ -1,8 +1,8 @@
 import { PackedFieldResponse, StorageChangeResponse } from '@/lib/types';
-import { cn, formatDecodedValue } from '@/lib/utils';
+import { cn, formatDecodedValue, valuesEqual } from '@/lib/utils';
 import { HoverCell } from '@/components/ui/HoverCell';
 import { DetailPopover } from '@/components/ui/DetailPopover';
-import { ValueDiff, valuesEqual } from './ValueDiff';
+import { ValueDiff } from './ValueDiff';
 import { storageHoverProps } from './slotDisplay';
 
 export function PackedFieldRow({
@@ -49,20 +49,21 @@ export function PackedFieldRow({
       </td>
       <td className="px-1 py-0.5 align-top">
         <ValueDiff
+          unchanged={unchanged}
           beforeClassName="text-gray-300"
           afterClassName={afterClassName}
           before={<HoverCell display={initialDisplay} {...storageHoverProps(field.before.value_decoded, initialEncoded)} chainId={chainId} colorClass="font-mono text-xs text-gray-300" />}
           after={<HoverCell display={finalDisplay} {...storageHoverProps(field.after.value_decoded, finalEncoded)} chainId={chainId} colorClass={cn('font-mono text-xs', afterClassName)} />}
         />
       </td>
-      <td className="w-8 px-1 py-0 align-top">
+      <td className="hidden w-8 px-1 py-0 align-top sm:table-cell">
         {slotInfo && (
           <DetailPopover content={<div className="break-all font-mono text-xs text-gray-100">{slotInfo.full}</div>}>
             <HoverCell display={slotInfo.display} value={slotInfo.full} colorClass="font-mono text-xs text-gray-500" />
           </DetailPopover>
         )}
       </td>
-      {showStep && <td className="w-8 px-1 py-0 align-top" />}
+      {showStep && <td className="hidden w-8 px-1 py-0 align-top sm:table-cell" />}
     </tr>
   );
 }
@@ -119,12 +120,12 @@ export function InterimPackedChangeRows({
                   <span className="text-gray-400">{field.type_label}</span>{' '}
                   <span className="text-gray-600">{field.name}</span>
                 </span>
-                <ValueDiff before={beforeDisplay} after={afterDisplay} beforeClassName="text-gray-300" afterClassName={unchanged ? 'text-gray-300' : 'text-gray-700'} />
+                <ValueDiff unchanged={unchanged} before={beforeDisplay} after={afterDisplay} beforeClassName="text-gray-300" afterClassName={unchanged ? 'text-gray-400' : 'text-gray-700'} />
               </div>
             </td>
-            <td className="px-1 py-0.5 align-top" />
+            <td className="hidden px-1 py-0.5 align-top sm:table-cell" />
             {showStep && (
-              <td className="px-1 py-0.5 align-top">
+              <td className="hidden px-1 py-0.5 align-top sm:table-cell">
                 {fieldIndex === 0 && change.step !== null && change.step !== undefined && <span className="font-mono text-[10px] text-gray-400">{change.step}</span>}
               </td>
             )}
