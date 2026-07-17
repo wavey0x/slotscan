@@ -1123,22 +1123,23 @@ test('transaction summary, controls, and copy actions stay compact at wide width
   const valuesBox = await page.getByRole('group', { name: 'Values' }).boundingBox();
   expect(viewBox).not.toBeNull();
   expect(valuesBox).not.toBeNull();
-  expect(viewBox!.height).toBeLessThanOrEqual(24);
-  expect(valuesBox!.height).toBeLessThanOrEqual(24);
-  expect(viewBox!.width).toBeGreaterThanOrEqual(134);
-  expect(Math.abs(viewBox!.x - valuesBox!.x)).toBeLessThanOrEqual(1);
-  expect(Math.abs(viewBox!.width - valuesBox!.width)).toBeLessThanOrEqual(1);
+  expect(viewBox!.height).toBeLessThanOrEqual(30);
+  expect(valuesBox!.height).toBeLessThanOrEqual(30);
+  expect(Math.abs(viewBox!.height - valuesBox!.height)).toBeLessThanOrEqual(1);
+  expect(Math.abs(viewBox!.y - valuesBox!.y)).toBeLessThanOrEqual(1);
+  expect(valuesBox!.x).toBeGreaterThanOrEqual(viewBox!.x + viewBox!.width);
   expect(await page.getByRole('button', { name: 'Timeline' }).evaluate(
     (element) => element.scrollWidth <= element.clientWidth,
   )).toBe(true);
-  expect(valuesBox!.y).toBeGreaterThanOrEqual(viewBox!.y + viewBox!.height);
   const searchBox = await page.getByPlaceholder('Search contract, address, slot, or variable').boundingBox();
   const controlsBox = await page.getByTestId('transaction-view-controls').boundingBox();
+  const toolbarBox = await page.getByTestId('transaction-controls').boundingBox();
   expect(searchBox).not.toBeNull();
   expect(controlsBox).not.toBeNull();
-  expect(searchBox!.width).toBeLessThanOrEqual(321);
-  expect(searchBox!.x - (viewBox!.x + viewBox!.width)).toBeGreaterThanOrEqual(11);
-  expect(searchBox!.x - (viewBox!.x + viewBox!.width)).toBeLessThanOrEqual(13);
+  expect(toolbarBox).not.toBeNull();
+  expect(searchBox!.x).toBeGreaterThanOrEqual(valuesBox!.x + valuesBox!.width);
+  expect(searchBox!.x + searchBox!.width).toBeGreaterThanOrEqual(toolbarBox!.x + toolbarBox!.width - 2);
+  expect(Math.abs(searchBox!.height - viewBox!.height)).toBeLessThanOrEqual(1);
   expect(Math.abs(
     searchBox!.y + searchBox!.height / 2 - (controlsBox!.y + controlsBox!.height / 2),
   )).toBeLessThanOrEqual(1);
@@ -1174,13 +1175,13 @@ test('transaction summary and controls wrap cleanly at narrow widths', async ({ 
   expect(viewBox).not.toBeNull();
   expect(valuesBox).not.toBeNull();
   expect(searchBox).not.toBeNull();
-  expect(Math.abs(viewBox!.x - valuesBox!.x)).toBeLessThanOrEqual(1);
-  expect(Math.abs(viewBox!.width - valuesBox!.width)).toBeLessThanOrEqual(1);
-  expect(valuesBox!.y).toBeGreaterThanOrEqual(viewBox!.y + viewBox!.height);
+  expect(Math.abs(viewBox!.y - valuesBox!.y)).toBeLessThanOrEqual(1);
+  expect(valuesBox!.x).toBeGreaterThanOrEqual(viewBox!.x + viewBox!.width);
   expect(searchBox!.y).toBeGreaterThanOrEqual(Math.max(
     viewBox!.y + viewBox!.height,
     valuesBox!.y + valuesBox!.height,
   ));
+  expect(searchBox!.width).toBeGreaterThanOrEqual(300);
   const overflowing = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>('body *'))
     .filter((element) => element.getBoundingClientRect().right > window.innerWidth + 1)
     .map((element) => `${element.tagName.toLowerCase()}.${element.className}`)
