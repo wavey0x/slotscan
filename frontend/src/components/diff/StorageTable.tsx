@@ -35,12 +35,12 @@ export function StorageTableColumns({
   return (
     <colgroup>
       {showExpand && <col className="w-6" />}
-      {showContract && <col className="hidden w-[22%] sm:table-column" />}
+      {showContract && <col className="hidden w-[21%] sm:table-column" />}
       <col className={showSlotOnMobile
-        ? (showContract ? 'w-[38%] sm:w-[30%]' : 'w-[42%] sm:w-[38%]')
+        ? (showContract ? 'w-[38%] sm:w-[29%]' : 'w-[42%] sm:w-[38%]')
         : (showContract ? 'w-[30%]' : 'w-[38%]')} />
       <col />
-      <col className={showSlotOnMobile ? 'w-20 sm:w-28' : 'hidden w-28 sm:table-column'} />
+      <col className={showSlotOnMobile ? 'w-20 sm:w-24' : 'hidden w-28 sm:table-column'} />
       {showStep && <col className="hidden w-16 sm:table-column" />}
     </colgroup>
   );
