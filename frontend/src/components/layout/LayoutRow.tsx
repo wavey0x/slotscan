@@ -12,7 +12,7 @@ import { CopyButton } from '@/components/ui/CopyButton';
 import { DetailPopover } from '@/components/ui/DetailPopover';
 import { MappingKeyInput } from './MappingKeyInput';
 import { ArrayIndexInput } from './ArrayIndexInput';
-import { cn, formatDecodedValue } from '@/lib/utils';
+import { cn, formatDecodedValue, truncateHash } from '@/lib/utils';
 
 interface LayoutRowProps {
   variable: StorageViewVariable;
@@ -121,6 +121,9 @@ export const LayoutRow = memo(function LayoutRow({
                 const rendered = showHex
                   ? value.value_encoded!
                   : formatDecodedValue(value.value_decoded, { fullAddresses: true });
+                const compact = showHex
+                  ? truncateHash(value.value_encoded!, 6)
+                  : formatDecodedValue(value.value_decoded);
                 return (
                   <div key={`${value.declaration_id}:${value.path}`} className="flex min-w-0 items-center gap-1">
                     {value.path !== variable.name && (
@@ -132,7 +135,12 @@ export const LayoutRow = memo(function LayoutRow({
                       'break-all font-mono leading-tight text-gray-900',
                       showHex ? 'text-[10px]' : 'text-xs'
                     )}>
-                      {rendered}
+                      {compact === rendered ? rendered : (
+                        <>
+                          <span className="sm:hidden">{compact}</span>
+                          <span className="hidden sm:inline">{rendered}</span>
+                        </>
+                      )}
                     </span>
                     <CopyButton
                       label={`Copy ${value.path} value`}
@@ -155,8 +163,8 @@ export const LayoutRow = memo(function LayoutRow({
       </tr>
 
       {expanded && isMapping && (
-        <tr className="bg-gray-50/50">
-          <td colSpan={5} className="border-b border-gray-100 px-4 pb-2 pt-1">
+        <tr className="block bg-gray-50/50 sm:table-row">
+          <td colSpan={5} className="block border-b border-gray-100 px-4 pb-2 pt-1 sm:table-cell">
             <MappingKeyInput
               declarationId={variable.declaration_id}
               keyTypes={mappingKeyTypes}
@@ -172,8 +180,8 @@ export const LayoutRow = memo(function LayoutRow({
       )}
 
       {expanded && isArray && !isMapping && (
-        <tr className="bg-gray-50/50">
-          <td colSpan={5} className="border-b border-gray-100 px-4 pb-2 pt-1">
+        <tr className="block bg-gray-50/50 sm:table-row">
+          <td colSpan={5} className="block border-b border-gray-100 px-4 pb-2 pt-1 sm:table-cell">
             <ArrayIndexInput
               declarationId={variable.declaration_id}
               arrayLength={varType?.array_length ?? null}

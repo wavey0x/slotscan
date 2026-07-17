@@ -172,6 +172,40 @@ test('high slots stay exact strings in the table and disclosure', async ({ page 
   await expect(page.getByRole('dialog').getByText(highSlot, { exact: true })).toBeVisible();
 });
 
+test('address values stay on one line and use the full table width on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockView(page, {
+    variables: [
+      variable('decl:0', 'owner', '0x2', 't_address', 'address'),
+      variable('decl:1', 'max_fee', '0x4', 't_array', 'uint256[9]'),
+    ],
+    types: {
+      t_uint256: scalarType(),
+      t_address: scalarType('t_address', 'address', '20'),
+      t_array: {
+        ...scalarType('t_array', 'uint256[9]'),
+        kind: 'array',
+        encoding: 'inplace',
+        element_type: 't_uint256',
+        array_length: '9',
+      },
+    },
+    values: [value('decl:0', 'owner', '0x2', '0xff12b7B0dF9a2A96CBc09b3822B4Db43a575cCEE')],
+  });
+  await page.goto(`/1/${ADDRESS}`);
+
+  // An expanded lookup row's spanning cell must not add a phantom column.
+  await page.getByRole('button', { name: 'Expand max_fee' }).click();
+
+  const compactValue = page.getByText('0xff12...cCEE', { exact: true });
+  await expect(compactValue).toBeVisible();
+  const valueBox = (await compactValue.boundingBox())!;
+  expect(valueBox.height).toBeLessThanOrEqual(20);
+  const cellRight = await compactValue.evaluate((element) => element.closest('td')!.getBoundingClientRect().right);
+  const tableRight = await page.getByRole('table').evaluate((element) => element.getBoundingClientRect().right);
+  expect(tableRight - cellRight).toBeLessThanOrEqual(1);
+});
+
 test('packed values sharing one word remain separate logical rows', async ({ page }) => {
   await mockView(page, {
     variables: [

@@ -41,19 +41,12 @@ export function LayoutTable({
   return (
     <div>
       <DataTable minWidth="50rem">
-        <colgroup>
-          <col className="w-6" />
-          <col className="w-[100px]" />
-          <col className="w-[120px]" />
-          <col className="hidden w-[72px] sm:table-column" />
-          <col />
-        </colgroup>
         <thead>
           <tr className="border-b border-gray-300">
             <th className={cn(dataTableHeadCellClass, 'w-6')}></th>
-            <th className={dataTableHeadCellClass}>Variable</th>
-            <th className={dataTableHeadCellClass}>Type</th>
-            <th className={cn(dataTableHeadCellClass, 'hidden sm:table-cell')}>Slot</th>
+            <th className={cn(dataTableHeadCellClass, 'w-[100px]')}>Variable</th>
+            <th className={cn(dataTableHeadCellClass, 'w-[120px]')}>Type</th>
+            <th className={cn(dataTableHeadCellClass, 'hidden w-[72px] sm:table-cell')}>Slot</th>
             <th className={dataTableHeadCellClass}>Value</th>
           </tr>
         </thead>
