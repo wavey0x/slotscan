@@ -3,31 +3,58 @@
 import { useState } from 'react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { ComputedSlotLookup } from '@/lib/types';
-import { fetchSlotValue } from '@/lib/api';
 import {
-  computeMappingSlot,
-  computeNestedMappingSlot,
-  slotToHex,
-  getKeyTypeHint,
-  validateKey,
-} from '@/lib/slot-utils';
+  StorageQueryLookup,
+  StorageViewResponse,
+} from '@/lib/types';
+import { queryStorage } from '@/lib/api';
 import { LookupResultsTable } from './LookupResultsTable';
 
 interface MappingKeyInputProps {
-  baseSlot: number;
+  declarationId: string;
   keyTypes: { type: string; label: string }[];
   chainId: string;
   address: string;
-  lookups: ComputedSlotLookup[];
-  onLookup: (lookup: ComputedSlotLookup) => void;
+  blockRef: StorageViewResponse['block_ref'];
+  layoutId: string;
+  lookups: StorageQueryLookup[];
+  onLookup: (lookup: StorageQueryLookup) => void;
+}
+
+function keyHint(type: string): string {
+  const normalized = type.toLowerCase();
+  if (normalized.includes('address')) return '0x… address';
+  if (normalized.includes('bool')) return 'true or false';
+  if (normalized.includes('bytes')) return '0x… bytes';
+  if (normalized.includes('int')) return 'integer';
+  return 'mapping key';
+}
+
+function syntaxError(value: string, type: string): string | null {
+  const normalized = type.toLowerCase();
+  if (!value.trim()) return 'A value is required';
+  if (normalized.includes('address') && !/^0x[0-9a-fA-F]{40}$/.test(value)) {
+    return 'Enter a 20-byte hexadecimal address';
+  }
+  if (normalized.includes('bool') && !/^(true|false|0|1)$/i.test(value)) {
+    return 'Enter true, false, 0, or 1';
+  }
+  if (
+    (normalized.includes('uint') || normalized.includes('int'))
+    && !/^-?(?:0x[0-9a-fA-F]+|\d+)$/.test(value)
+  ) {
+    return 'Enter a decimal or hexadecimal integer';
+  }
+  return null;
 }
 
 export function MappingKeyInput({
-  baseSlot,
+  declarationId,
   keyTypes,
   chainId,
   address,
+  blockRef,
+  layoutId,
   lookups,
   onLookup,
 }: MappingKeyInputProps) {
@@ -35,62 +62,38 @@ export function MappingKeyInput({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleKeyChange = (index: number, value: string) => {
-    const newKeys = [...keys];
-    newKeys[index] = value;
-    setKeys(newKeys);
-    setError(null);
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    // Validate all keys
-    for (let i = 0; i < keys.length; i++) {
-      const validationError = validateKey(keys[i], keyTypes[i].type);
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    for (let index = 0; index < keys.length; index += 1) {
+      const validationError = syntaxError(keys[index], keyTypes[index].type);
       if (validationError) {
-        setError(`Key ${i + 1}: ${validationError}`);
+        setError(`Key ${index + 1}: ${validationError}`);
         return;
       }
     }
 
     setIsLoading(true);
     setError(null);
-
     try {
-      // Compute the slot
-      let computedSlot: bigint;
-
-      if (keys.length === 1) {
-        computedSlot = computeMappingSlot(
-          BigInt(baseSlot),
-          keys[0],
-          keyTypes[0].type
-        );
-      } else {
-        computedSlot = computeNestedMappingSlot(
-          BigInt(baseSlot),
-          keys.map((value, i) => ({ value, type: keyTypes[i].type }))
-        );
-      }
-
-      const slotHex = slotToHex(computedSlot);
-
-      // Fetch the value at latest block
-      const result = await fetchSlotValue(chainId, address, slotHex, 'latest');
-
-      // Add to lookups
+      const result = await queryStorage({
+        chain_id: chainId,
+        address,
+        block_ref: blockRef,
+        layout_id: layoutId,
+        access: {
+          declaration_id: declarationId,
+          steps: keys.map((value) => ({ kind: 'mapping_key', value })),
+        },
+      });
       onLookup({
         keys: [...keys],
-        computedSlot: slotHex,
+        slot: result.location.slot,
         rawValue: result.value_encoded,
         decodedValue: result.value_decoded,
       });
-
-      // Clear inputs after successful lookup
       setKeys(keyTypes.map(() => ''));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Lookup failed');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Lookup failed');
     } finally {
       setIsLoading(false);
     }
@@ -98,26 +101,26 @@ export function MappingKeyInput({
 
   return (
     <div className="space-y-3">
-      {/* Input form */}
-      <form onSubmit={handleSubmit} className="flex items-center gap-2 flex-wrap">
+      <form onSubmit={handleSubmit} className="flex flex-wrap items-center gap-2">
         {keyTypes.map((keyType, index) => (
-          <div key={index} className="flex items-center gap-2">
-            {index > 0 && (
-              <span className="text-gray-400 text-xs font-mono">→</span>
-            )}
+          <div key={`${keyType.type}:${index}`} className="flex items-center gap-2">
+            {index > 0 && <span className="font-mono text-xs text-gray-400">→</span>}
             <div className="flex flex-col">
               <Input
                 type="text"
                 value={keys[index]}
-                onChange={(e) => handleKeyChange(index, e.target.value)}
-                placeholder={getKeyTypeHint(keyType.type)}
-                className="w-64 h-7 text-xs font-mono"
+                onChange={(event) => {
+                  const next = [...keys];
+                  next[index] = event.target.value;
+                  setKeys(next);
+                  setError(null);
+                }}
+                placeholder={keyHint(keyType.type)}
+                className="h-7 w-64 font-mono text-xs"
                 disabled={isLoading}
               />
               {keyTypes.length > 1 && (
-                <span className="text-[10px] text-gray-400 mt-0.5">
-                  {keyType.label}
-                </span>
+                <span className="mt-0.5 text-[10px] text-gray-400">{keyType.label}</span>
               )}
             </div>
           </div>
@@ -127,13 +130,13 @@ export function MappingKeyInput({
           variant="secondary"
           size="sm"
           className="h-7 text-xs"
-          disabled={isLoading || keys.some((k) => !k.trim())}
+          disabled={isLoading || keys.length === 0 || keys.some((key) => !key.trim())}
         >
-          {isLoading ? 'Loading...' : 'Lookup'}
+          {isLoading ? 'Loading…' : 'Lookup'}
         </Button>
       </form>
 
-      {error && <p className="text-red text-xs">{error}</p>}
+      {error && <p className="text-xs text-red">{error}</p>}
 
       <LookupResultsTable
         lookups={lookups}
@@ -141,7 +144,9 @@ export function MappingKeyInput({
         keyLabel={keyTypes.length > 1 ? 'Keys' : 'Key'}
         renderKey={(lookup) => (
           <span className="flex flex-col gap-0.5">
-            {(lookup.keys ?? []).map((key, index) => <span key={`${key}:${index}`}>[{key}]</span>)}
+            {(lookup.keys ?? []).map((key, index) => (
+              <span key={`${key}:${index}`}>[{key}]</span>
+            ))}
           </span>
         )}
       />

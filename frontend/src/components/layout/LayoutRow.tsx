@@ -2,26 +2,37 @@
 
 import { memo, useState } from 'react';
 import {
-  StorageVariableResponse,
-  StorageTypeResponse,
-  SlotValueResponse,
-  ComputedSlotLookup,
+  StorageQueryLookup,
+  StorageViewResponse,
+  StorageViewType,
+  StorageViewValueItem,
+  StorageViewVariable,
 } from '@/lib/types';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { DetailPopover } from '@/components/ui/DetailPopover';
 import { MappingKeyInput } from './MappingKeyInput';
 import { ArrayIndexInput } from './ArrayIndexInput';
-import { Skeleton } from '@/components/ui/Skeleton';
 import { cn, formatDecodedValue } from '@/lib/utils';
 
 interface LayoutRowProps {
-  variable: StorageVariableResponse;
-  types: Record<string, StorageTypeResponse>;
+  variable: StorageViewVariable;
+  types: Record<string, StorageViewType>;
   chainId: string;
   address: string;
+  blockRef: StorageViewResponse['block_ref'];
+  layoutId: string;
   showHex: boolean;
-  slotValue?: SlotValueResponse;
-  storageLoading?: boolean;
+  values: StorageViewValueItem[];
+}
+
+function keyTypeLabel(keyType: string): string {
+  const lower = keyType.toLowerCase();
+  if (lower.includes('address')) return 'address';
+  if (lower.includes('uint')) return lower.match(/uint\d+/)?.[0] ?? 'uint';
+  if (lower.includes('int')) return lower.match(/int\d+/)?.[0] ?? 'int';
+  if (lower.includes('bytes')) return lower.match(/bytes\d+/)?.[0] ?? 'bytes';
+  if (lower.includes('bool')) return 'bool';
+  return 'key';
 }
 
 export const LayoutRow = memo(function LayoutRow({
@@ -29,118 +40,62 @@ export const LayoutRow = memo(function LayoutRow({
   types,
   chainId,
   address,
+  blockRef,
+  layoutId,
   showHex,
-  slotValue,
-  storageLoading,
+  values,
 }: LayoutRowProps) {
   const [expanded, setExpanded] = useState(false);
-  const [lookups, setLookups] = useState<ComputedSlotLookup[]>([]);
-
+  const [lookups, setLookups] = useState<StorageQueryLookup[]>([]);
   const varType = types[variable.type_id];
-
-  // Detect type categories
-  const isMapping = varType?.kind === 'mapping' ||
-    varType?.key_type !== null ||
-    variable.type_label.startsWith('mapping(') ||
-    variable.type_label.includes('=>');
-
-  const isDynamicArray = varType?.encoding === 'dynamic_array' ||
-    (varType?.kind === 'array' && varType?.array_length === null);
-
-  // Static array: has array_length OR type label matches pattern like address[32]
-  const staticArrayMatch = variable.type_label.match(/\[(\d+)\]$/);
-  const isStaticArray = !isDynamicArray && (
-    (varType?.kind === 'array' && varType?.array_length !== null) ||
-    staticArrayMatch !== null
-  );
-
-  const staticArrayLength = varType?.array_length ||
-    (staticArrayMatch ? parseInt(staticArrayMatch[1], 10) : undefined);
-
+  const isMapping = varType?.encoding === 'mapping';
+  const isDynamicArray = varType?.encoding === 'dynamic_array';
+  const isStaticArray = varType?.kind === 'array' && varType.encoding === 'inplace';
   const isArray = isDynamicArray || isStaticArray;
   const isInteractive = isMapping || isArray;
 
-  // Handle new lookup result
-  const handleLookup = (lookup: ComputedSlotLookup) => {
-    setLookups((prev) => [...prev, lookup]);
-  };
+  const mappingKeyTypes: { type: string; label: string }[] = [];
+  let currentType: StorageViewType | undefined = varType;
+  while (currentType?.encoding === 'mapping' && currentType.key_type) {
+    mappingKeyTypes.push({
+      type: currentType.key_type,
+      label: keyTypeLabel(currentType.key_type),
+    });
+    currentType = currentType.value_type
+      ? types[currentType.value_type]
+      : undefined;
+  }
 
-  // Get key types for nested mappings
-  const getMappingKeyTypes = (): { type: string; label: string }[] => {
-    const keyTypes: { type: string; label: string }[] = [];
-    let currentType = varType;
-
-    while (currentType?.kind === 'mapping' && currentType.key_type) {
-      keyTypes.push({
-        type: currentType.key_type,
-        label: getKeyTypeLabel(currentType.key_type),
-      });
-
-      if (currentType.value_type) {
-        currentType = types[currentType.value_type];
-      } else {
-        break;
-      }
-    }
-
-    // Fallback: parse from type label if no key types found
-    if (keyTypes.length === 0 && variable.type_label.includes('mapping(')) {
-      const match = variable.type_label.match(/mapping\((\w+)/);
-      if (match) {
-        keyTypes.push({
-          type: match[1],
-          label: match[1],
-        });
-      }
-    }
-
-    return keyTypes;
-  };
-
-  // Get human-readable key type label
-  const getKeyTypeLabel = (keyType: string): string => {
-    const lower = keyType.toLowerCase();
-    if (lower.includes('address')) return 'address';
-    if (lower.includes('uint256')) return 'uint256';
-    if (lower.includes('uint')) return 'uint';
-    if (lower.includes('bytes32')) return 'bytes32';
-    if (lower.includes('bytes')) return 'bytes';
-    return 'key';
-  };
-
-  // Get element type for arrays
-  const getElementType = (): StorageTypeResponse | undefined => {
-    if (varType?.element_type) {
-      return types[varType.element_type];
-    }
-    return undefined;
-  };
+  const elementType = varType?.element_type
+    ? types[varType.element_type]
+    : undefined;
+  const successfulValues = values.filter(
+    (value) => value.status === 'ok' && value.value_encoded
+  );
+  const status = values[0]?.status;
 
   return (
     <>
-      {/* Main row */}
       <tr
         className={cn(
-          'hover:bg-gray-50/50 border-b border-gray-100',
+          'border-b border-gray-100 hover:bg-gray-50/50',
           expanded && 'bg-gray-50/30'
         )}
       >
-        {/* Expand button */}
         <td className="px-1 py-2 text-center">
           {isInteractive && (
             <button
               onClick={() => setExpanded(!expanded)}
               aria-label={expanded ? `Collapse ${variable.name}` : `Expand ${variable.name}`}
               aria-expanded={expanded}
-              className="touch-hitbox w-4 h-4 text-xs text-gray-400 hover:text-gray-700 font-mono"
+              className="touch-hitbox h-4 w-4 font-mono text-xs text-gray-400 hover:text-gray-700"
             >
               {expanded ? '−' : '+'}
             </button>
           )}
         </td>
 
-        {/* Name */}
-        <td className="px-1 py-2 text-xs font-mono text-gray-900">
+        <td className="px-1 py-2 font-mono text-xs text-gray-900">
           <DetailPopover
             className="max-w-full"
             content={(
@@ -154,77 +109,85 @@ export const LayoutRow = memo(function LayoutRow({
           </DetailPopover>
         </td>
 
-        {/* Type */}
-        <td className="px-1 py-2 truncate text-xs font-mono text-gray-500" title={variable.type_label}>
+        <td className="truncate px-1 py-2 font-mono text-xs text-gray-500" title={variable.type_label}>
           {variable.type_label}
         </td>
 
-        {/* Slot */}
-        <td data-testid="layout-slot" className="hidden break-all px-1 py-2 text-xs font-mono text-gray-500 sm:table-cell">
+        <td data-testid="layout-slot" className="hidden break-all px-1 py-2 font-mono text-xs text-gray-500 sm:table-cell">
           {variable.slot}
         </td>
 
-        {/* Value */}
         <td className="px-1 py-2">
-          {storageLoading ? (
-            <Skeleton className="h-3 w-20" />
-          ) : slotValue ? (
-            <div className="flex items-center gap-1">
-              <span className={cn(
-                'font-mono leading-tight break-all',
-                showHex ? 'text-[10px]' : 'text-xs',
-                isInteractive ? 'text-gray-400' : 'text-gray-900'
-              )}>
-                {showHex
-                  ? slotValue.value_encoded
-                  : formatDecodedValue(slotValue.value_decoded)}
-              </span>
-              <CopyButton
-                label={`Copy ${variable.name} value`}
-                value={
-                  showHex
-                    ? slotValue.value_encoded
-                    : String(slotValue.value_decoded ?? slotValue.value_encoded)
-                }
-              />
+          {successfulValues.length > 0 ? (
+            <div className="space-y-1">
+              {successfulValues.map((value) => {
+                const rendered = showHex
+                  ? value.value_encoded!
+                  : formatDecodedValue(value.value_decoded);
+                return (
+                  <div key={`${value.declaration_id}:${value.path}`} className="flex min-w-0 items-center gap-1">
+                    {value.path !== variable.name && (
+                      <span className="shrink-0 font-mono text-[10px] text-gray-400">
+                        {value.path}
+                      </span>
+                    )}
+                    <span className={cn(
+                      'break-all font-mono leading-tight text-gray-900',
+                      showHex ? 'text-[10px]' : 'text-xs'
+                    )}>
+                      {rendered}
+                    </span>
+                    <CopyButton
+                      label={`Copy ${value.path} value`}
+                      value={showHex
+                        ? value.value_encoded!
+                        : String(value.value_decoded ?? value.value_encoded)}
+                    />
+                  </div>
+                );
+              })}
             </div>
-          ) : isInteractive ? (
-            <span className="text-gray-400 text-[10px]">expand to query</span>
+          ) : status === 'on_demand' ? (
+            <span className="text-[10px] text-gray-400">expand to query</span>
+          ) : status === 'deferred_budget' ? (
+            <span className="text-[10px] text-gray-400">deferred by read limit</span>
           ) : (
-            <span className="text-gray-400 text-xs">-</span>
+            <span className="text-xs text-gray-400">—</span>
           )}
         </td>
       </tr>
 
-      {/* Expanded input row for mappings */}
       {expanded && isMapping && (
         <tr className="bg-gray-50/50">
-          <td colSpan={5} className="px-4 py-3 border-b border-gray-100">
+          <td colSpan={5} className="border-b border-gray-100 px-4 py-3">
             <MappingKeyInput
-              baseSlot={variable.slot}
-              keyTypes={getMappingKeyTypes()}
+              declarationId={variable.declaration_id}
+              keyTypes={mappingKeyTypes}
               chainId={chainId}
               address={address}
+              blockRef={blockRef}
+              layoutId={layoutId}
               lookups={lookups}
-              onLookup={handleLookup}
+              onLookup={(lookup) => setLookups((previous) => [...previous, lookup])}
             />
           </td>
         </tr>
       )}
 
-      {/* Expanded input row for arrays */}
       {expanded && isArray && !isMapping && (
         <tr className="bg-gray-50/50">
-          <td colSpan={5} className="px-4 py-3 border-b border-gray-100">
+          <td colSpan={5} className="border-b border-gray-100 px-4 py-3">
             <ArrayIndexInput
-              baseSlot={variable.slot}
-              elementType={getElementType()}
+              declarationId={variable.declaration_id}
+              elementLabel={elementType?.label}
               isDynamic={isDynamicArray}
-              arrayLength={staticArrayLength}
+              arrayLength={varType?.array_length ?? null}
               chainId={chainId}
               address={address}
+              blockRef={blockRef}
+              layoutId={layoutId}
               lookups={lookups}
-              onLookup={handleLookup}
+              onLookup={(lookup) => setLookups((previous) => [...previous, lookup])}
             />
           </td>
         </tr>

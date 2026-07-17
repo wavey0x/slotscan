@@ -11,68 +11,125 @@ interface ValuePairDecoded {
 
 // === Response Types ===
 
-export interface ContractResponse {
-  chain_id: number;
+export interface StorageViewContract {
   address: string;
+  storage_address: string;
+  effective_code_address: string;
   name: string | null;
-  code_hash: string | null;
-  is_delegated: boolean;
-  delegate_address: string | null;
-  delegate_code_hash: string | null;
   is_proxy: boolean;
   proxy_type: string | null;
-  implementation_address: string | null;
   is_verified: boolean;
-  verification_source: string | null;
-  compiler_version: string | null;
-  has_layout: boolean;
 }
 
-export interface StorageTypeResponse {
+export interface StorageViewMember {
+  name: string;
+  slot: string;
+  byte_offset: number;
+  byte_size: string;
+  type_id: string;
+  label: string;
+}
+
+export interface StorageViewType {
   id: string;
   label: string;
   kind: string;
   encoding: string;
-  num_bytes: number | null;
+  num_bytes: string | null;
+  base_type: string | null;
   element_type: string | null;
-  array_length: number | null;
+  array_length: string | null;
   key_type: string | null;
   value_type: string | null;
+  members: StorageViewMember[];
 }
 
-export interface StorageVariableResponse {
+export interface StorageViewVariable {
+  declaration_id: string;
   name: string;
-  slot: number;
-  offset: number;
-  size: number;
+  slot: string;
+  byte_offset: number;
+  byte_size: string;
   type_id: string;
   type_label: string;
   provenance: string;
   confidence: string;
 }
 
-export interface StorageLayoutResponse {
-  contract_name: string;
-  variables: StorageVariableResponse[];
-  types: Record<string, StorageTypeResponse>;
+export interface StorageViewValueItem {
+  declaration_id: string;
+  path: string;
+  status: 'ok' | 'on_demand' | 'unsupported' | 'deferred_budget';
+  slot: string;
+  byte_offset: number;
+  value_encoded: string | null;
+  value_decoded: unknown;
 }
 
-export interface SlotValueResponse {
-  slot: string;
+export interface StorageViewResponse {
+  block_ref: {
+    number: string;
+    hash: string;
+  };
+  contract: StorageViewContract;
+  layout_id: string | null;
+  layout: {
+    status: 'ok' | 'unverified' | 'unsupported';
+    variables: StorageViewVariable[];
+    types: Record<string, StorageViewType>;
+    storage_rules: {
+      mapping_preimage_order: 'key_then_slot' | 'slot_then_key';
+      array_storage_scheme: 'solidity' | 'vyper_sequential' | 'vyper_legacy_hashed';
+    } | null;
+  };
+  values: {
+    status: 'ok' | 'error' | 'unavailable';
+    items: StorageViewValueItem[];
+    error_code: string | null;
+  };
+}
+
+export interface StorageQueryRequest {
+  chain_id: string;
+  address: string;
+  block_ref: {
+    number: string;
+    hash: string;
+  };
+  layout_id: string;
+  access: {
+    declaration_id: string;
+    steps: Array<{
+      kind: 'mapping_key' | 'array_index';
+      value: string;
+    }>;
+  };
+}
+
+export interface StorageQueryResponse {
+  block_ref: {
+    number: string;
+    hash: string;
+  };
+  layout_id: string;
+  declaration_id: string;
+  path: string;
+  location: {
+    slot: string;
+    byte_offset: number;
+    byte_size: number;
+  };
   value_encoded: string;
   value_decoded: unknown;
-  variable_name: string | null;
-  variable_path: string | null;
-  type_label: string | null;
+  array_length: string | null;
 }
 
-export interface StorageSnapshotResponse {
-  chain_id: number;
-  address: string;
-  block_number: number;
-  slots: SlotValueResponse[];
-  is_complete: boolean;
-  is_verified: boolean;
+export interface StorageQueryLookup {
+  keys?: string[];
+  index?: string;
+  slot: string;
+  rawValue: string;
+  decodedValue: unknown;
 }
 
 export interface StorageChangeResponse {
@@ -242,14 +299,4 @@ export interface TransactionStorageHistoryResponse {
   global_order: GlobalStorageEventReferenceResponse[] | null;
   is_complete: boolean;
   trace_unavailable: boolean;
-}
-
-// === Layout Page Types ===
-
-export interface ComputedSlotLookup {
-  keys?: string[];           // for mappings - the key values used
-  index?: number;            // for arrays - the index used
-  computedSlot: string;      // hex slot address
-  rawValue: string;          // hex raw value
-  decodedValue: unknown;     // decoded value
 }

@@ -7,6 +7,7 @@ from typing import Any, Optional
 from web3 import Web3
 
 from app.models.domain import DecodedValue, StorageType, StorageVariable
+from app.services.storage_rules import synthesize_storage_type
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +102,7 @@ class TypeDecoder:
                 # Get member's type
                 member_type = self._type_registry.get(member.type_id)
                 if not member_type:
-                    # Synthesize primitive types
-                    member_type = self._synthesize_type(member.type_id)
+                    member_type = synthesize_storage_type(member.type_id)
 
                 if member_type:
                     # Extract bytes for this member based on its offset and size
@@ -138,63 +138,6 @@ class TypeDecoder:
                 result[member.name] = None
 
         return result if result else None
-
-    def _synthesize_type(self, type_id: str) -> Optional[StorageType]:
-        """Synthesize a StorageType for common primitive types."""
-        import re
-
-        # uint types
-        uint_match = re.match(r'^t_uint(\d+)$', type_id)
-        if uint_match:
-            bits = int(uint_match.group(1))
-            return StorageType(
-                id=type_id, label=f"uint{bits}", kind="value",
-                encoding="inplace", num_bytes=bits // 8
-            )
-
-        # int types
-        int_match = re.match(r'^t_int(\d+)$', type_id)
-        if int_match:
-            bits = int(int_match.group(1))
-            return StorageType(
-                id=type_id, label=f"int{bits}", kind="value",
-                encoding="inplace", num_bytes=bits // 8
-            )
-
-        # address
-        if type_id in ('t_address', 't_address_payable'):
-            return StorageType(
-                id=type_id, label="address", kind="value",
-                encoding="inplace", num_bytes=20
-            )
-
-        # bool
-        if type_id == 't_bool':
-            return StorageType(
-                id=type_id, label="bool", kind="value",
-                encoding="inplace", num_bytes=1
-            )
-
-        # bytesN
-        bytes_match = re.match(r'^t_bytes(\d+)$', type_id)
-        if bytes_match:
-            n = int(bytes_match.group(1))
-            return StorageType(
-                id=type_id, label=f"bytes{n}", kind="value",
-                encoding="inplace", num_bytes=n
-            )
-
-        # Contract types (e.g., t_contract$_IERC20_$123) - stored as address
-        if type_id.startswith('t_contract'):
-            # Extract contract name from type_id like "t_contract$_IERC20_$123"
-            contract_match = re.match(r'^t_contract\$_(\w+)_\$\d+$', type_id)
-            contract_name = contract_match.group(1) if contract_match else "contract"
-            return StorageType(
-                id=type_id, label=contract_name, kind="contract",
-                encoding="inplace", num_bytes=20
-            )
-
-        return None
 
     def _decode_by_type(self, data: bytes, type_info: StorageType) -> Any:
         """Decode bytes based on type."""

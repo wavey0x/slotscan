@@ -14,7 +14,7 @@ from app.repositories.compiler_artifacts import CompilerArtifactRepository
 from app.services.decoder import TypeDecoder
 from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
-from app.services.storage import StorageReader
+from app.services.storage_view import StorageViewService
 from app.services.tracer import TransactionAnalysisService
 from app.services.transaction_history import TransactionHistoryService
 from app.services.web3_provider import Web3Provider
@@ -85,14 +85,17 @@ async def get_contract_resolver(
     )
 
 
-async def get_storage_reader(
+async def get_storage_view_service(
     web3_provider: Web3Provider = Depends(get_web3_provider),
+    resolver: ContractResolver = Depends(get_contract_resolver),
+    layout_parser: LayoutParser = Depends(get_layout_parser),
     settings: Settings = Depends(get_settings),
     decoder: TypeDecoder = Depends(get_decoder),
-) -> StorageReader:
-    """Get StorageReader with dependencies."""
-    return StorageReader(
+) -> StorageViewService:
+    return StorageViewService(
         web3_provider=web3_provider,
+        resolver=resolver,
+        layout_parser=layout_parser,
         settings=settings,
         decoder=decoder,
     )

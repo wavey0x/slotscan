@@ -80,6 +80,7 @@ class ContractResolver:
         layout_parser: Optional[LayoutParser] = None,
         http_client: Optional[httpx.AsyncClient] = None,
         compiler_artifact_repo: Optional[CompilerArtifactRepository] = None,
+        use_binding_cache: bool = True,
     ):
         self.web3_provider = web3_provider
         self.settings = settings
@@ -90,6 +91,7 @@ class ContractResolver:
             timeout=settings.request_timeout_seconds
         )
         self.compiler_artifact_repo = compiler_artifact_repo
+        self.use_binding_cache = use_binding_cache
 
     async def resolve(
         self,
@@ -131,7 +133,11 @@ class ContractResolver:
 
         # A cached address binding is usable only while its raw code identity
         # still matches the selected chain state.
-        if self.contract_repo and block_number is not None:
+        if (
+            self.use_binding_cache
+            and self.contract_repo
+            and block_number is not None
+        ):
             historical = await self.contract_repo.get_at_block(
                 chain_id, address, block_number
             )
@@ -143,19 +149,19 @@ class ContractResolver:
                 metadata = self.contract_repo.to_metadata(historical)
                 layout = metadata.storage_layout
                 if isinstance(layout, StorageLayout) and layout.variables:
-                    await self._hydrate_compiler_inputs(metadata)
                     return metadata
                 if (
                     (not historical.is_verified or not historical.storage_layout)
                     and self._source_check_is_fresh(historical)
                 ):
-                    await self._hydrate_compiler_inputs(metadata)
+                    if historical.is_verified and not historical.storage_layout:
+                        await self._hydrate_compiler_inputs(metadata)
                     return metadata
 
         # The address cache is not block-versioned. It is safe only for latest;
         # historical proxy/address resolution must inspect chain state at the
         # requested block instead of reusing today's implementation/layout.
-        if self.contract_repo and block_number is None:
+        if self.use_binding_cache and self.contract_repo and block_number is None:
             cached = await self.contract_repo.get(chain_id, address)
             if (
                 cached
@@ -166,13 +172,13 @@ class ContractResolver:
                 metadata = self.contract_repo.to_metadata(cached)
                 layout = metadata.storage_layout
                 if isinstance(layout, StorageLayout) and layout.variables:
-                    await self._hydrate_compiler_inputs(metadata)
                     return metadata
                 if (
                     (not cached.is_verified or not cached.storage_layout)
                     and self._source_check_is_fresh(cached)
                 ):
-                    await self._hydrate_compiler_inputs(metadata)
+                    if cached.is_verified and not cached.storage_layout:
+                        await self._hydrate_compiler_inputs(metadata)
                     return metadata
 
         # Detect proxy (pass bytecode for EIP-1167 detection)
@@ -302,6 +308,12 @@ class ContractResolver:
                             verification.name or "",
                             verification.sources,
                             verification.compiler_version or "",
+                            entry_source=(
+                                next(iter(verification.compilation_target))
+                                if verification.compilation_target
+                                and len(verification.compilation_target) == 1
+                                else None
+                            ),
                         )
                     )
                     if self.compiler_artifact_repo:
@@ -332,6 +344,8 @@ class ContractResolver:
                     parsed_layout.storage_scheme = vyper_storage_policy(
                         verification.compiler_version
                     ).storage_scheme
+                elif language == "Solidity" and not parsed_layout.storage_scheme:
+                    parsed_layout.storage_scheme = "solidity"
         # Build result - use bytecode cache metadata if verification was skipped
         if cached_by_bytecode and parsed_layout and not verification:
             # Reuse metadata from the cached contract with same bytecode
@@ -348,6 +362,7 @@ class ContractResolver:
                 verification_source=cached_by_bytecode.verification_source,
                 name=cached_by_bytecode.name,
                 compiler_version=cached_by_bytecode.compiler_version,
+                compilation_target=None,
                 sources=None,  # Don't copy large source data
                 compiler_settings=None,
                 storage_layout=parsed_layout,
@@ -367,6 +382,9 @@ class ContractResolver:
                 verification_source=verification.source if verification else None,
                 name=verification.name if verification else None,
                 compiler_version=verification.compiler_version if verification else None,
+                compilation_target=(
+                    verification.compilation_target if verification else None
+                ),
                 sources=verification.sources if verification else None,
                 compiler_settings=verification.compiler_settings if verification else None,
                 storage_layout=parsed_layout,
@@ -375,13 +393,21 @@ class ContractResolver:
                 ),
             )
 
-        await self._hydrate_compiler_inputs(result)
-
         # Cache every conclusive source lookup. Confirmed misses and verified
         # identities without layouts expire separately from usable layouts.
-        if follow_proxy and self.contract_repo and block_number is None:
+        if (
+            self.use_binding_cache
+            and follow_proxy
+            and self.contract_repo
+            and block_number is None
+        ):
             await self.contract_repo.save(result)
-        elif follow_proxy and self.contract_repo and block_number is not None:
+        elif (
+            self.use_binding_cache
+            and follow_proxy
+            and self.contract_repo
+            and block_number is not None
+        ):
             await self.contract_repo.save_at_block(result, block_number)
 
         return result
@@ -425,6 +451,7 @@ class ContractResolver:
             ),
             name=delegate.name if delegate else None,
             compiler_version=delegate.compiler_version if delegate else None,
+            compilation_target=delegate.compilation_target if delegate else None,
             sources=delegate.sources if delegate else None,
             compiler_settings=delegate.compiler_settings if delegate else None,
             storage_layout=delegate.storage_layout if delegate else None,
@@ -526,143 +553,119 @@ class ContractResolver:
         """
         block_id = block if block is not None else "latest"
 
-        # Check EIP-1167 minimal proxy first (from bytecode)
         if bytecode:
-            impl_address = self._detect_minimal_proxy(bytecode)
-            if impl_address and impl_address != ZERO_ADDRESS:
+            implementation = self._detect_minimal_proxy(bytecode)
+            if implementation and implementation != ZERO_ADDRESS:
                 return ProxyInfo(
                     proxy_type="eip1167",
-                    implementation_address=impl_address,
+                    implementation_address=implementation,
                     admin_address=None,
                 )
 
-        try:
-            # Fetch EIP-1967, EIP-1822, ZeppelinOS, and Beacon slots in parallel
-            impl_task = self.web3_provider.get_storage_at(
-                chain_id, address, EIP1967_IMPL_SLOT, block_id
+        impl_value, uups_value, zos_value, beacon_value = await asyncio.gather(
+            self.web3_provider.get_storage_at(
+                chain_id,
+                address,
+                EIP1967_IMPL_SLOT,
+                block_id,
+            ),
+            self.web3_provider.get_storage_at(
+                chain_id,
+                address,
+                EIP1822_SLOT,
+                block_id,
+            ),
+            self.web3_provider.get_storage_at(
+                chain_id,
+                address,
+                ZEPPELINOS_IMPL_SLOT,
+                block_id,
+            ),
+            self.web3_provider.get_storage_at(
+                chain_id,
+                address,
+                EIP1967_BEACON_SLOT,
+                block_id,
+            ),
+        )
+
+        implementation = self._extract_address(bytes(impl_value))
+        if implementation and implementation != ZERO_ADDRESS:
+            return ProxyInfo(
+                proxy_type="eip1967",
+                implementation_address=implementation,
+                admin_address=None,
             )
-            uups_task = self.web3_provider.get_storage_at(
-                chain_id, address, EIP1822_SLOT, block_id
-            )
-            zos_task = self.web3_provider.get_storage_at(
-                chain_id, address, ZEPPELINOS_IMPL_SLOT, block_id
-            )
-            beacon_task = self.web3_provider.get_storage_at(
-                chain_id, address, EIP1967_BEACON_SLOT, block_id
-            )
-            impl_value, uups_value, zos_value, beacon_value = await asyncio.gather(
-                impl_task, uups_task, zos_task, beacon_task
+
+        implementation = self._extract_address(bytes(uups_value))
+        if implementation and implementation != ZERO_ADDRESS:
+            return ProxyInfo(
+                proxy_type="eip1822",
+                implementation_address=implementation,
+                admin_address=None,
             )
 
-            impl_address = self._extract_address(bytes(impl_value))
+        implementation = self._extract_address(bytes(zos_value))
+        if implementation and implementation != ZERO_ADDRESS:
+            return ProxyInfo(
+                proxy_type="zeppelinos",
+                implementation_address=implementation,
+                admin_address=None,
+            )
 
-            if impl_address and impl_address != ZERO_ADDRESS:
-                # EIP-1967 found, fetch admin slot
-                admin_value = await self.web3_provider.get_storage_at(
-                    chain_id, address, EIP1967_ADMIN_SLOT, block_id
+        beacon_address = self._extract_address(bytes(beacon_value))
+        if beacon_address and beacon_address != ZERO_ADDRESS:
+            result = await self.web3_provider.eth_call(
+                chain_id,
+                {"to": beacon_address, "data": BEACON_IMPL_SELECTOR},
+                block_id,
+            )
+            implementation = self._extract_address(bytes(result))
+            if not implementation or implementation == ZERO_ADDRESS:
+                raise RPCError(
+                    "eth_call",
+                    f"Beacon {beacon_address} returned no implementation",
                 )
-                admin_address = self._extract_address(bytes(admin_value))
+            return ProxyInfo(
+                proxy_type="beacon",
+                implementation_address=implementation,
+                admin_address=None,
+            )
 
-                return ProxyInfo(
-                    proxy_type="eip1967",
-                    implementation_address=impl_address,
-                    admin_address=(
-                        admin_address if admin_address != ZERO_ADDRESS else None
-                    ),
+        if bytecode and b"\xf4" in bytecode:
+            callable_proxies = (
+                ("aragon", BEACON_IMPL_SELECTOR),
+                ("gnosis_safe", GNOSIS_SAFE_MASTER_COPY_SELECTOR),
+            )
+            for proxy_type, selector in callable_proxies:
+                if bytes.fromhex(selector[2:]) not in bytecode:
+                    continue
+                result = await self.web3_provider.eth_call(
+                    chain_id,
+                    {"to": address, "data": selector},
+                    block_id,
                 )
-
-            # Check EIP-1822 (already fetched)
-            uups_address = self._extract_address(bytes(uups_value))
-
-            if uups_address and uups_address != ZERO_ADDRESS:
-                return ProxyInfo(
-                    proxy_type="eip1822",
-                    implementation_address=uups_address,
-                    admin_address=None,
-                )
-
-            # Check ZeppelinOS (pre-EIP-1967, used by USDC and other older proxies)
-            zos_address = self._extract_address(bytes(zos_value))
-
-            if zos_address and zos_address != ZERO_ADDRESS:
-                # ZeppelinOS found, fetch admin slot
-                zos_admin_value = await self.web3_provider.get_storage_at(
-                    chain_id, address, ZEPPELINOS_ADMIN_SLOT, block_id
-                )
-                zos_admin_address = self._extract_address(bytes(zos_admin_value))
-
-                return ProxyInfo(
-                    proxy_type="zeppelinos",
-                    implementation_address=zos_address,
-                    admin_address=(
-                        zos_admin_address if zos_admin_address != ZERO_ADDRESS else None
-                    ),
-                )
-
-            # Check EIP-1967 Beacon Proxy (used by Euler EVK, OpenZeppelin BeaconProxy)
-            beacon_address = self._extract_address(bytes(beacon_value))
-
-            if beacon_address and beacon_address != ZERO_ADDRESS:
-                # Beacon found, call implementation() on the beacon to get actual impl
-                try:
-                    impl_result = await self.web3_provider.eth_call(
-                        chain_id,
-                        {"to": beacon_address, "data": BEACON_IMPL_SELECTOR},
-                        block_id,
+                implementation = self._extract_address(bytes(result))
+                if not implementation or implementation == ZERO_ADDRESS:
+                    raise RPCError(
+                        "eth_call",
+                        f"{proxy_type} getter returned no implementation",
                     )
-                    beacon_impl_address = self._extract_address(bytes(impl_result))
-
-                    if beacon_impl_address and beacon_impl_address != ZERO_ADDRESS:
-                        return ProxyInfo(
-                            proxy_type="beacon",
-                            implementation_address=beacon_impl_address,
-                            admin_address=None,  # Beacon proxies don't have admin in proxy
-                        )
-                except Exception as e:
-                    logger.warning(f"Failed to get implementation from beacon {beacon_address}: {e}")
-
-            # Aragon AppProxyUpgradeable and Gnosis Safe proxies expose their
-            # implementation through getters instead of a standard proxy slot.
-            # Only call selectors embedded in delegate-calling proxy bytecode,
-            # avoiding speculative eth_call requests against ordinary contracts.
-            if bytecode and b"\xf4" in bytecode:
-                callable_proxies = (
-                    ("aragon", BEACON_IMPL_SELECTOR),
-                    ("gnosis_safe", GNOSIS_SAFE_MASTER_COPY_SELECTOR),
+                implementation_code = await self.web3_provider.get_code(
+                    chain_id,
+                    implementation,
+                    block_id,
                 )
-                for proxy_type, selector in callable_proxies:
-                    if bytes.fromhex(selector[2:]) not in bytecode:
-                        continue
-                    try:
-                        result = await self.web3_provider.eth_call(
-                            chain_id,
-                            {"to": address, "data": selector},
-                            block_id,
-                        )
-                        callable_address = self._extract_address(bytes(result))
-                        if not callable_address or callable_address == ZERO_ADDRESS:
-                            continue
-                        implementation_code = await self.web3_provider.get_code(
-                            chain_id,
-                            callable_address,
-                            block_id,
-                        )
-                        if implementation_code:
-                            return ProxyInfo(
-                                proxy_type=proxy_type,
-                                implementation_address=callable_address,
-                                admin_address=None,
-                            )
-                    except Exception as e:
-                        logger.debug(
-                            "Callable proxy detection failed for %s via %s: %s",
-                            address,
-                            selector,
-                            e,
-                        )
-
-        except Exception as e:
-            logger.warning(f"Proxy detection failed for {address}: {e}")
+                if not implementation_code:
+                    raise RPCError(
+                        "eth_getCode",
+                        f"{proxy_type} implementation has no code",
+                    )
+                return ProxyInfo(
+                    proxy_type=proxy_type,
+                    implementation_address=implementation,
+                    admin_address=None,
+                )
 
         return None
 

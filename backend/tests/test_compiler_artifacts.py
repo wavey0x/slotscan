@@ -49,6 +49,50 @@ class CompilerArtifactTests(unittest.TestCase):
         self.assertEqual(first, repeated)
         self.assertNotEqual(first, changed)
 
+    def test_solidity_target_selection_is_exact_and_unambiguous(self):
+        parser = LayoutParser()
+        output = {
+            "contracts": {
+                "A.sol": {"Vault": {"storageLayout": {"storage": ["a"]}}},
+                "B.sol": {
+                    "Vault": {"storageLayout": {"storage": ["b"]}},
+                    "VaultHelper": {"storageLayout": {"storage": ["helper"]}},
+                },
+            }
+        }
+
+        self.assertEqual(
+            parser._extract_layout("Vault", output, "B.sol:Vault"),
+            {"storage": ["b"]},
+        )
+        with self.assertRaisesRegex(CompilationError, "Ambiguous contract name"):
+            parser._extract_layout("Vault", output)
+        with self.assertRaises(Exception):
+            parser._extract_layout("VaultHelp", output)
+
+
+class VyperTargetTests(unittest.IsolatedAsyncioTestCase):
+    async def test_vyper_target_requires_an_exact_or_unique_entry_source(self):
+        parser = LayoutParser()
+        sources = {
+            "A.vy": "# @version 0.3.10\n",
+            "B.vy": "# @version 0.3.10\n",
+        }
+
+        with self.assertRaisesRegex(CompilationError, "Ambiguous Vyper entry source"):
+            await parser.parse_vyper_with_artifact(
+                "A",
+                sources,
+                "0.3.10",
+            )
+        with self.assertRaisesRegex(CompilationError, "entry source not found"):
+            await parser.parse_vyper_with_artifact(
+                "A",
+                sources,
+                "0.3.10",
+                entry_source="Missing.vy",
+            )
+
 
 class CompilerPolicyTests(unittest.IsolatedAsyncioTestCase):
     async def test_request_time_install_is_disabled_by_default(self):

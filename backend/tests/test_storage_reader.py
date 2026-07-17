@@ -1,12 +1,10 @@
 import unittest
 
-from web3 import Web3
-
-from app.config import Settings
-from app.services.decoder import TypeDecoder
+from app.models.domain import StorageLayout, StorageType, StorageVariable
+from app.models.errors import RPCError
+from app.services.compiled_layout import compile_layout
 from app.services.namespace_storage import NamespaceStorageParser
-from app.services.storage import StorageReader
-from app.utils.vyper import LEGACY_HASHED_STORAGE, SEQUENTIAL_STORAGE
+from app.services.storage import StorageReader, plan_compiled_scalar_reads
 
 
 ZERO_WORD = "0x" + "00" * 32
@@ -16,13 +14,22 @@ def uint_word(value: int) -> str:
     return f"0x{value:064x}"
 
 
-def text_word(value: str) -> str:
-    return "0x" + value.encode().hex().ljust(64, "0")
+def _compiled(variables, types):
+    return compile_layout(
+        StorageLayout(
+            contract_name="Reader",
+            variables=variables,
+            types=types,
+            language="Solidity",
+            compiler_version="0.8.30",
+            storage_scheme="solidity",
+        )
+    )
 
 
 class _StorageProvider:
-    def __init__(self, values: dict[int, str]):
-        self.values = values
+    def __init__(self, values: dict[int, str] | None = None):
+        self.values = values or {}
         self.requested_slots: list[int] = []
 
     async def batch_get_storage_at(
@@ -37,111 +44,147 @@ class _StorageProvider:
         return {slot: self.values.get(slot, ZERO_WORD) for slot in slots}
 
 
-class VyperStringStorageTests(unittest.IsolatedAsyncioTestCase):
-    async def test_vyper_024_strings_read_hashed_length_and_payload_slots(self):
-        layout = NamespaceStorageParser().parse_vyper_storage(
+class ScalarReadPlanningTests(unittest.TestCase):
+    def test_packed_consumers_share_one_first_seen_word(self):
+        layout = _compiled(
+            [
+                StorageVariable("enabled", 7, 0, 1, "t_bool", "bool"),
+                StorageVariable("owner", 7, 1, 20, "t_address", "address"),
+                StorageVariable("count", 3, 0, 32, "t_uint256", "uint256"),
+            ],
+            {},
+        )
+
+        plan = plan_compiled_scalar_reads(layout)
+
+        self.assertEqual(plan.words, (3, 7))
+        self.assertEqual(
+            [projection.path for projection in plan.projections],
+            ["count", "enabled", "owner"],
+        )
+
+    def test_aggregate_paths_are_explicit_and_not_scheduled(self):
+        layout = _compiled(
+            [
+                StorageVariable("balances", 0, 0, 32, "mapping", "mapping"),
+                StorageVariable("items", 1, 0, 64, "array", "uint256[2]"),
+                StorageVariable("name", 3, 0, 32, "string", "string"),
+            ],
             {
-                "VotingEscrow.vy": """
-# @version 0.2.4
-struct Point:
-    bias: int128
-    slope: int128
-    ts: uint256
-    blk: uint256
-struct LockedBalance:
-    amount: int128
-    end: uint256
-token: public(address)
-supply: public(uint256)
-locked: public(HashMap[address, LockedBalance])
-epoch: public(uint256)
-point_history: public(Point[100000000000000000000000000000])
-user_point_history: public(HashMap[address, Point[1000000000]])
-user_point_epoch: public(HashMap[address, uint256])
-slope_changes: public(HashMap[uint256, int128])
-controller: public(address)
-transfersEnabled: public(bool)
-name: public(String[64])
-symbol: public(String[32])
-version: public(String[32])
-"""
+                "mapping": StorageType(
+                    "mapping",
+                    "mapping(address => uint256)",
+                    "mapping",
+                    "mapping",
+                    key_type="t_address",
+                    value_type="t_uint256",
+                ),
+                "array": StorageType(
+                    "array",
+                    "uint256[2]",
+                    "array",
+                    "inplace",
+                    num_bytes=64,
+                    element_type="t_uint256",
+                    array_length=2,
+                ),
+                "string": StorageType(
+                    "string",
+                    "string",
+                    "value",
+                    "bytes",
+                    num_bytes=32,
+                ),
             },
-            "VotingEscrow",
-            "0.2.4+commit.7949850",
-        )
-        self.assertEqual(layout.storage_scheme, LEGACY_HASHED_STORAGE)
-
-        expected = {
-            "name": "Vote-escrowed CRV",
-            "symbol": "veCRV",
-            "version": "veCRV_1.0.0",
-        }
-        values: dict[int, str] = {}
-        roots: dict[str, int] = {}
-        for variable in layout.variables:
-            if variable.name not in expected:
-                continue
-            value = expected[variable.name]
-            root = int.from_bytes(
-                Web3.keccak(variable.slot.to_bytes(32, "big")),
-                "big",
-            )
-            roots[variable.name] = root
-            values[root] = uint_word(len(value.encode()))
-            values[root + 1] = text_word(value)
-
-        provider = _StorageProvider(values)
-        reader = StorageReader(
-            provider,
-            Settings(MAX_SLOTS_PER_CONTRACT=32),
-            TypeDecoder(),
-        )
-        snapshot = await reader.read_at_block(
-            1,
-            "0x" + "11" * 20,
-            123,
-            layout,
         )
 
-        by_name = {
-            slot.variable.name: slot
-            for slot in snapshot.slots
-            if slot.variable.name in expected
-        }
-        self.assertTrue(snapshot.is_complete)
+        plan = plan_compiled_scalar_reads(layout)
+
+        self.assertEqual(plan.words, ())
         self.assertEqual(
-            {name: slot.decoded_value.decoded for name, slot in by_name.items()},
-            expected,
+            [(projection.path, projection.status) for projection in plan.projections],
+            [
+                ("balances", "on_demand"),
+                ("items", "on_demand"),
+                ("name", "unsupported"),
+            ],
         )
+
+    def test_budget_defers_new_words_but_keeps_shared_consumers(self):
+        layout = _compiled(
+            [
+                StorageVariable("a", 5, 0, 1, "t_bool", "bool"),
+                StorageVariable("b", 6, 0, 32, "t_uint256", "uint256"),
+                StorageVariable("c", 5, 1, 1, "t_bool", "bool"),
+            ],
+            {},
+        )
+
+        plan = plan_compiled_scalar_reads(layout, max_words=1)
+
+        self.assertEqual(plan.words, (5,))
         self.assertEqual(
-            {name: slot.slot for name, slot in by_name.items()},
-            {"name": "0xa", "symbol": "0xb", "version": "0xc"},
+            [(projection.path, projection.status) for projection in plan.projections],
+            [("a", "pending"), ("c", "pending"), ("b", "deferred_budget")],
         )
-        self.assertNotIn(4, provider.requested_slots)
-        for name, root in roots.items():
-            self.assertIn(root, provider.requested_slots, name)
-            self.assertIn(root + 1, provider.requested_slots, name)
 
-    async def test_modern_vyper_strings_remain_sequential(self):
-        layout = NamespaceStorageParser().parse_vyper_storage(
-            {"Token.vy": "# @version 0.3.10\nname: public(String[32])\n"},
-            "Token",
-            "0.3.10",
-        )
-        self.assertEqual(layout.storage_scheme, SEQUENTIAL_STORAGE)
+    def test_vyper_bounded_strings_are_not_read_initially(self):
+        for version in ("0.2.4", "0.3.10"):
+            with self.subTest(version=version):
+                source = NamespaceStorageParser().parse_vyper_storage(
+                    {
+                        "Token.vy": (
+                            f"# @version {version}\n"
+                            "name: public(String[64])\n"
+                        )
+                    },
+                    "Token",
+                    version,
+                )
+                layout = compile_layout(source)
 
-        provider = _StorageProvider({0: uint_word(4), 1: text_word("Test")})
-        reader = StorageReader(provider, Settings(), TypeDecoder())
-        snapshot = await reader.read_at_block(
+                plan = plan_compiled_scalar_reads(layout)
+
+                self.assertEqual(plan.words, ())
+                self.assertTrue(
+                    all(projection.status == "unsupported" for projection in plan.projections)
+                )
+
+
+class ScalarStorageReaderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_batch_deduplicates_in_first_seen_order(self):
+        provider = _StorageProvider({1: uint_word(1), 2: uint_word(2)})
+        reader = StorageReader(provider)
+
+        values = await reader.read_slots_batch(
             1,
-            "0x" + "22" * 20,
+            "0x" + "44" * 20,
+            [2, 1, 2, 1],
             123,
-            layout,
         )
 
-        self.assertEqual(snapshot.slots[0].decoded_value.decoded, "Test")
-        self.assertIn(0, provider.requested_slots)
-        self.assertIn(1, provider.requested_slots)
+        self.assertEqual(provider.requested_slots, [2, 1])
+        self.assertEqual(list(values), [2, 1])
+
+    async def test_incomplete_or_malformed_batch_returns_no_values(self):
+        class _IncompleteProvider(_StorageProvider):
+            async def batch_get_storage_at(self, *args, **kwargs):
+                return {1: ZERO_WORD}
+
+        class _MalformedProvider(_StorageProvider):
+            async def batch_get_storage_at(self, *args, **kwargs):
+                return {1: "0x01"}
+
+        for provider in (_IncompleteProvider(), _MalformedProvider()):
+            with self.subTest(provider=type(provider).__name__):
+                reader = StorageReader(provider)
+                with self.assertRaises(RPCError):
+                    await reader.read_slots_batch(
+                        1,
+                        "0x" + "55" * 20,
+                        [1, 2] if isinstance(provider, _IncompleteProvider) else [1],
+                        123,
+                    )
 
 
 if __name__ == "__main__":

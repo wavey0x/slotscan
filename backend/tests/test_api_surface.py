@@ -4,14 +4,23 @@ from app.main import create_app
 
 
 class ApiSurfaceTests(unittest.TestCase):
-    def test_only_transaction_wide_route_is_exposed(self):
+    def test_only_current_contract_storage_and_transaction_routes_are_exposed(self):
         paths = set(create_app().openapi()["paths"])
 
-        self.assertIn("/api/slotscan/tx/{chain_id}/{tx_hash}", paths)
-        self.assertNotIn(
-            "/api/slotscan/tx/{chain_id}/{address}/{tx_hash}",
+        self.assertIn(
+            "/api/slotscan/contracts/{chain_id}/{address}/storage-view",
             paths,
         )
+        self.assertIn("/api/slotscan/storage/query", paths)
+        self.assertIn("/api/slotscan/tx/{chain_id}/{tx_hash}", paths)
+        obsolete = {
+            "/api/slotscan/contracts/{chain_id}/{address}",
+            "/api/slotscan/contracts/{chain_id}/{address}/layout",
+            "/api/slotscan/storage/{chain_id}/{address}",
+            "/api/slotscan/storage/{chain_id}/{address}/slot/{slot}",
+            "/api/slotscan/tx/{chain_id}/{address}/{tx_hash}",
+        }
+        self.assertTrue(paths.isdisjoint(obsolete))
 
     def test_transaction_response_has_no_internal_generation(self):
         schema = create_app().openapi()["components"]["schemas"][

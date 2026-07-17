@@ -1,18 +1,11 @@
 import unittest
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from fastapi import HTTPException
 from web3 import Web3
 
-from app.api.routes.contracts import get_contract, get_layout
-from app.api.routes.storage import get_slot, get_storage
 from app.config import Settings
 from app.models.domain import (
-    ContractMetadata,
-    SlotValue,
     StorageLayout,
-    StorageSnapshot,
     StorageType,
     StorageVariable,
     VerificationResult,
@@ -188,150 +181,6 @@ class DelegatedResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(
             SECOND_DELEGATE.lower(),
             [call[1].lower() for call in provider.code_calls],
-        )
-
-
-class DelegatedRouteTests(unittest.IsolatedAsyncioTestCase):
-    async def test_latest_snapshot_uses_one_block_and_authority_storage(self):
-        layout = _layout()
-        metadata = ContractMetadata(
-            chain_id=1,
-            address=AUTHORITY,
-            is_delegated=True,
-            delegate_address=DELEGATE,
-            storage_layout=layout,
-            is_verified=True,
-        )
-        resolver = SimpleNamespace(
-            resolve=AsyncMock(return_value=metadata),
-            contract_repo=None,
-        )
-        reader = SimpleNamespace(
-            read_at_block=AsyncMock(
-                return_value=StorageSnapshot(
-                    chain_id=1,
-                    address=AUTHORITY,
-                    block_number=456,
-                    slots=[],
-                    is_complete=True,
-                    layout=layout,
-                )
-            )
-        )
-        provider = SimpleNamespace(get_block_number=AsyncMock(return_value=456))
-
-        await get_storage(
-            chain_id=1,
-            address=AUTHORITY,
-            block="latest",
-            mapping_keys=None,
-            resolver=resolver,
-            layout_parser=object(),
-            storage_reader=reader,
-            web3_provider=provider,
-        )
-
-        resolver.resolve.assert_awaited_once_with(
-            1,
-            AUTHORITY,
-            block_number=456,
-        )
-        reader.read_at_block.assert_awaited_once_with(
-            chain_id=1,
-            address=AUTHORITY,
-            block_number=456,
-            layout=layout,
-            include_mapping_keys=None,
-        )
-
-    async def test_latest_single_slot_uses_one_block_and_authority_storage(self):
-        layout = _layout()
-        resolver = SimpleNamespace(
-            resolve=AsyncMock(
-                return_value=ContractMetadata(
-                    chain_id=1,
-                    address=AUTHORITY,
-                    is_delegated=True,
-                    delegate_address=DELEGATE,
-                    storage_layout=layout,
-                    is_verified=True,
-                )
-            )
-        )
-        reader = SimpleNamespace(
-            get_single_slot=AsyncMock(
-                return_value=SlotValue(
-                    slot="0x0",
-                    raw_value="0x" + "00" * 32,
-                )
-            )
-        )
-        provider = SimpleNamespace(get_block_number=AsyncMock(return_value=456))
-
-        await get_slot(
-            chain_id=1,
-            address=AUTHORITY,
-            slot="0",
-            block="latest",
-            heuristic=False,
-            resolver=resolver,
-            layout_parser=object(),
-            storage_reader=reader,
-            web3_provider=provider,
-        )
-
-        resolver.resolve.assert_awaited_once_with(
-            1,
-            AUTHORITY,
-            block_number=456,
-        )
-        reader.get_single_slot.assert_awaited_once_with(
-            chain_id=1,
-            address=AUTHORITY,
-            slot=0,
-            block_number=456,
-            layout=layout,
-            use_heuristic_unverified=False,
-        )
-
-    async def test_contract_response_and_layout_error_name_the_delegate(self):
-        metadata = ContractMetadata(
-            chain_id=1,
-            address=AUTHORITY,
-            code_hash=Web3.keccak(DESIGNATOR).hex(),
-            is_delegated=True,
-            delegate_address=DELEGATE,
-            delegate_code_hash=Web3.keccak(b"\x60\x00").hex(),
-        )
-        resolver = SimpleNamespace(
-            resolve=AsyncMock(return_value=metadata),
-            contract_repo=None,
-        )
-
-        response = await get_contract(
-            1,
-            AUTHORITY,
-            resolver=resolver,
-            layout_parser=object(),
-        )
-
-        self.assertTrue(response.is_delegated)
-        self.assertEqual(response.delegate_address, DELEGATE)
-        self.assertFalse(response.is_proxy)
-        with self.assertRaises(HTTPException) as raised:
-            await get_layout(
-                1,
-                AUTHORITY,
-                resolver=resolver,
-                layout_parser=object(),
-            )
-        self.assertEqual(
-            raised.exception.detail["code"],
-            "DELEGATE_LAYOUT_UNAVAILABLE",
-        )
-        self.assertEqual(
-            raised.exception.detail["delegate_address"],
-            DELEGATE,
         )
 
 

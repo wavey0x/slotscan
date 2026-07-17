@@ -3,33 +3,35 @@
 import { useState } from 'react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { StorageTypeResponse, ComputedSlotLookup } from '@/lib/types';
-import { fetchSlotValue } from '@/lib/api';
 import {
-  computeDynamicArraySlot,
-  computeStaticArraySlot,
-  slotToHex,
-} from '@/lib/slot-utils';
+  StorageQueryLookup,
+  StorageViewResponse,
+} from '@/lib/types';
+import { queryStorage } from '@/lib/api';
 import { LookupResultsTable } from './LookupResultsTable';
 
 interface ArrayIndexInputProps {
-  baseSlot: number;
-  elementType?: StorageTypeResponse;
+  declarationId: string;
+  elementLabel?: string;
   isDynamic: boolean;
-  arrayLength?: number;
+  arrayLength: string | null;
   chainId: string;
   address: string;
-  lookups: ComputedSlotLookup[];
-  onLookup: (lookup: ComputedSlotLookup) => void;
+  blockRef: StorageViewResponse['block_ref'];
+  layoutId: string;
+  lookups: StorageQueryLookup[];
+  onLookup: (lookup: StorageQueryLookup) => void;
 }
 
 export function ArrayIndexInput({
-  baseSlot,
-  elementType,
+  declarationId,
+  elementLabel,
   isDynamic,
   arrayLength,
   chainId,
   address,
+  blockRef,
+  layoutId,
   lookups,
   onLookup,
 }: ArrayIndexInputProps) {
@@ -37,66 +39,35 @@ export function ArrayIndexInput({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Calculate element slots based on element type
-  const elementSlots = elementType?.num_bytes
-    ? Math.ceil(elementType.num_bytes / 32)
-    : 1;
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    const index = parseInt(indexInput, 10);
-    if (isNaN(index) || index < 0) {
-      setError('Invalid index');
-      return;
-    }
-
-    // Validate against array length for static arrays
-    if (!isDynamic && arrayLength !== undefined && index >= arrayLength) {
-      setError(`Index out of bounds (max: ${arrayLength - 1})`);
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!/^(?:0x[0-9a-fA-F]+|\d+)$/.test(indexInput)) {
+      setError('Enter a non-negative decimal or hexadecimal index');
       return;
     }
 
     setIsLoading(true);
     setError(null);
-
     try {
-      // Compute the slot for the array element
-      let computedSlot: bigint;
-
-      if (isDynamic) {
-        // Dynamic array: keccak256(baseSlot) + index * elementSlots
-        computedSlot = computeDynamicArraySlot(
-          BigInt(baseSlot),
-          index,
-          elementSlots
-        );
-      } else {
-        // Static array: baseSlot + index * elementSlots
-        computedSlot = computeStaticArraySlot(
-          BigInt(baseSlot),
-          index,
-          elementSlots
-        );
-      }
-
-      const slotHex = slotToHex(computedSlot);
-
-      // Fetch the value at latest block
-      const result = await fetchSlotValue(chainId, address, slotHex, 'latest');
-
-      // Add to lookups
+      const result = await queryStorage({
+        chain_id: chainId,
+        address,
+        block_ref: blockRef,
+        layout_id: layoutId,
+        access: {
+          declaration_id: declarationId,
+          steps: [{ kind: 'array_index', value: indexInput }],
+        },
+      });
       onLookup({
-        index,
-        computedSlot: slotHex,
+        index: indexInput,
+        slot: result.location.slot,
         rawValue: result.value_encoded,
         decodedValue: result.value_decoded,
       });
-
-      // Clear input after successful lookup
       setIndexInput('');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Lookup failed');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Lookup failed');
     } finally {
       setIsLoading(false);
     }
@@ -104,23 +75,17 @@ export function ArrayIndexInput({
 
   return (
     <div className="space-y-3">
-      {/* Input form */}
       <form onSubmit={handleSubmit} className="flex items-center gap-2">
         <Input
-          type="number"
-          min={0}
-          max={!isDynamic && arrayLength ? arrayLength - 1 : undefined}
+          type="text"
+          inputMode="numeric"
           value={indexInput}
-          onChange={(e) => {
-            setIndexInput(e.target.value);
+          onChange={(event) => {
+            setIndexInput(event.target.value);
             setError(null);
           }}
-          placeholder={
-            !isDynamic && arrayLength
-              ? `Enter index (0-${arrayLength - 1})`
-              : 'Enter array index'
-          }
-          className="w-48 h-7 text-xs font-mono"
+          placeholder={arrayLength ? `Enter index (length ${arrayLength})` : 'Enter array index'}
+          className="h-7 w-52 font-mono text-xs"
           disabled={isLoading}
         />
         <Button
@@ -130,15 +95,15 @@ export function ArrayIndexInput({
           className="h-7 text-xs"
           disabled={isLoading || !indexInput}
         >
-          {isLoading ? 'Loading...' : 'Lookup'}
+          {isLoading ? 'Loading…' : 'Lookup'}
         </Button>
-        <span className="text-[10px] text-gray-400 ml-2">
+        <span className="ml-2 text-[10px] text-gray-400">
           {isDynamic ? 'dynamic array' : `${arrayLength} elements`}
-          {elementType?.label && ` of ${elementType.label}`}
+          {elementLabel && ` of ${elementLabel}`}
         </span>
       </form>
 
-      {error && <p className="text-red text-xs">{error}</p>}
+      {error && <p className="text-xs text-red">{error}</p>}
 
       <LookupResultsTable
         lookups={lookups}

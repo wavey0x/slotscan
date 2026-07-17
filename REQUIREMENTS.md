@@ -19,10 +19,8 @@ not filter other owners from the transaction.
 
 The public API is rooted at `/api/slotscan`:
 
-- `GET /contracts/{chain_id}/{address}`
-- `GET /contracts/{chain_id}/{address}/layout`
-- `GET /storage/{chain_id}/{address}`
-- `GET /storage/{chain_id}/{address}/slot/{slot}`
+- `GET /contracts/{chain_id}/{address}/storage-view`
+- `POST /storage/query`
 - `GET /tx/{chain_id}/{tx_hash}`
 
 ## Contract resolution
@@ -44,8 +42,12 @@ The public API is rooted at `/api/slotscan`:
 
 - Preserve compiler-declared slots, byte offsets, type relationships, and
   packed members.
-- Support Solidity mappings, nested mappings, static/dynamic arrays, structs,
-  strings/bytes, enums, signed integers, and user-defined value types.
+- The contract page initially reads direct scalars, packed scalars, and
+  statically located scalar struct leaves.
+- Typed contract-page queries support scalar mappings, nested mappings ending
+  in scalars, and one top-level fixed- or dynamic-array scalar element.
+- Struct traversal, aggregate materialization, and dynamic string/bytes
+  payloads are not contract-page query inputs.
 - Support Vyper storage allocation across real compiler eras, including
   pre-0.2.13 hashed composites and nonreentrant lock placement.
 - Treat compiler and Vyper versions as input semantics, not as SlotScan payload
@@ -57,13 +59,18 @@ The public API is rooted at `/api/slotscan`:
 
 ## Storage reads
 
-- Resolve `latest` to one concrete block before reading code, layout, and
-  values.
-- Batch RPC reads with bounded fallback to individual calls.
+- Resolve mutable block selectors to one exact number/hash pair before reading
+  code, proxy state, layout, or values.
+- Use the single configured RPC client and EIP-1898 block-hash parameters for
+  the complete storage-view or typed-query attempt.
+- Batch deterministic scalar reads without individual-call fallback.
 - Enforce a maximum slot budget before issuing RPC work.
 - Never replace a failed storage read with a fabricated zero.
 - Mark bounded or incomplete reads explicitly.
-- Read mapping entries only from user-supplied keys or exact evidence.
+- Do not scan unverified storage or eagerly read mappings, arrays, or dynamic
+  payloads.
+- Derive mapping and array locations on the backend from an exact `layout_id`;
+  the browser supplies only raw typed keys or indices.
 
 ## Transaction analysis
 
@@ -107,7 +114,9 @@ they are evidence needed to reproduce a layout.
 - Upstream RPC failures return HTTP 502.
 - Trace unavailability returns a truthful incomplete response rather than an
   invented empty successful trace.
-- Missing layouts degrade to raw slots without hiding writes.
+- Missing contract-page layouts return metadata with values unavailable and no
+  speculative raw-slot scan.
+- Missing transaction layouts keep exact raw writes visible.
 - Timeouts and per-contract resolution failures must not discard successfully
   analyzed storage owners.
 

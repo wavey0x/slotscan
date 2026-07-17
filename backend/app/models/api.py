@@ -2,7 +2,7 @@
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # === Value Types ===
@@ -24,85 +24,107 @@ class ValuePairDecoded(BaseModel):
 # === Response Models ===
 
 
-class ContractResponse(BaseModel):
-    """Contract metadata response."""
+class BlockRefResponse(BaseModel):
+    number: str
+    hash: str
 
-    chain_id: int
+
+class StorageViewContractResponse(BaseModel):
     address: str
+    storage_address: str
+    effective_code_address: str
     name: Optional[str] = None
-    code_hash: Optional[str] = None
-
-    is_delegated: bool = False
-    delegate_address: Optional[str] = None
-    delegate_code_hash: Optional[str] = None
-
+    is_verified: bool
     is_proxy: bool
     proxy_type: Optional[str] = None
-    implementation_address: Optional[str] = None
-
-    is_verified: bool
-    verification_source: Optional[str] = None
-    compiler_version: Optional[str] = None
-
-    has_layout: bool
 
 
-class StorageTypeResponse(BaseModel):
-    """Storage type definition."""
-
-    id: str
-    label: str
-    kind: str
-    encoding: str
-    num_bytes: Optional[int] = None
-    element_type: Optional[str] = None
-    array_length: Optional[int] = None
-    key_type: Optional[str] = None
-    value_type: Optional[str] = None
+class StorageRulesResponse(BaseModel):
+    mapping_preimage_order: Literal["key_then_slot", "slot_then_key"]
+    array_storage_scheme: Literal[
+        "solidity",
+        "vyper_sequential",
+        "vyper_legacy_hashed",
+    ]
 
 
-class StorageVariableResponse(BaseModel):
-    """Storage variable definition."""
-
-    name: str
-    slot: int
-    offset: int
-    size: int
-    type_id: str
-    type_label: str
-    provenance: str = "compiler_layout"
-    confidence: str = "exact"
+class StorageViewLayoutResponse(BaseModel):
+    status: Literal["ok", "unverified", "unsupported"]
+    variables: list[dict[str, Any]]
+    types: dict[str, dict[str, Any]]
+    storage_rules: Optional[StorageRulesResponse] = None
 
 
-class StorageLayoutResponse(BaseModel):
-    """Full storage layout."""
-
-    contract_name: str
-    variables: list[StorageVariableResponse]
-    types: dict[str, StorageTypeResponse]
-
-
-class SlotValueResponse(BaseModel):
-    """A single slot with its value."""
-
+class StorageViewValueItemResponse(BaseModel):
+    declaration_id: str
+    path: str
+    status: Literal["ok", "on_demand", "unsupported", "deferred_budget"]
     slot: str
+    byte_offset: int
+    value_encoded: Optional[str] = None
+    value_decoded: Optional[Any] = None
+
+
+class StorageViewValuesResponse(BaseModel):
+    status: Literal["ok", "error", "unavailable"]
+    items: list[StorageViewValueItemResponse]
+    error_code: Optional[str] = None
+
+
+class StorageViewResponse(BaseModel):
+    block_ref: BlockRefResponse
+    contract: StorageViewContractResponse
+    layout_id: Optional[str] = None
+    layout: StorageViewLayoutResponse
+    values: StorageViewValuesResponse
+
+
+class StorageQueryBlockRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    number: str
+    hash: str
+
+
+class StorageQueryStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["mapping_key", "array_index"]
+    value: str
+
+
+class StorageQueryAccess(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    declaration_id: str
+    steps: list[StorageQueryStep]
+
+
+class StorageQueryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    chain_id: str
+    address: str
+    block_ref: StorageQueryBlockRef
+    layout_id: str
+    access: StorageQueryAccess
+
+
+class StorageQueryLocationResponse(BaseModel):
+    slot: str
+    byte_offset: int
+    byte_size: int
+
+
+class StorageQueryResponse(BaseModel):
+    block_ref: BlockRefResponse
+    layout_id: str
+    declaration_id: str
+    path: str
+    location: StorageQueryLocationResponse
     value_encoded: str
     value_decoded: Optional[Any] = None
-    variable_name: Optional[str] = None
-    variable_path: Optional[str] = None
-    type_label: Optional[str] = None
-
-
-class StorageSnapshotResponse(BaseModel):
-    """Storage state at a block."""
-
-    chain_id: int
-    address: str
-    block_number: int
-    slots: list[SlotValueResponse]
-    is_complete: bool
-    is_verified: bool
-    layout_available: bool = True
+    array_length: Optional[str] = None
 
 
 class StorageChangeResponse(BaseModel):

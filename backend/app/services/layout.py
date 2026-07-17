@@ -127,7 +127,10 @@ class LayoutParser:
         )
 
         raw_layout = self._extract_layout(contract_name, solc_output, contract_fqname)
-        layout = self._normalize_layout(raw_layout, contract_name)
+        layout = replace(
+            self._normalize_layout(raw_layout, contract_name),
+            compiler_version=compiler_version,
+        )
         artifact = self._make_artifact(
             language="Solidity",
             compiler_version=compiler_version,
@@ -400,26 +403,32 @@ class LayoutParser:
 
     def _extract_layout(self, contract_name: str, solc_output: dict, contract_fqname: Optional[str] = None) -> dict:
         """Find and extract storageLayout for target contract."""
-        # If fully qualified name provided (path:Contract), use it
         if contract_fqname and ":" in contract_fqname:
-            parts = contract_fqname.split(":")
-            if len(parts) >= 2:
-                filename = ":".join(parts[:-1])
-                name = parts[-1]
-                contracts = solc_output.get("contracts", {}).get(filename, {})
-                if name in contracts and "storageLayout" in contracts[name]:
-                    return contracts[name]["storageLayout"]
+            filename, name = contract_fqname.rsplit(":", 1)
+            contract_output = (
+                solc_output.get("contracts", {})
+                .get(filename, {})
+                .get(name)
+            )
+            if contract_output and "storageLayout" in contract_output:
+                return contract_output["storageLayout"]
+            raise LayoutNotFoundError(contract_fqname)
 
-        # First pass: exact contract name match across files
-        for filename, contracts in solc_output.get("contracts", {}).items():
-            if contract_name in contracts and "storageLayout" in contracts[contract_name]:
-                return contracts[contract_name]["storageLayout"]
-
-        # Second pass: partial match
-        for filename, contracts in solc_output.get("contracts", {}).items():
-            for name, contract_output in contracts.items():
-                if contract_name.lower() in name.lower() and "storageLayout" in contract_output:
-                    return contract_output["storageLayout"]
+        matches = [
+            (filename, contracts[contract_name]["storageLayout"])
+            for filename, contracts in sorted(
+                solc_output.get("contracts", {}).items()
+            )
+            if contract_name in contracts
+            and "storageLayout" in contracts[contract_name]
+        ]
+        if len(matches) == 1:
+            return matches[0][1]
+        if len(matches) > 1:
+            filenames = ", ".join(filename for filename, _ in matches)
+            raise CompilationError(
+                f"Ambiguous contract name {contract_name}: {filenames}"
+            )
 
         raise LayoutNotFoundError(contract_name)
 
@@ -441,6 +450,7 @@ class LayoutParser:
             variables=variables,
             types=types,
             language="Solidity",
+            storage_scheme="solidity",
         )
 
     def _parse_types(self, raw_types: dict) -> dict[str, StorageType]:
@@ -564,6 +574,7 @@ class LayoutParser:
         contract_name: str,
         sources: dict[str, str],
         compiler_version: str,
+        entry_source: Optional[str] = None,
     ) -> StorageLayout:
         """
         Compile Vyper sources and extract storage layout.
@@ -580,6 +591,7 @@ class LayoutParser:
             contract_name,
             sources,
             compiler_version,
+            entry_source=entry_source,
         )
         return layout
 
@@ -588,23 +600,26 @@ class LayoutParser:
         contract_name: str,
         sources: dict[str, str],
         compiler_version: str,
+        entry_source: Optional[str] = None,
     ) -> tuple[StorageLayout, RawCompilerArtifact]:
-        # Find the main .vy file (usually there's just one)
         vy_files = {k: v for k, v in sources.items() if k.endswith(".vy")}
         if not vy_files:
             raise CompilationError("No .vy files found in sources")
 
-        # Use the first .vy file (or the one matching contract name)
-        main_file = None
-        main_content = None
-        for filename, content in vy_files.items():
-            if contract_name.lower() in filename.lower():
-                main_file = filename
-                main_content = content
-                break
-        if not main_file:
-            main_file, main_content = next(iter(vy_files.items()))
-        assert main_content is not None
+        if entry_source:
+            if entry_source not in vy_files:
+                raise CompilationError(
+                    f"Vyper entry source not found: {entry_source}"
+                )
+            main_file = entry_source
+        elif len(vy_files) == 1:
+            main_file = next(iter(vy_files))
+        else:
+            filenames = ", ".join(sorted(vy_files))
+            raise CompilationError(
+                f"Ambiguous Vyper entry source: {filenames}"
+            )
+        main_content = vy_files[main_file]
 
         # Compile with Vyper
         raw_layout = await self._compile_vyper_with_layout(

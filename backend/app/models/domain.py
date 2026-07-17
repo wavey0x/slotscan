@@ -1,20 +1,7 @@
 """Domain models for SlotScan."""
 
-import re
 from dataclasses import dataclass, asdict
 from typing import Optional, Any
-
-# Pre-compiled regex patterns for type synthesis (performance optimization)
-_UINT_PATTERN = re.compile(r'^t_uint(\d+)$')
-_INT_PATTERN = re.compile(r'^t_int(\d+)$')
-_BYTES_PATTERN = re.compile(r'^t_bytes(\d+)$')
-_HASHMAP_PATTERN = re.compile(r'^HashMap\[(.+),\s*(.+)\]$')
-_DYNARRAY_PATTERN = re.compile(r'^DynArray\[(.+),\s*(\d+)\]$')
-_STATIC_ARRAY_PATTERN = re.compile(r'^(.+)\[(\d+)\]$')
-# Vyper patterns (without t_ prefix)
-_VYPER_UINT_PATTERN = re.compile(r'^uint(\d+)$')
-_VYPER_INT_PATTERN = re.compile(r'^int(\d+)$')
-_VYPER_BYTES_PATTERN = re.compile(r'^bytes(\d+)$')
 
 
 @dataclass
@@ -161,227 +148,13 @@ class StorageLayout:
         )
 
     def get_type(self, type_id: str) -> Optional[StorageType]:
-        """Get type definition by ID, synthesizing primitives if not found."""
+        """Get a type without mutating the layout's type registry."""
         if type_id in self.types:
             return self.types[type_id]
 
-        # Synthesize common primitive types if not in dictionary
-        synthesized = self._synthesize_primitive_type(type_id)
-        if synthesized:
-            # Cache synthesized type to avoid repeated regex matching
-            self.types[type_id] = synthesized
-        return synthesized
+        from app.services.storage_rules import synthesize_storage_type
 
-    def _synthesize_primitive_type(self, type_id: str) -> Optional[StorageType]:
-        """Create StorageType for common primitive types not in the types dict."""
-        # uint types: t_uint8, t_uint16, ..., t_uint256
-        uint_match = _UINT_PATTERN.match(type_id)
-        if uint_match:
-            bits = int(uint_match.group(1))
-            return StorageType(
-                id=type_id,
-                label=f"uint{bits}",
-                kind="value",
-                encoding="inplace",
-                num_bytes=bits // 8,
-            )
-
-        # int types: t_int8, t_int16, ..., t_int256
-        int_match = _INT_PATTERN.match(type_id)
-        if int_match:
-            bits = int(int_match.group(1))
-            return StorageType(
-                id=type_id,
-                label=f"int{bits}",
-                kind="value",
-                encoding="inplace",
-                num_bytes=bits // 8,
-            )
-
-        # address type
-        if type_id == 't_address':
-            return StorageType(
-                id=type_id,
-                label="address",
-                kind="value",
-                encoding="inplace",
-                num_bytes=20,
-            )
-
-        # address payable type
-        if type_id == 't_address_payable':
-            return StorageType(
-                id=type_id,
-                label="address payable",
-                kind="value",
-                encoding="inplace",
-                num_bytes=20,
-            )
-
-        # bool type
-        if type_id == 't_bool':
-            return StorageType(
-                id=type_id,
-                label="bool",
-                kind="value",
-                encoding="inplace",
-                num_bytes=1,
-            )
-
-        # bytesN types: t_bytes1, t_bytes2, ..., t_bytes32
-        bytes_match = _BYTES_PATTERN.match(type_id)
-        if bytes_match:
-            n = int(bytes_match.group(1))
-            return StorageType(
-                id=type_id,
-                label=f"bytes{n}",
-                kind="value",
-                encoding="inplace",
-                num_bytes=n,
-            )
-
-        # string storage (dynamic)
-        if type_id == 't_string_storage':
-            return StorageType(
-                id=type_id,
-                label="string",
-                kind="value",
-                encoding="bytes",
-                num_bytes=32,
-            )
-
-        # bytes storage (dynamic)
-        if type_id == 't_bytes_storage':
-            return StorageType(
-                id=type_id,
-                label="bytes",
-                kind="value",
-                encoding="bytes",
-                num_bytes=32,
-            )
-
-        # --- Vyper type synthesis ---
-
-        # Vyper HashMap: HashMap[key_type, value_type]
-        hashmap_match = _HASHMAP_PATTERN.match(type_id)
-        if hashmap_match:
-            return StorageType(
-                id=type_id,
-                label=type_id,
-                kind="mapping",
-                encoding="mapping",
-                key_type=hashmap_match.group(1).strip(),
-                value_type=hashmap_match.group(2).strip(),
-                num_bytes=32,
-            )
-
-        # Vyper DynArray: DynArray[element_type, max_len]
-        dynarray_match = _DYNARRAY_PATTERN.match(type_id)
-        if dynarray_match:
-            return StorageType(
-                id=type_id,
-                label=type_id,
-                kind="array",
-                encoding="dynamic_array",
-                element_type=dynarray_match.group(1).strip(),
-                array_length=int(dynarray_match.group(2)),
-                num_bytes=32,
-            )
-
-        # Vyper static array: type[length] e.g. uint256[10]
-        static_array_match = _STATIC_ARRAY_PATTERN.match(type_id)
-        if static_array_match:
-            element_type = static_array_match.group(1).strip()
-            length = int(static_array_match.group(2))
-            # Estimate bytes based on element count (assume 32 bytes per element)
-            return StorageType(
-                id=type_id,
-                label=type_id,
-                kind="array",
-                encoding="inplace",
-                element_type=element_type,
-                array_length=length,
-                num_bytes=32 * length,
-            )
-
-        # Vyper primitive types (same names as Solidity but without t_ prefix)
-        # address
-        if type_id == 'address':
-            return StorageType(
-                id=type_id,
-                label="address",
-                kind="value",
-                encoding="inplace",
-                num_bytes=20,
-            )
-
-        # bool
-        if type_id == 'bool':
-            return StorageType(
-                id=type_id,
-                label="bool",
-                kind="value",
-                encoding="inplace",
-                num_bytes=1,
-            )
-
-        # Vyper uint types: uint8, uint16, ..., uint256
-        vyper_uint_match = _VYPER_UINT_PATTERN.match(type_id)
-        if vyper_uint_match:
-            bits = int(vyper_uint_match.group(1))
-            return StorageType(
-                id=type_id,
-                label=f"uint{bits}",
-                kind="value",
-                encoding="inplace",
-                num_bytes=bits // 8,
-            )
-
-        # Vyper int types: int8, int16, ..., int256
-        vyper_int_match = _VYPER_INT_PATTERN.match(type_id)
-        if vyper_int_match:
-            bits = int(vyper_int_match.group(1))
-            return StorageType(
-                id=type_id,
-                label=f"int{bits}",
-                kind="value",
-                encoding="inplace",
-                num_bytes=bits // 8,
-            )
-
-        # Vyper bytes types: bytes1, bytes2, ..., bytes32
-        vyper_bytes_match = _VYPER_BYTES_PATTERN.match(type_id)
-        if vyper_bytes_match:
-            n = int(vyper_bytes_match.group(1))
-            return StorageType(
-                id=type_id,
-                label=f"bytes{n}",
-                kind="value",
-                encoding="inplace",
-                num_bytes=n,
-            )
-
-        # Vyper Bytes (dynamic bytes)
-        if type_id == 'Bytes':
-            return StorageType(
-                id=type_id,
-                label="Bytes",
-                kind="value",
-                encoding="bytes",
-                num_bytes=32,
-            )
-
-        # Vyper String
-        if type_id == 'String':
-            return StorageType(
-                id=type_id,
-                label="String",
-                kind="value",
-                encoding="bytes",
-                num_bytes=32,
-            )
-
-        return None
+        return synthesize_storage_type(type_id)
 
     def to_dict(self) -> dict:
         """Serialize to dictionary for JSON storage."""
@@ -439,29 +212,6 @@ class DecodedValue:
     raw: str
     decoded: Any
     type_label: str
-
-
-@dataclass
-class SlotValue:
-    """A single storage slot with its value."""
-
-    slot: str
-    raw_value: str
-    variable: Optional[StorageVariable] = None
-    decoded_value: Optional[DecodedValue] = None
-    variable_path: Optional[str] = None
-
-
-@dataclass
-class StorageSnapshot:
-    """Complete storage state at a block."""
-
-    chain_id: int
-    address: str
-    block_number: int
-    slots: list[SlotValue]
-    is_complete: bool
-    layout: Optional[StorageLayout] = None
 
 
 @dataclass
@@ -549,6 +299,7 @@ class ContractMetadata:
     verification_source: Optional[str] = None
     name: Optional[str] = None
     compiler_version: Optional[str] = None
+    compilation_target: Optional[dict[str, str]] = None
     sources: Optional[dict[str, str]] = None
     compiler_settings: Optional[dict] = None
     storage_layout: Optional[StorageLayout] = None

@@ -22,6 +22,6 @@ export function getTxExplorerUrl(chainId: string | number, txHash: string): stri
   return `${getExplorerUrl(chainId)}/tx/${txHash}`;
 }
 
-export function getBlockExplorerUrl(chainId: string | number, blockNumber: number): string {
+export function getBlockExplorerUrl(chainId: string | number, blockNumber: string | number): string {
   return `${getExplorerUrl(chainId)}/block/${blockNumber}`;
 }

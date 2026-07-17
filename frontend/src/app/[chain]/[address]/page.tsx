@@ -2,13 +2,14 @@ import { ContractPage } from '@/components/contract/ContractPage';
 import { PageFrame } from '@/components/layout/PageFrame';
 
 interface ContractRouteProps {
-  params: { chain: string; address: string };
+  params: Promise<{ chain: string; address: string }>;
 }
 
-export default function ContractRoute({ params }: ContractRouteProps) {
+export default async function ContractRoute({ params }: ContractRouteProps) {
+  const { chain, address } = await params;
   return (
     <PageFrame>
-      <ContractPage chain={params.chain} address={params.address} />
+      <ContractPage chain={chain} address={address} />
     </PageFrame>
   );
 }

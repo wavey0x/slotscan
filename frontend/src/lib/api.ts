@@ -1,8 +1,7 @@
 import type {
-  ContractResponse,
-  SlotValueResponse,
-  StorageLayoutResponse,
-  StorageSnapshotResponse,
+  StorageQueryRequest,
+  StorageQueryResponse,
+  StorageViewResponse,
   TransactionStorageHistoryResponse,
 } from './types';
 
@@ -23,7 +22,7 @@ export class APIError extends Error {
   }
 }
 
-async function fetchWithTimeout(url: string, externalSignal?: AbortSignal): Promise<Response> {
+async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
   const timeoutController = new AbortController();
   const mergedController = new AbortController();
   const timer = setTimeout(() => timeoutController.abort(), API_TIMEOUT_MS);
@@ -33,18 +32,18 @@ async function fetchWithTimeout(url: string, externalSignal?: AbortSignal): Prom
     signal.addEventListener('abort', () => mergedController.abort(), { once: true });
   };
   forwardAbort(timeoutController.signal);
-  if (externalSignal) forwardAbort(externalSignal);
+  if (init?.signal) forwardAbort(init.signal);
 
   try {
-    return await fetch(url, { signal: mergedController.signal });
+    return await fetch(url, { ...init, signal: mergedController.signal });
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function fetchAPI<T>(url: string): Promise<T> {
+async function fetchAPI<T>(url: string, init?: RequestInit): Promise<T> {
   try {
-    const res = await fetchWithTimeout(url);
+    const res = await fetchWithTimeout(url, init);
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: 'Request failed', code: 'UNKNOWN' }));
       // FastAPI wraps error details in { detail: {...} }
@@ -68,32 +67,24 @@ async function fetchAPI<T>(url: string): Promise<T> {
   }
 }
 
-export async function fetchContract(
-  chainId: string,
-  address: string
-): Promise<ContractResponse> {
-  return fetchAPI(`${API_BASE}/contracts/${chainId}/${address}`);
-}
-
-export async function fetchLayout(
-  chainId: string,
-  address: string
-): Promise<StorageLayoutResponse> {
-  return fetchAPI(`${API_BASE}/contracts/${chainId}/${address}/layout`);
-}
-
-export async function fetchStorage(
+export async function fetchStorageView(
   chainId: string,
   address: string,
-  block: number | 'latest',
-  mappingKeys?: Record<number, string[]>
-): Promise<StorageSnapshotResponse> {
+  selector: string = 'latest'
+): Promise<StorageViewResponse> {
   const params = new URLSearchParams();
-  params.set('block', block.toString());
-  if (mappingKeys) {
-    params.set('mapping_keys', JSON.stringify(mappingKeys));
-  }
-  return fetchAPI(`${API_BASE}/storage/${chainId}/${address}?${params}`);
+  params.set('block', selector);
+  return fetchAPI(`${API_BASE}/contracts/${chainId}/${address}/storage-view?${params}`);
+}
+
+export async function queryStorage(
+  request: StorageQueryRequest
+): Promise<StorageQueryResponse> {
+  return fetchAPI(`${API_BASE}/storage/query`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
 }
 
 export async function fetchTransactionStorageHistory(
@@ -104,15 +95,4 @@ export async function fetchTransactionStorageHistory(
   const params = new URLSearchParams();
   params.set('include_global_order', String(includeGlobalOrder));
   return fetchAPI(`${API_BASE}/tx/${chainId}/${txHash}?${params}`);
-}
-
-export async function fetchSlotValue(
-  chainId: string,
-  address: string,
-  slot: string,
-  block: number | 'latest'
-): Promise<SlotValueResponse> {
-  const params = new URLSearchParams();
-  params.set('block', block.toString());
-  return fetchAPI(`${API_BASE}/storage/${chainId}/${address}/slot/${slot}?${params}`);
 }

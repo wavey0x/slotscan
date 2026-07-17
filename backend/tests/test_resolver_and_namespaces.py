@@ -15,7 +15,17 @@ from app.models.domain import (
 )
 from app.models.errors import VerificationProviderError
 from app.services.namespace_storage import NamespaceStorageParser
-from app.services.resolver import ContractResolver
+from app.services.resolver import (
+    EIP1167_PREFIX,
+    EIP1167_SUFFIX,
+    EIP1822_SLOT,
+    EIP1967_ADMIN_SLOT,
+    EIP1967_BEACON_SLOT,
+    EIP1967_IMPL_SLOT,
+    ZEPPELINOS_ADMIN_SLOT,
+    ZEPPELINOS_IMPL_SLOT,
+    ContractResolver,
+)
 from app.services.tracer.slot_resolver import SlotPathResolver
 from app.utils.vyper import (
     LEGACY_HASHED_STORAGE,
@@ -562,6 +572,92 @@ class _Resolver(ContractResolver):
 
 
 class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_slot_and_beacon_proxy_families_are_preserved_without_admin_reads(self):
+        implementation = Web3.to_checksum_address("0x" + "22" * 20)
+        beacon = Web3.to_checksum_address("0x" + "33" * 20)
+
+        class Provider:
+            def __init__(self, slots, beacon_result=None):
+                self.slots = slots
+                self.beacon_result = beacon_result
+                self.storage_calls = []
+
+            async def get_storage_at(self, chain_id, address, slot, block):
+                self.storage_calls.append(slot)
+                target = self.slots.get(slot)
+                if not target:
+                    return bytes(32)
+                return bytes(12) + bytes.fromhex(target[2:])
+
+            async def eth_call(self, chain_id, transaction, block):
+                return bytes(12) + bytes.fromhex(self.beacon_result[2:])
+
+        cases = (
+            ("eip1967", {EIP1967_IMPL_SLOT: implementation}, None),
+            ("eip1822", {EIP1822_SLOT: implementation}, None),
+            ("zeppelinos", {ZEPPELINOS_IMPL_SLOT: implementation}, None),
+            (
+                "beacon",
+                {EIP1967_BEACON_SLOT: beacon},
+                implementation,
+            ),
+        )
+        for expected_type, slots, beacon_result in cases:
+            with self.subTest(expected_type=expected_type):
+                provider = Provider(slots, beacon_result)
+                detected = await ContractResolver(
+                    provider,
+                    Settings(),
+                    http_client=object(),
+                ).detect_proxy(1, ADDRESS, block=123, bytecode=b"\x60\x00")
+
+                self.assertEqual(detected.proxy_type, expected_type)
+                self.assertEqual(
+                    detected.implementation_address,
+                    implementation,
+                )
+                self.assertNotIn(EIP1967_ADMIN_SLOT, provider.storage_calls)
+                self.assertNotIn(ZEPPELINOS_ADMIN_SLOT, provider.storage_calls)
+
+    async def test_eip1167_is_detected_without_slot_reads(self):
+        implementation = Web3.to_checksum_address("0x" + "22" * 20)
+
+        class Provider:
+            async def get_storage_at(self, *args):
+                raise AssertionError("minimal proxy must not read proxy slots")
+
+        bytecode = (
+            EIP1167_PREFIX
+            + bytes.fromhex(implementation[2:])
+            + EIP1167_SUFFIX
+        )
+        detected = await ContractResolver(
+            Provider(),
+            Settings(),
+            http_client=object(),
+        ).detect_proxy(1, ADDRESS, block=123, bytecode=bytecode)
+
+        self.assertEqual(detected.proxy_type, "eip1167")
+        self.assertEqual(detected.implementation_address, implementation)
+
+    async def test_proxy_slot_failure_is_propagated(self):
+        class Provider:
+            async def get_storage_at(self, *args):
+                raise RuntimeError("slot unavailable")
+
+        resolver = ContractResolver(
+            Provider(),
+            Settings(),
+            http_client=object(),
+        )
+        with self.assertRaisesRegex(RuntimeError, "slot unavailable"):
+            await resolver.detect_proxy(
+                1,
+                ADDRESS,
+                block=123,
+                bytecode=b"\x60\x00",
+            )
+
     async def _detect_callable_proxy(self, selector: str):
         implementation = Web3.to_checksum_address("0x" + "22" * 20)
 
