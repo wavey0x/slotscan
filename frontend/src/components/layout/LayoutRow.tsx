@@ -66,9 +66,6 @@ export const LayoutRow = memo(function LayoutRow({
       : undefined;
   }
 
-  const elementType = varType?.element_type
-    ? types[varType.element_type]
-    : undefined;
   const successfulValues = values.filter(
     (value) => value.status === 'ok' && value.value_encoded
   );
@@ -159,7 +156,7 @@ export const LayoutRow = memo(function LayoutRow({
 
       {expanded && isMapping && (
         <tr className="bg-gray-50/50">
-          <td colSpan={5} className="border-b border-gray-100 px-4 py-3">
+          <td colSpan={5} className="border-b border-gray-100 px-4 pb-2 pt-1">
             <MappingKeyInput
               declarationId={variable.declaration_id}
               keyTypes={mappingKeyTypes}
@@ -176,11 +173,9 @@ export const LayoutRow = memo(function LayoutRow({
 
       {expanded && isArray && !isMapping && (
         <tr className="bg-gray-50/50">
-          <td colSpan={5} className="border-b border-gray-100 px-4 py-3">
+          <td colSpan={5} className="border-b border-gray-100 px-4 pb-2 pt-1">
             <ArrayIndexInput
               declarationId={variable.declaration_id}
-              elementLabel={elementType?.label}
-              isDynamic={isDynamicArray}
               arrayLength={varType?.array_length ?? null}
               chainId={chainId}
               address={address}

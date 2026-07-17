@@ -12,8 +12,6 @@ import { LookupResultsTable } from './LookupResultsTable';
 
 interface ArrayIndexInputProps {
   declarationId: string;
-  elementLabel?: string;
-  isDynamic: boolean;
   arrayLength: string | null;
   chainId: string;
   address: string;
@@ -25,8 +23,6 @@ interface ArrayIndexInputProps {
 
 export function ArrayIndexInput({
   declarationId,
-  elementLabel,
-  isDynamic,
   arrayLength,
   chainId,
   address,
@@ -97,10 +93,6 @@ export function ArrayIndexInput({
         >
           {isLoading ? 'Loading…' : 'Lookup'}
         </Button>
-        <span className="ml-2 text-[10px] text-gray-400">
-          {isDynamic ? 'dynamic array' : `${arrayLength} elements`}
-          {elementLabel && ` of ${elementLabel}`}
-        </span>
       </form>
 
       {error && <p className="text-xs text-red">{error}</p>}
