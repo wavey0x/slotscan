@@ -763,6 +763,15 @@ test('timeline names struct members and stays readable on mobile', async ({ page
   await expect(slotDetail).toContainText(slots[1].slot);
   await expect(slotDetail.getByRole('button', { name: 'Copy slot' })).toBeVisible();
   await page.keyboard.press('Escape');
+
+  await smallNumberRow.getByText('_status', { exact: true }).click();
+  const scalarDetail = page.getByRole('dialog', { name: 'Variable details: _status' });
+  await expect(scalarDetail).toContainText('_status');
+  await expect(scalarDetail).toContainText('uint8');
+  await expect(scalarDetail).toContainText(contract.storage_address);
+  await expect(scalarDetail.getByRole('button', { name: 'Copy full path' })).toBeVisible();
+  await page.keyboard.press('Escape');
+
   const scroll = page.getByTestId('data-table-scroll');
   const scrollState = await scroll.evaluate((element) => ({
     clientWidth: element.clientWidth,
@@ -785,6 +794,115 @@ test('timeline names struct members and stays readable on mobile', async ({ page
   await expect(groupedSmallNumberRow.getByTestId('value-diff').getByRole('button', { name: 'Copy value' })).toHaveCount(0);
   // The slot column (and its copy action) is hidden at mobile widths.
   await expect(groupedSmallNumberRow.getByRole('button', { name: 'Copy value' })).toHaveCount(0);
+});
+
+test('timeline contains single-key mapping paths on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  const account = '0xe53800000000000000000000000000000000aaf0';
+  const implementation = '0x8888888888888888888888888888888888888888';
+  const scalarSlot = configScalarSlot({
+    slot: 25,
+    variable: 'balance_of',
+    typeLabel: 'uint256',
+    beforeValue: '579900000000000000000',
+    afterValue: '600580000000000000000',
+    beforeEncoded: `0x${'00'.repeat(31)}01`,
+    afterEncoded: `0x${'00'.repeat(31)}02`,
+    step: 1700,
+  });
+  const slot = {
+    ...scalarSlot,
+    variable_path: `balance_of[${account}]`,
+    is_static_slot: false,
+    is_mapping: true,
+    params: [{ type: 'address', value: account, label: null }],
+  };
+  const contract = resolutionContract({
+    storage_address: '0x6666666666666666666666666666666666666666',
+    code_addresses: ['0x6666666666666666666666666666666666666666'],
+    implementation_addresses: [implementation],
+    name: 'YearnV3Vault',
+    is_verified: true,
+    layout_available: true,
+    resolution: { resolved: 1, total: 1 },
+    slots: [slot],
+  });
+  const response = resolutionResponse([
+    contract,
+    resolutionContract({
+      storage_address: '0x7777777777777777777777777777777777777777',
+      code_addresses: ['0x7777777777777777777777777777777777777777'],
+      name: 'OtherContract',
+    }),
+  ]);
+  response.global_order = [{
+    ordinal: 0,
+    step: slot.changes[0].step,
+    storage_address: contract.storage_address,
+    slot: slot.slot,
+    event_index: 0,
+  }];
+  await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
+    await route.fulfill({ json: response });
+  });
+
+  await page.goto(`/1/tx/${RESOLUTION_TX}?view=timeline`);
+
+  const row = page.getByTestId('timeline-event');
+  const variableCell = row.getByTestId('timeline-variable');
+  const valueCell = row.getByTestId('timeline-value');
+  const path = row.getByTestId('keyed-variable-path');
+  const primary = row.getByTestId('keyed-variable-primary');
+  const base = row.getByTestId('keyed-variable-base');
+  const disclosure = variableCell.locator('[aria-haspopup="dialog"]');
+  await expect(primary).toContainText('balance_of');
+  await expect(primary).toContainText('0xe538...aaf0');
+  expect(await path.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(await valueCell.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const variableBox = await variableCell.boundingBox();
+  const valueBox = await valueCell.boundingBox();
+  expect(variableBox).not.toBeNull();
+  expect(valueBox).not.toBeNull();
+  expect(variableBox!.x + variableBox!.width).toBeLessThanOrEqual(valueBox!.x + 1);
+
+  await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+  await base.click();
+  await expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+  const pathDetail = page.getByRole('dialog', { name: `Variable details: ${slot.variable_path}` });
+  await expect(pathDetail).toContainText(slot.variable_path);
+  await expect(pathDetail).toContainText('uint256');
+  await expect(pathDetail).toContainText('YearnV3Vault');
+  await expect(pathDetail).toContainText(contract.storage_address);
+  await expect(pathDetail).toContainText(implementation);
+  await expect(pathDetail.getByText('Written via', { exact: true })).toBeVisible();
+  await expect(pathDetail.getByRole('link', { name: contract.storage_address })).toHaveAttribute(
+    'href',
+    `https://etherscan.io/address/${contract.storage_address}`,
+  );
+  await expect(pathDetail.getByRole('link', { name: implementation })).toHaveAttribute(
+    'href',
+    `https://etherscan.io/address/${implementation}`,
+  );
+  const detailBox = await pathDetail.boundingBox();
+  expect(detailBox).not.toBeNull();
+  expect(detailBox!.x).toBeGreaterThanOrEqual(7);
+  expect(detailBox!.x + detailBox!.width).toBeLessThanOrEqual(383);
+
+  await pathDetail.getByRole('button', { name: 'Copy full path' }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(slot.variable_path);
+  await pathDetail.getByRole('button', { name: 'Copy storage contract address' }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(contract.storage_address);
+  await pathDetail.getByRole('button', { name: `Copy implementation address 0x8888...8888` }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(implementation);
+
+  await page.keyboard.press('Escape');
+  await expect(pathDetail).toHaveCount(0);
+  await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await base.hover();
+  await expect(page.getByRole('dialog', { name: `Variable details: ${slot.variable_path}` })).toBeVisible();
 });
 
 test('transaction summary, controls, and copy actions stay compact at wide widths', async ({ page }) => {

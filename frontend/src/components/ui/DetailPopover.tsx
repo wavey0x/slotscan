@@ -17,6 +17,7 @@ interface DetailPopoverProps {
   children: ReactNode;
   className?: string;
   contentClassName?: string;
+  dialogLabel?: string;
   delay?: number;
   maxWidth?: string;
 }
@@ -30,6 +31,7 @@ export function DetailPopover({
   children,
   className,
   contentClassName,
+  dialogLabel,
   delay = 100,
   maxWidth = 'max-w-md',
 }: DetailPopoverProps) {
@@ -41,6 +43,7 @@ export function DetailPopover({
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pointerRef = useRef<{ x: number; y: number } | null>(null);
+  const suppressFocusOpenRef = useRef(false);
   const panelId = useId();
 
   useEffect(() => setMounted(true), []);
@@ -115,7 +118,11 @@ export function DetailPopover({
     if (event.key !== 'Escape') return;
     clearTimers();
     setOpen(false);
-    triggerRef.current?.focus();
+    const trigger = triggerRef.current;
+    if (trigger && document.activeElement !== trigger) {
+      suppressFocusOpenRef.current = true;
+      trigger.focus();
+    }
   };
 
   const panel = open && mounted && content ? createPortal(
@@ -123,6 +130,7 @@ export function DetailPopover({
       ref={panelRef}
       id={panelId}
       role="dialog"
+      aria-label={dialogLabel}
       className={cn(
         'detail-popover fixed z-[99999] border border-gray-600 bg-gray-900 p-3 text-xs text-white',
         maxWidth,
@@ -145,7 +153,9 @@ export function DetailPopover({
       <div
         ref={triggerRef}
         tabIndex={0}
-        aria-describedby={open ? panelId : undefined}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
         className={cn('inline-block focus-visible:outline focus-visible:outline-1 focus-visible:outline-gray-500', className)}
         onMouseEnter={(event) => {
           pointerRef.current = { x: event.clientX, y: event.clientY };
@@ -154,6 +164,10 @@ export function DetailPopover({
         onMouseLeave={scheduleClose}
         onFocus={(event) => {
           if (event.target !== event.currentTarget) return;
+          if (suppressFocusOpenRef.current) {
+            suppressFocusOpenRef.current = false;
+            return;
+          }
           pointerRef.current = null;
           scheduleOpen(0);
         }}

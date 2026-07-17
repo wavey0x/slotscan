@@ -1,5 +1,6 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { DetailPopover } from '@/components/ui/DetailPopover';
 import { getAddressExplorerUrl } from '@/lib/constants';
@@ -16,6 +17,8 @@ interface KeyedVariablePathProps {
   chainId: string;
   /** Keep a single leaf field in canonical order while truncating only its base name. */
   canonicalLeaf?: boolean;
+  /** Allow the parent surface to own path disclosure and copy actions. */
+  showCopyAction?: boolean;
 }
 
 function canonicalPath(path: string): string {
@@ -97,10 +100,12 @@ function Key({ value, chainId }: { value: string; chainId: string }) {
 
 function InlineSegment({ segment, chainId }: { segment: PathSegment; chainId: string }) {
   return (
-    <span className="whitespace-nowrap">
-      <span>{segment.name}</span>
+    <span className="inline-flex min-w-0 max-w-full whitespace-nowrap">
+      <span className="min-w-0 truncate" data-testid="keyed-variable-base">{segment.name}</span>
       {segment.keys.map((key, index) => (
-        <Key key={`${key}:${index}`} value={key} chainId={chainId} />
+        <span key={`${key}:${index}`} className="shrink-0">
+          <Key value={key} chainId={chainId} />
+        </span>
       ))}
     </span>
   );
@@ -124,11 +129,34 @@ function segmentLines(segment: PathSegment, separator: boolean): PathLine[] {
   }));
 }
 
+function PathDisclosure({
+  fullPath,
+  children,
+}: {
+  fullPath: string;
+  children: ReactNode;
+}) {
+  return (
+    <DetailPopover
+      className="w-full max-w-full"
+      content={(
+        <div className="flex max-w-xs items-start gap-1">
+          <span className="break-all font-mono text-xs">{fullPath}</span>
+          <CopyButton value={fullPath} label="Copy full path" className="-my-1 shrink-0" />
+        </div>
+      )}
+    >
+      {children}
+    </DetailPopover>
+  );
+}
+
 export function KeyedVariablePath({
   path,
   typeLabel,
   chainId,
   canonicalLeaf = false,
+  showCopyAction = true,
 }: KeyedVariablePathProps) {
   const fullPath = canonicalPath(path);
   const segments = splitPath(fullPath).map(parseSegment);
@@ -150,92 +178,104 @@ export function KeyedVariablePath({
     : [];
 
   if (canonicalBase) {
+    const canonicalDisplay = (
+      <span
+        className="flex min-w-0 items-center overflow-hidden whitespace-nowrap text-xs font-medium text-gray-900"
+        data-testid="keyed-variable-primary"
+        title={showCopyAction
+          ? (typeLabel ? `${fullPath} · ${typeLabel}` : fullPath)
+          : undefined}
+      >
+        <span className="min-w-0 truncate" data-testid="keyed-variable-base">
+          {canonicalBase.name}
+        </span>
+        {canonicalBase.keys.map((key, index) => (
+          <span key={`${key}:${index}`} className="shrink-0">
+            <Key value={key} chainId={chainId} />
+          </span>
+        ))}
+        <span className="shrink-0" data-testid="keyed-variable-leaf">.{finalSegment.name}</span>
+      </span>
+    );
+
     return (
       <div className="min-w-0 font-mono leading-tight" data-testid="keyed-variable-path">
-        <DetailPopover
-          className="max-w-full"
-          content={(
-            <div className="flex max-w-xs items-start gap-1">
-              <span className="break-all font-mono text-xs">{fullPath}</span>
-              <CopyButton value={fullPath} label="Copy full path" className="-my-1 shrink-0" />
-            </div>
-          )}
-        >
-          <span
-            className="flex min-w-0 items-center overflow-hidden whitespace-nowrap text-xs font-medium text-gray-900"
-            data-testid="keyed-variable-primary"
-            title={typeLabel ? `${fullPath} · ${typeLabel}` : fullPath}
-          >
-            <span className="min-w-0 truncate" data-testid="keyed-variable-base">
-              {canonicalBase.name}
-            </span>
-            {canonicalBase.keys.map((key, index) => (
-              <span key={`${key}:${index}`} className="shrink-0">
-                <Key value={key} chainId={chainId} />
-              </span>
-            ))}
-            <span className="shrink-0" data-testid="keyed-variable-leaf">.{finalSegment.name}</span>
-          </span>
-        </DetailPopover>
+        {showCopyAction
+          ? <PathDisclosure fullPath={fullPath}>{canonicalDisplay}</PathDisclosure>
+          : canonicalDisplay}
       </div>
     );
   }
 
+  const primary = (
+    <span
+      className="block min-w-0 max-w-full overflow-hidden break-words text-xs font-medium text-gray-900"
+      data-testid="keyed-variable-primary"
+      title={showCopyAction ? fullPath : undefined}
+    >
+      {hasLeafField || stackKeys
+        ? finalSegment.name
+        : <InlineSegment segment={finalSegment} chainId={chainId} />}
+    </span>
+  );
+  const contextDisplay = stackKeys ? (
+    <div
+      className="mt-0.5 space-y-0 overflow-hidden text-[10px] text-gray-400"
+      data-testid="keyed-variable-context"
+    >
+      {stackedLines.map((line, index) => (
+        <div
+          key={`${line.name}:${line.key}:${index}`}
+          className="flex min-w-0 flex-wrap items-baseline gap-x-1 overflow-hidden pl-2"
+          data-testid={line.key ? 'keyed-variable-key-line' : undefined}
+        >
+          {line.separator && <span aria-hidden="true">›</span>}
+          {line.name && <span className="min-w-0 truncate">{line.name}</span>}
+          {line.key && <Key value={line.key} chainId={chainId} />}
+          {index === stackedLines.length - 1 && typeLabel && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>{typeLabel}</span>
+            </>
+          )}
+        </div>
+      ))}
+    </div>
+  ) : (context.length > 0 || typeLabel) && (
+    <div
+      className="mt-0.5 flex min-w-0 flex-wrap items-baseline gap-x-1 overflow-hidden text-[10px] text-gray-400"
+      data-testid="keyed-variable-context"
+    >
+      {context.map((segment, index) => (
+        <span key={`${segment.name}:${index}`} className="contents">
+          {index > 0 && <span aria-hidden="true">›</span>}
+          <InlineSegment segment={segment} chainId={chainId} />
+        </span>
+      ))}
+      {context.length > 0 && typeLabel && <span aria-hidden="true">·</span>}
+      {typeLabel && <span>{typeLabel}</span>}
+    </div>
+  );
+
   return (
     <div className="min-w-0 font-mono leading-tight" data-testid="keyed-variable-path">
-      <div className="flex min-w-0 items-center">
-        <span
-          className="min-w-0 break-words text-xs font-medium text-gray-900"
-          data-testid="keyed-variable-primary"
-          title={fullPath}
-        >
-          {hasLeafField || stackKeys
-            ? finalSegment.name
-            : <InlineSegment segment={finalSegment} chainId={chainId} />}
-        </span>
-        <CopyButton
-          value={fullPath}
-          label="Copy full path"
-          className="-my-1 ml-0.5 shrink-0 p-1 text-gray-400"
-        />
-      </div>
-      {stackKeys ? (
-        <div
-          className="mt-0.5 space-y-0 text-[10px] text-gray-400"
-          data-testid="keyed-variable-context"
-        >
-          {stackedLines.map((line, index) => (
-            <div
-              key={`${line.name}:${line.key}:${index}`}
-              className="flex min-w-0 items-baseline gap-x-1 pl-2"
-              data-testid={line.key ? 'keyed-variable-key-line' : undefined}
-            >
-              {line.separator && <span aria-hidden="true">›</span>}
-              {line.name && <span>{line.name}</span>}
-              {line.key && <Key value={line.key} chainId={chainId} />}
-              {index === stackedLines.length - 1 && typeLabel && (
-                <>
-                  <span aria-hidden="true">·</span>
-                  <span>{typeLabel}</span>
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-      ) : (context.length > 0 || typeLabel) && (
-        <div
-          className="mt-0.5 flex flex-wrap items-baseline gap-x-1 text-[10px] text-gray-400"
-          data-testid="keyed-variable-context"
-        >
-          {context.map((segment, index) => (
-            <span key={`${segment.name}:${index}`} className="contents">
-              {index > 0 && <span aria-hidden="true">›</span>}
-              <InlineSegment segment={segment} chainId={chainId} />
-            </span>
-          ))}
-          {context.length > 0 && typeLabel && <span aria-hidden="true">·</span>}
-          {typeLabel && <span>{typeLabel}</span>}
-        </div>
+      {showCopyAction ? (
+        <>
+          <div className="flex min-w-0 items-center">
+            {primary}
+            <CopyButton
+              value={fullPath}
+              label="Copy full path"
+              className="-my-1 ml-0.5 shrink-0 p-1 text-gray-400"
+            />
+          </div>
+          {contextDisplay}
+        </>
+      ) : (
+        <>
+          {primary}
+          {contextDisplay}
+        </>
       )}
     </div>
   );
