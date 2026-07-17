@@ -714,9 +714,13 @@ test('timeline names struct members and stays readable on mobile', async ({ page
   await expect(noopRow.getByTestId('timeline-value')).toContainText(truncatedOracle);
   const noopIndicator = noopRow.getByTestId('value-noop-indicator');
   await expect(noopIndicator).toBeVisible();
-  await expect(noopIndicator).toHaveAttribute('title', 'Written, value unchanged');
-  await expect(noopIndicator.locator('svg')).toHaveCount(1);
-  await expect(noopIndicator).not.toContainText('↺');
+  await expect(noopIndicator).toHaveText('=');
+  await expect(noopIndicator).not.toHaveAttribute('title', /.+/);
+  await expect(noopIndicator.locator('svg')).toHaveCount(0);
+  await noopIndicator.hover();
+  await expect(page.getByRole('dialog', { name: 'Same value written' })).toContainText('Same value written');
+  await changedRow.hover();
+  await expect(page.getByRole('dialog', { name: 'Same value written' })).toHaveCount(0);
   await expect(noopRow.getByTestId('value-arrow')).toHaveCount(0);
   await expect(noopRow.getByRole('button', { name: 'Copy oracle' })).toBeVisible();
   await expect(noopRow.getByRole('button', { name: 'Copy previous oracle' })).toHaveCount(0);

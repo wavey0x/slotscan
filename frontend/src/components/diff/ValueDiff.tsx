@@ -1,6 +1,6 @@
 import { ReactNode } from 'react';
-import { CircleEqual } from 'lucide-react';
 import { CopyButton } from '@/components/ui/CopyButton';
+import { DetailPopover } from '@/components/ui/DetailPopover';
 import { cn, formatDecodedValue, shouldShowCopyAction, valuesEqual } from '@/lib/utils';
 
 interface ValueDiffProps {
@@ -19,14 +19,21 @@ interface ValueDiffProps {
  */
 export function UnchangedIndicator() {
   return (
-    <span
-      data-testid="value-noop-indicator"
-      title="Written, value unchanged"
-      className="inline-flex h-4 w-4 shrink-0 cursor-default items-center justify-center text-gray-400"
+    <DetailPopover
+      content={<span className="whitespace-nowrap text-[10px] text-gray-600">Same value written</span>}
+      dialogLabel="Same value written"
+      delay={300}
+      maxWidth="max-w-xs"
+      className="shrink-0 leading-none"
     >
-      <CircleEqual aria-hidden="true" size={13} strokeWidth={1.5} />
-      <span className="sr-only">written, value unchanged</span>
-    </span>
+      <span
+        data-testid="value-noop-indicator"
+        aria-label="Same value written"
+        className="inline-flex h-3 cursor-default items-center text-[10px] leading-none text-gray-300 transition-colors hover:text-gray-500"
+      >
+        =
+      </span>
+    </DetailPopover>
   );
 }
 
@@ -45,7 +52,7 @@ export function ValueDiff({
 }: ValueDiffProps) {
   if (unchanged) {
     return (
-      <span
+      <div
         data-testid="value-diff"
         className={cn(
           'inline-flex max-w-full items-start gap-1 font-mono text-xs leading-tight',
@@ -59,7 +66,7 @@ export function ValueDiff({
           {after}
         </span>
         <UnchangedIndicator />
-      </span>
+      </div>
     );
   }
 
