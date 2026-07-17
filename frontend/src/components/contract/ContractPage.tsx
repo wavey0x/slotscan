@@ -10,7 +10,11 @@ import { ViewSwitch } from '@/components/ui/ViewSwitch';
 import { APIError } from '@/lib/api';
 import { getAddressExplorerUrl, getBlockExplorerUrl } from '@/lib/constants';
 import { useStorageView } from '@/lib/hooks/useStorageView';
-import { truncateAddress, updateRecentSearchName } from '@/lib/utils';
+import {
+  saveRecentInspection,
+  truncateAddress,
+  updateRecentSearchName,
+} from '@/lib/utils';
 
 interface ContractPageProps {
   chain: string;
@@ -43,6 +47,14 @@ export function ContractPage({ chain, address }: ContractPageProps) {
   const [showHex, setShowHex] = useState(false);
   const contract = view?.contract;
   const displayName = contract?.name || null;
+
+  useEffect(() => {
+    saveRecentInspection({
+      chain,
+      kind: 'contract',
+      value: address,
+    });
+  }, [address, chain]);
 
   useEffect(() => {
     if (displayName) {

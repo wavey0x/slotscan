@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { inspectionPath } from "@/lib/navigation";
-import { saveRecentInspection } from "@/lib/utils";
 
 export function SearchForm() {
   const router = useRouter();
@@ -22,11 +21,6 @@ export function SearchForm() {
       setError("Enter a contract address or transaction hash");
       return;
     }
-    saveRecentInspection({
-      chain: "1",
-      kind: value.length === 66 ? "transaction" : "contract",
-      value,
-    });
     router.push(destination);
   };
 

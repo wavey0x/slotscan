@@ -4,7 +4,6 @@ import { FormEvent, useState } from 'react';
 import { Search } from 'lucide-react';
 import { usePathname, useRouter } from 'next/navigation';
 import { inspectionPath } from '@/lib/navigation';
-import { saveRecentInspection } from '@/lib/utils';
 
 export function GlobalLookup() {
   const pathname = usePathname();
@@ -22,12 +21,6 @@ export function GlobalLookup() {
       setInvalid(true);
       return;
     }
-    const normalized = value.trim();
-    saveRecentInspection({
-      chain: '1',
-      kind: normalized.length === 66 ? 'transaction' : 'contract',
-      value: normalized,
-    });
     setValue('');
     setInvalid(false);
     setMobileOpen(false);

@@ -17,6 +17,7 @@ import {
   contractDisplayLabel,
   hasRetryableContractResolution,
 } from '@/lib/contract-resolution';
+import { saveRecentInspection } from '@/lib/utils';
 
 type ViewMode = 'grouped' | 'timeline';
 type ValueMode = 'decoded' | 'hex';
@@ -73,6 +74,14 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
     setRequestedView(urlView);
     setValueMode(urlValueMode);
   }, [urlValueMode, urlView]);
+
+  useEffect(() => {
+    saveRecentInspection({
+      chain,
+      kind: 'transaction',
+      value: txHash,
+    });
+  }, [chain, txHash]);
 
   useEffect(() => {
     if (!data || !focusParam) return;
