@@ -75,8 +75,8 @@ export const LayoutRow = memo(function LayoutRow({
     <>
       <tr
         className={cn(
-          'border-b border-gray-100 hover:bg-gray-50/50',
-          expanded && 'bg-gray-50/30'
+          'hover:bg-gray-50/50',
+          expanded ? 'bg-gray-50/50' : 'border-b border-gray-100'
         )}
       >
         <td className="px-0.5 py-2 align-top text-center sm:px-1">

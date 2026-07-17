@@ -116,7 +116,7 @@ export function MappingKeyInput({
                   setError(null);
                 }}
                 placeholder={keyHint(keyType.type)}
-                className="h-7 w-64 font-mono text-xs"
+                className="h-7 w-56 font-mono text-xs sm:w-64"
                 disabled={isLoading}
               />
               {keyTypes.length > 1 && (
