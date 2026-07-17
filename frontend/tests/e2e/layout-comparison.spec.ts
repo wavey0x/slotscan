@@ -298,12 +298,10 @@ test('Swap moves selectors and exact hashes, while an edited side drops its stal
   expect(url.searchParams.get('toBlockHash')).toBe(FROM_HASH);
 });
 
-test('resolved subjects, counts, exact link, and browser history remain reproducible', async ({
+test('resolved subjects, filter counts, and browser history remain reproducible', async ({
   page,
-  context,
 }) => {
-  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
-  const requests = await mockComparison(page);
+  await mockComparison(page);
   await page.goto(`/1/compare?from=${FROM}&to=${TO}`);
 
   await expect(page.getByText('ProxyVault', { exact: true })).toBeVisible();
@@ -319,15 +317,8 @@ test('resolved subjects, counts, exact link, and browser history remain reproduc
   await expect(
     page.getByRole('button', { name: 'Conflicts 4', exact: true }),
   ).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Copy exact link' })).toHaveCount(0);
   await expect(page.getByText(/does not analyze values, initialization/)).toHaveCount(0);
-
-  await page.getByRole('button', { name: 'Copy exact link' }).click();
-  const copied = await page.evaluate(() => navigator.clipboard.readText());
-  const exact = new URL(copied);
-  expect(exact.searchParams.get('fromBlock')).toBe('123');
-  expect(exact.searchParams.get('fromBlockHash')).toBe(FROM_HASH);
-  expect(exact.searchParams.get('toBlock')).toBe('456');
-  expect(exact.searchParams.get('toBlockHash')).toBe(TO_HASH);
 
   await page.getByLabel('To', { exact: true }).fill(THIRD);
   await page.getByRole('button', { name: 'Compare' }).click();
@@ -335,11 +326,6 @@ test('resolved subjects, counts, exact link, and browser history remain reproduc
   await page.goBack();
   await expect(page).toHaveURL(new RegExp(`to=${TO}`));
   await expect(page.getByLabel('To', { exact: true })).toHaveValue(TO);
-
-  await page.goto(copied);
-  await expect(page.getByRole('table')).toBeVisible();
-  expect(requests.at(-1)?.searchParams.get('from_block_hash')).toBe(FROM_HASH);
-  expect(requests.at(-1)?.searchParams.get('to_block_hash')).toBe(TO_HASH);
 });
 
 test('neutral counts replace verdict prose and identical layouts show their rows', async ({ page }) => {
@@ -438,6 +424,11 @@ test('the comparison table keeps Location as the anchor and exposes all objectiv
 
   const table = page.getByRole('table');
   await expect(table.getByRole('columnheader')).toHaveText(['Location', 'From', 'To']);
+  const filterBox = await page.getByRole('group', { name: 'Rows' }).boundingBox();
+  const tableBox = await table.boundingBox();
+  expect(filterBox).not.toBeNull();
+  expect(tableBox).not.toBeNull();
+  expect(filterBox!.x).toBeLessThan(tableBox!.x);
   await expect(table.getByRole('button', { name: 'Expand details for slots 4–5 → slots 4–8' })).toBeVisible();
   await expect(table.getByRole('button', { name: 'Expand details for root slot 3' })).toBeVisible();
   await expect(table.getByRole('button', { name: 'Expand details for slot 9 · bytes 0–19 → slot 12 · bytes 0–19' })).toBeVisible();

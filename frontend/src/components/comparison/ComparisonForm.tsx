@@ -212,87 +212,87 @@ export function ComparisonForm({
         </div>
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-        <Button type="button" variant="secondary" onClick={swap}>
-          <ArrowLeftRight aria-hidden="true" size={14} className="mr-2" />
-          Swap
-        </Button>
-        <Button type="submit">Compare</Button>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="secondary" size="sm" onClick={swap}>
+            <ArrowLeftRight aria-hidden="true" size={14} className="mr-1.5" />
+            Swap
+          </Button>
+          <button
+            type="button"
+            aria-expanded={blocksOpen}
+            onClick={() => setBlocksOpen((open) => !open)}
+            className="inline-flex h-8 items-center text-xs text-gray-500 hover:text-gray-900"
+          >
+            {blocksOpen ? 'Hide blocks' : 'Specific blocks'}
+            <span className="ml-1 text-[10px]" aria-hidden="true">
+              {blocksOpen ? '−' : '+'}
+            </span>
+          </button>
+        </div>
+        <Button type="submit" size="sm">Compare</Button>
       </div>
 
-      <div className="mt-4 border-t border-gray-200 pt-3">
-        <button
-          type="button"
-          aria-expanded={blocksOpen}
-          onClick={() => setBlocksOpen((open) => !open)}
-          className="text-xs text-gray-500 hover:text-gray-900"
-        >
-          {blocksOpen ? 'Hide blocks' : 'Specific blocks'}
-          <span className="ml-1 text-[10px]" aria-hidden="true">
-            {blocksOpen ? '−' : '+'}
-          </span>
-        </button>
-        {blocksOpen && (
-          <div className="mt-3 grid gap-3 md:grid-cols-2">
-            <div>
-              <label
-                htmlFor="comparison-from-block"
-                className="mb-1 block text-[10px] uppercase tracking-wide text-gray-500"
+      {blocksOpen && (
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <div>
+            <label
+              htmlFor="comparison-from-block"
+              className="mb-1 block text-[10px] uppercase tracking-wide text-gray-500"
+            >
+              From block
+            </label>
+            <Input
+              id="comparison-from-block"
+              inputMode="numeric"
+              value={draft.fromBlock}
+              onChange={(event) => setBlock('from', event.target.value)}
+              placeholder="Latest"
+              aria-invalid={Boolean(errors.fromBlock)}
+              aria-describedby={
+                errors.fromBlock ? 'from-block-error' : undefined
+              }
+              className="font-mono text-xs"
+            />
+            {errors.fromBlock && (
+              <span
+                id="from-block-error"
+                className="mt-1 block text-xs text-red"
               >
-                From block
-              </label>
-              <Input
-                id="comparison-from-block"
-                inputMode="numeric"
-                value={draft.fromBlock}
-                onChange={(event) => setBlock('from', event.target.value)}
-                placeholder="Latest"
-                aria-invalid={Boolean(errors.fromBlock)}
-                aria-describedby={
-                  errors.fromBlock ? 'from-block-error' : undefined
-                }
-                className="font-mono text-xs"
-              />
-              {errors.fromBlock && (
-                <span
-                  id="from-block-error"
-                  className="mt-1 block text-xs text-red"
-                >
-                  {errors.fromBlock}
-                </span>
-              )}
-            </div>
-            <div>
-              <label
-                htmlFor="comparison-to-block"
-                className="mb-1 block text-[10px] uppercase tracking-wide text-gray-500"
-              >
-                To block
-              </label>
-              <Input
-                id="comparison-to-block"
-                inputMode="numeric"
-                value={draft.toBlock}
-                onChange={(event) => setBlock('to', event.target.value)}
-                placeholder="Latest"
-                aria-invalid={Boolean(errors.toBlock)}
-                aria-describedby={
-                  errors.toBlock ? 'to-block-error' : undefined
-                }
-                className="font-mono text-xs"
-              />
-              {errors.toBlock && (
-                <span
-                  id="to-block-error"
-                  className="mt-1 block text-xs text-red"
-                >
-                  {errors.toBlock}
-                </span>
-              )}
-            </div>
+                {errors.fromBlock}
+              </span>
+            )}
           </div>
-        )}
-      </div>
+          <div>
+            <label
+              htmlFor="comparison-to-block"
+              className="mb-1 block text-[10px] uppercase tracking-wide text-gray-500"
+            >
+              To block
+            </label>
+            <Input
+              id="comparison-to-block"
+              inputMode="numeric"
+              value={draft.toBlock}
+              onChange={(event) => setBlock('to', event.target.value)}
+              placeholder="Latest"
+              aria-invalid={Boolean(errors.toBlock)}
+              aria-describedby={
+                errors.toBlock ? 'to-block-error' : undefined
+              }
+              className="font-mono text-xs"
+            />
+            {errors.toBlock && (
+              <span
+                id="to-block-error"
+                className="mt-1 block text-xs text-red"
+              >
+                {errors.toBlock}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
     </form>
   );
 }

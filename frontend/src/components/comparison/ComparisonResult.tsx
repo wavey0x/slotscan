@@ -1,7 +1,6 @@
 'use client';
 
-import { useState } from 'react';
-import { Check, Copy, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import { ComparisonTable } from '@/components/comparison/ComparisonTable';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { getAddressExplorerUrl, getBlockExplorerUrl } from '@/lib/constants';
@@ -119,18 +118,6 @@ function Subject({
   );
 }
 
-function exactUrl(report: LayoutComparisonResponse): string | null {
-  if (!report.from_subject || !report.to_subject) return null;
-  const params = new URLSearchParams();
-  params.set('from', report.from_subject.input_address);
-  params.set('to', report.to_subject.input_address);
-  params.set('fromBlock', BigInt(report.from_subject.block_ref.number).toString());
-  params.set('fromBlockHash', report.from_subject.block_ref.hash);
-  params.set('toBlock', BigInt(report.to_subject.block_ref.number).toString());
-  params.set('toBlockHash', report.to_subject.block_ref.hash);
-  return `${window.location.origin}/${report.chain_id}/compare?${params}`;
-}
-
 export function ComparisonResult({
   chain,
   report,
@@ -144,44 +131,24 @@ export function ComparisonResult({
   refreshFailed: boolean;
   onRetry: () => void;
 }) {
-  const [copied, setCopied] = useState(false);
-  const copyExact = async () => {
-    const url = exactUrl(report);
-    if (!url) return;
-    await navigator.clipboard.writeText(url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
   return (
-    <div className="mt-9 border-t border-gray-300 pt-6">
+    <div className="mt-6 border-t border-gray-300 pt-4">
       <div className="flex flex-wrap items-start gap-5">
         <div className="grid min-w-0 flex-1 basis-[40rem] gap-5 sm:grid-cols-2">
           <Subject side="From" chain={chain} subject={report.from_subject} />
           <Subject side="To" chain={chain} subject={report.to_subject} />
         </div>
-        <div className="flex items-center gap-3 text-xs">
-          {refreshing && <span className="text-gray-500">Refreshing…</span>}
-          {refreshFailed && (
-            <button type="button" onClick={onRetry} className="inline-flex items-center text-red">
-              <RefreshCw aria-hidden="true" size={12} className="mr-1" />
-              Retry
-            </button>
-          )}
-          {report.from_subject && report.to_subject && (
-            <button
-              type="button"
-              onClick={() => { void copyExact(); }}
-              aria-label={copied ? 'Exact link copied' : 'Copy exact link'}
-              title={copied ? 'Exact link copied' : 'Copy exact link'}
-              className="touch-hitbox inline-flex items-center text-gray-500 hover:text-gray-900"
-            >
-              {copied
-                ? <Check aria-hidden="true" size={14} className="text-green" />
-                : <Copy aria-hidden="true" size={14} />}
-            </button>
-          )}
-        </div>
+        {(refreshing || refreshFailed) && (
+          <div className="flex items-center gap-3 text-xs">
+            {refreshing && <span className="text-gray-500">Refreshing…</span>}
+            {refreshFailed && (
+              <button type="button" onClick={onRetry} className="inline-flex items-center text-red">
+                <RefreshCw aria-hidden="true" size={12} className="mr-1" />
+                Retry
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {!report.summary && (

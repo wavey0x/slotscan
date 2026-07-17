@@ -30,14 +30,14 @@ Do not add legacy redirects or a second contract-scoped transaction UI.
   selectors, and still-valid exact hashes. Editing an address or selector drops
   that side’s hidden stale hash.
 - Keep optional blocks in one secondary disclosure with Latest placeholders.
-  `Copy exact link` replaces mutable selectors with the exact number/hash pairs
-  returned for both subjects.
 - Show resolved From and To subjects as compact columns. Direct contracts show
   one contract address; proxies and EIP-7702 subjects keep Storage and Code
   identities visibly separate.
 - Fold total, changed, and conflict counts into the table filters in a neutral
   polite live region. Do not add a separate summary, verdict, or disclaimer.
   Reserve explanatory prose for unavailable data and upstream failures.
+- Stack the filters in a narrow left rail beside the table on wide screens and
+  above it on narrow screens.
 - Default the comparison table to All, with Changes and Conflicts views. Search
   appears only at 50 rows or more and covers paths, types, scopes, and slots.
 - The table has exactly `Location / From / To`. Location is formatted from both

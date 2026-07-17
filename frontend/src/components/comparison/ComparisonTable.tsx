@@ -237,13 +237,14 @@ export function ComparisonTable({
   };
 
   return (
-    <section className="mt-6 border-t border-gray-300 pt-3" aria-label="Layout comparison rows">
-      <div className="mb-3 flex min-w-0 flex-wrap items-center justify-end gap-2">
-        <div aria-live="polite">
+    <section className="mt-4" aria-label="Layout comparison rows">
+      <div className="grid gap-3 lg:grid-cols-[9rem_minmax(0,1fr)] lg:items-start">
+        <div className="min-w-0 space-y-2" aria-live="polite">
           <ViewSwitch
             label="Rows"
             showLabel={false}
             value={filter}
+            orientation="vertical"
             options={[
               { value: 'all', label: `All ${allCount}` },
               { value: 'changes', label: `Changes ${changedCount}` },
@@ -251,119 +252,118 @@ export function ComparisonTable({
             ]}
             onChange={setFilter}
           />
+          {entries.length >= 50 && (
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search"
+              aria-label="Search comparison rows"
+              className="h-7 min-w-0 px-2 py-0 text-xs"
+            />
+          )}
         </div>
-        {entries.length >= 50 && (
-          <Input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search"
-            aria-label="Search comparison rows"
-            className="h-7 min-w-0 basis-48 px-2 py-0 text-xs"
-          />
-        )}
-      </div>
-
-      {visible.length === 0 ? (
-        <div className="border border-gray-300 p-6 text-center text-xs text-gray-500">
-          {entries.length === 0
-            ? 'Both exact layouts declare no persistent storage.'
-            : 'No matching rows.'}
-        </div>
-      ) : (
-        <DataTable minWidth="52rem">
-          <thead>
-            <tr>
-              <th className={cn(dataTableHeadCellClass, 'w-[34%]')}>Location</th>
-              <th className={cn(dataTableHeadCellClass, 'w-[33%]')}>From</th>
-              <th className={cn(dataTableHeadCellClass, 'w-[33%]')}>To</th>
-            </tr>
-          </thead>
-          <tbody>
-            {Array.from(groups).flatMap(([scope, rows]) => [
-              <tr key={`scope:${scope}`}>
-                <th
-                  colSpan={3}
-                  scope="rowgroup"
-                  className="border-y border-gray-300 bg-gray-50 px-2 py-1.5 text-left text-[10px] font-medium text-gray-500"
-                >
-                  {scope === 'Default storage' ? scope : `ERC-7201 · ${scope}`}
-                </th>
-              </tr>,
-              ...rows.flatMap((entry) => {
-                const expanded = open.has(entry.id);
-                const canExpand = entry.kind !== 'unchanged';
-                const location = locationDisplay(entry);
-                return [
-                  <tr
-                    key={entry.id}
-                    className={cn(
-                      'border-b border-gray-200',
-                      entry.impact === 'conflict' && 'shadow-[inset_2px_0_0_rgb(var(--color-red))]',
-                    )}
+        {visible.length === 0 ? (
+          <div className="border border-gray-300 p-6 text-center text-xs text-gray-500">
+            {entries.length === 0
+              ? 'Both exact layouts declare no persistent storage.'
+              : 'No matching rows.'}
+          </div>
+        ) : (
+          <DataTable minWidth="48rem">
+            <thead>
+              <tr>
+                <th className={cn(dataTableHeadCellClass, 'w-[34%]')}>Location</th>
+                <th className={cn(dataTableHeadCellClass, 'w-[33%]')}>From</th>
+                <th className={cn(dataTableHeadCellClass, 'w-[33%]')}>To</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Array.from(groups).flatMap(([scope, rows]) => [
+                <tr key={`scope:${scope}`}>
+                  <th
+                    colSpan={3}
+                    scope="rowgroup"
+                    className="border-y border-gray-300 bg-gray-50 px-2 py-1.5 text-left text-[10px] font-medium text-gray-500"
                   >
-                    <td className={cn(dataTableCellClass, 'text-xs')}>
-                      <div className="flex items-start gap-1.5">
-                        {canExpand ? (
-                          <button
-                            type="button"
-                            onClick={() => toggle(entry.id)}
-                            aria-expanded={expanded}
-                            aria-label={`${expanded ? 'Collapse' : 'Expand'} details for ${formatComparisonLocation(entry)}`}
-                            className="mt-0.5 shrink-0 text-gray-400 hover:text-gray-900"
-                          >
-                            {expanded
-                              ? <ChevronDown aria-hidden="true" size={13} />
-                              : <ChevronRight aria-hidden="true" size={13} />}
-                          </button>
-                        ) : (
-                          <span aria-hidden="true" className="w-[13px] shrink-0" />
-                        )}
-                        <div className="min-w-0">
-                          {entry.impact === 'conflict' && (
-                            <span className="sr-only">Storage conflict. </span>
+                    {scope === 'Default storage' ? scope : `ERC-7201 · ${scope}`}
+                  </th>
+                </tr>,
+                ...rows.flatMap((entry) => {
+                  const expanded = open.has(entry.id);
+                  const canExpand = entry.kind !== 'unchanged';
+                  const location = locationDisplay(entry);
+                  return [
+                    <tr
+                      key={entry.id}
+                      className={cn(
+                        'border-b border-gray-200',
+                        entry.impact === 'conflict' && 'shadow-[inset_2px_0_0_rgb(var(--color-red))]',
+                      )}
+                    >
+                      <td className={cn(dataTableCellClass, 'text-xs')}>
+                        <div className="flex items-start gap-1.5">
+                          {canExpand ? (
+                            <button
+                              type="button"
+                              onClick={() => toggle(entry.id)}
+                              aria-expanded={expanded}
+                              aria-label={`${expanded ? 'Collapse' : 'Expand'} details for ${formatComparisonLocation(entry)}`}
+                              className="mt-0.5 shrink-0 text-gray-400 hover:text-gray-900"
+                            >
+                              {expanded
+                                ? <ChevronDown aria-hidden="true" size={13} />
+                                : <ChevronRight aria-hidden="true" size={13} />}
+                            </button>
+                          ) : (
+                            <span aria-hidden="true" className="w-[13px] shrink-0" />
                           )}
-                          {entry.impact === 'ambiguous' && (
-                            <span className="sr-only">Indeterminate change. </span>
-                          )}
-                          <div className="break-words font-mono text-xs text-gray-900">
-                            {location.primary}
-                          </div>
-                          {location.secondary && (
-                            <div className="mt-0.5 break-words font-mono text-[9px] text-gray-400">
-                              {location.secondary}
+                          <div className="min-w-0">
+                            {entry.impact === 'conflict' && (
+                              <span className="sr-only">Storage conflict. </span>
+                            )}
+                            {entry.impact === 'ambiguous' && (
+                              <span className="sr-only">Indeterminate change. </span>
+                            )}
+                            <div className="break-words font-mono text-xs text-gray-900">
+                              {location.primary}
                             </div>
-                          )}
-                        </div>
-                      </div>
-                    </td>
-                    <td className={dataTableCellClass}>{evidence(entry.from_region)}</td>
-                    <td className={dataTableCellClass}>{evidence(entry.to_region)}</td>
-                  </tr>,
-                  expanded && canExpand ? (
-                    <tr key={`${entry.id}:details`} className="border-b border-gray-300 bg-gray-50">
-                      <td colSpan={3} className="px-7 py-3">
-                        <ul className="space-y-1 text-xs text-gray-700">
-                          {entry.details.map((detail) => (
-                            <li key={detail}>• {detail}</li>
-                          ))}
-                        </ul>
-                        <div className="mt-2 space-y-0.5 break-all text-[10px] text-gray-500">
-                          {entry.from_region && (
-                            <div>From · {fullLocation(entry.from_region)}</div>
-                          )}
-                          {entry.to_region && (
-                            <div>To · {fullLocation(entry.to_region)}</div>
-                          )}
+                            {location.secondary && (
+                              <div className="mt-0.5 break-words font-mono text-[9px] text-gray-400">
+                                {location.secondary}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </td>
-                    </tr>
-                  ) : null,
-                ].filter(Boolean) as React.ReactElement[];
-              }),
-            ])}
-          </tbody>
-        </DataTable>
-      )}
+                      <td className={dataTableCellClass}>{evidence(entry.from_region)}</td>
+                      <td className={dataTableCellClass}>{evidence(entry.to_region)}</td>
+                    </tr>,
+                    expanded && canExpand ? (
+                      <tr key={`${entry.id}:details`} className="border-b border-gray-300 bg-gray-50">
+                        <td colSpan={3} className="px-7 py-3">
+                          <ul className="space-y-1 text-xs text-gray-700">
+                            {entry.details.map((detail) => (
+                              <li key={detail}>• {detail}</li>
+                            ))}
+                          </ul>
+                          <div className="mt-2 space-y-0.5 break-all text-[10px] text-gray-500">
+                            {entry.from_region && (
+                              <div>From · {fullLocation(entry.from_region)}</div>
+                            )}
+                            {entry.to_region && (
+                              <div>To · {fullLocation(entry.to_region)}</div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null,
+                  ].filter(Boolean) as React.ReactElement[];
+                }),
+              ])}
+            </tbody>
+          </DataTable>
+        )}
+      </div>
     </section>
   );
 }

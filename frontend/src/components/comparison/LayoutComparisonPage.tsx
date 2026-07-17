@@ -45,7 +45,7 @@ export function LayoutComparisonPage({ chain }: { chain: string }) {
 
   return (
     <div className="mx-auto w-full max-w-6xl">
-      <header className="mb-6 border-b border-gray-300 pb-4">
+      <header className="mb-4">
         <h1 className="text-lg">Compare layouts</h1>
       </header>
 
