@@ -11,13 +11,6 @@ import type {
 } from '@/lib/types';
 import { truncateAddress } from '@/lib/utils';
 
-const VERDICTS = {
-  no_conflicts: 'No storage conflicts',
-  conflicts: 'Storage conflicts found',
-  indeterminate: 'Comparison indeterminate',
-  unavailable: 'Comparison unavailable',
-} as const;
-
 const STATUS = {
   ok: 'Exact Solidity layout',
   unverified: 'Published source unavailable',
@@ -109,17 +102,19 @@ function Subject({
           </>
         )}
       </dl>
-      <div className="mt-2 text-xs text-gray-700">{STATUS[subject.layout_status]}</div>
-      <div className="mt-1 text-[10px] text-gray-500">
-        Block{' '}
-        <a
-          href={getBlockExplorerUrl(chain, block)}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={subject.block_ref.hash}
-        >
-          {BigInt(block).toLocaleString()}
-        </a>
+      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-gray-500">
+        <span>{STATUS[subject.layout_status]}</span>
+        <span>
+          Block{' '}
+          <a
+            href={getBlockExplorerUrl(chain, block)}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={subject.block_ref.hash}
+          >
+            {BigInt(block).toLocaleString()}
+          </a>
+        </span>
       </div>
     </div>
   );
@@ -158,67 +153,51 @@ export function ComparisonResult({
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
-  const counts = report.summary
-    ? [
-        report.summary.changes ? `${report.summary.changes} changes` : null,
-        report.summary.conflicts ? `${report.summary.conflicts} conflicts` : null,
-        report.summary.ambiguous ? `${report.summary.ambiguous} ambiguous` : null,
-        `${report.summary.unchanged} unchanged`,
-      ].filter(Boolean).join(' · ')
-    : null;
 
   return (
     <div className="mt-9 border-t border-gray-300 pt-6">
-      <div className="grid gap-5 sm:grid-cols-2">
-        <Subject side="From" chain={chain} subject={report.from_subject} />
-        <Subject side="To" chain={chain} subject={report.to_subject} />
+      <div className="flex flex-wrap items-start gap-5">
+        <div className="grid min-w-0 flex-1 basis-[40rem] gap-5 sm:grid-cols-2">
+          <Subject side="From" chain={chain} subject={report.from_subject} />
+          <Subject side="To" chain={chain} subject={report.to_subject} />
+        </div>
+        <div className="flex items-center gap-3 text-xs">
+          {refreshing && <span className="text-gray-500">Refreshing…</span>}
+          {refreshFailed && (
+            <button type="button" onClick={onRetry} className="inline-flex items-center text-red">
+              <RefreshCw aria-hidden="true" size={12} className="mr-1" />
+              Retry
+            </button>
+          )}
+          {report.from_subject && report.to_subject && (
+            <button
+              type="button"
+              onClick={() => { void copyExact(); }}
+              className="inline-flex items-center text-gray-700 hover:text-gray-900"
+            >
+              {copied
+                ? <Check aria-hidden="true" size={12} className="mr-1 text-green" />
+                : <Copy aria-hidden="true" size={12} className="mr-1" />}
+              {copied ? 'Link copied' : 'Copy exact link'}
+            </button>
+          )}
+        </div>
       </div>
 
-      <div className="mt-6 border-y border-gray-300 py-4" aria-live="polite">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-base">{VERDICTS[report.verdict]}</h2>
-            {counts && <div className="mt-1 text-xs text-gray-500">{counts}</div>}
-          </div>
-          <div className="flex items-center gap-3 text-xs">
-            {refreshing && <span className="text-gray-500">Refreshing…</span>}
-            {refreshFailed && (
-              <button type="button" onClick={onRetry} className="inline-flex items-center text-red">
-                <RefreshCw aria-hidden="true" size={12} className="mr-1" />
-                Retry
-              </button>
-            )}
-            {report.from_subject && report.to_subject && (
-              <button
-                type="button"
-                onClick={() => { void copyExact(); }}
-                className="inline-flex items-center text-gray-700 hover:text-gray-900"
-              >
-                {copied
-                  ? <Check aria-hidden="true" size={12} className="mr-1 text-green" />
-                  : <Copy aria-hidden="true" size={12} className="mr-1" />}
-                {copied ? 'Exact link copied' : 'Copy exact link'}
-              </button>
-            )}
-          </div>
-        </div>
-        {report.limitations.length > 0 && (
+      {!report.summary && (
+        <div className="mt-6 border-y border-gray-300 py-4" aria-live="polite">
+          <h2 className="text-sm">Layout unavailable</h2>
           <ul className="mt-3 space-y-1 text-xs text-red">
             {report.limitations.map((code) => (
               <li key={code}>{LIMITATIONS[code] || `Comparison limitation: ${code}`}</li>
             ))}
           </ul>
-        )}
-        {report.verdict !== 'unavailable' && (
-          <p className="mt-4 max-w-4xl text-xs text-gray-500">
-            This report covers exact declared persistent storage layouts only.
-            It does not analyze values, initialization, authorization,
-            downstream calls, or overall safety.
-          </p>
-        )}
-      </div>
+        </div>
+      )}
 
-      {report.summary && <ComparisonTable entries={report.entries} />}
+      {report.summary && (
+        <ComparisonTable entries={report.entries} summary={report.summary} />
+      )}
     </div>
   );
 }

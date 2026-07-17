@@ -172,7 +172,7 @@ export interface ComparisonEntry {
   details: string[];
 }
 
-interface ComparisonSummary {
+export interface ComparisonSummary {
   conflicts: number;
   ambiguous: number;
   changes: number;

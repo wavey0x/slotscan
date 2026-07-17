@@ -12,6 +12,7 @@ import { ViewSwitch } from '@/components/ui/ViewSwitch';
 import type {
   ComparisonEntry,
   ComparisonRegion,
+  ComparisonSummary,
 } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -125,10 +126,12 @@ function fullLocation(region: ComparisonRegion): string {
 
 export function ComparisonTable({
   entries,
+  summary,
 }: {
   entries: ComparisonEntry[];
+  summary: ComparisonSummary;
 }) {
-  const [filter, setFilter] = useState<Filter>('changes');
+  const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState<Set<string>>(() => new Set());
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
@@ -156,20 +159,27 @@ export function ComparisonTable({
   };
 
   return (
-    <section className="mt-7" aria-labelledby="comparison-evidence-heading">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 id="comparison-evidence-heading" className="text-sm">
-          Declared storage evidence
-        </h2>
+    <section className="mt-6 border-t border-gray-300 pt-3" aria-label="Layout comparison rows">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div
+          aria-label="Comparison counts"
+          aria-live="polite"
+          className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500"
+        >
+          <span>Changes <span className="text-gray-900">{summary.changes}</span></span>
+          <span>Conflicts <span className="text-gray-900">{summary.conflicts}</span></span>
+          <span>Ambiguous <span className="text-gray-900">{summary.ambiguous}</span></span>
+          <span>Unchanged <span className="text-gray-900">{summary.unchanged}</span></span>
+        </div>
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <ViewSwitch
             label="Rows"
             showLabel={false}
             value={filter}
             options={[
+              { value: 'all', label: 'All' },
               { value: 'changes', label: 'Changes' },
               { value: 'conflicts', label: 'Conflicts' },
-              { value: 'all', label: 'All' },
             ]}
             onChange={setFilter}
           />
@@ -177,7 +187,7 @@ export function ComparisonTable({
             <Input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search paths, types, scopes, or slots"
+              placeholder="Search"
               aria-label="Search comparison rows"
               className="h-7 min-w-0 basis-64 px-2 py-0 text-xs"
             />
@@ -189,7 +199,7 @@ export function ComparisonTable({
         <div className="border border-gray-300 p-6 text-center text-xs text-gray-500">
           {entries.length === 0
             ? 'Both exact layouts declare no persistent storage.'
-            : 'No rows match this view.'}
+            : 'No matching rows.'}
         </div>
       ) : (
         <DataTable minWidth="52rem">

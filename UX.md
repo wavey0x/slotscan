@@ -35,11 +35,11 @@ Do not add legacy redirects or a second contract-scoped transaction UI.
 - Show resolved From and To subjects as compact columns. Direct contracts show
   one contract address; proxies and EIP-7702 subjects keep Storage and Code
   identities visibly separate.
-- Announce one factual verdict through a polite live region and show
-  non-overlapping change, conflict, ambiguity, and unchanged counts. Available
-  reports always state that values, initialization, authorization, downstream
-  calls, and overall safety are outside scope.
-- Default the evidence table to Changes, with Conflicts and All views. Search
+- Show non-overlapping change, conflict, ambiguity, and unchanged counts in a
+  neutral polite live region. Reserve explanatory prose for unavailable data
+  and upstream failures; do not frame available comparison data as a report or
+  conclusion.
+- Default the comparison table to All, with Changes and Conflicts views. Search
   appears only at 20 rows or more and covers paths, types, scopes, and slots.
 - The table has exactly `Location / From / To`. Location is formatted from both
   structured regions, including packed extents, inclusive ranges, roots,

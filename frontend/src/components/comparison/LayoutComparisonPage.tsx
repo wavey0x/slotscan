@@ -46,10 +46,7 @@ export function LayoutComparisonPage({ chain }: { chain: string }) {
   return (
     <div className="mx-auto w-full max-w-6xl">
       <header className="mb-6 border-b border-gray-300 pb-4">
-        <div className="text-[10px] uppercase tracking-[0.16em] text-gray-500">
-          Storage layout comparison
-        </div>
-        <h1 className="mt-1 text-lg">From layout → To layout</h1>
+        <h1 className="text-lg">Compare layouts</h1>
       </header>
 
       <ComparisonForm submitted={submitted} onSubmit={submit} />

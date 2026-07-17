@@ -173,7 +173,7 @@ export function ComparisonForm({
             ref={fromRef}
             value={draft.from}
             onChange={(event) => setAddress('from', event.target.value)}
-            placeholder="contract, proxy, or account"
+            placeholder="Address"
             aria-invalid={Boolean(errors.from)}
             aria-describedby={errors.from ? 'from-address-error' : undefined}
             className="font-mono text-xs"
@@ -199,7 +199,7 @@ export function ComparisonForm({
             ref={toRef}
             value={draft.to}
             onChange={(event) => setAddress('to', event.target.value)}
-            placeholder="contract, proxy, or account"
+            placeholder="Address"
             aria-invalid={Boolean(errors.to)}
             aria-describedby={errors.to ? 'to-address-error' : undefined}
             className="font-mono text-xs"
@@ -217,7 +217,7 @@ export function ComparisonForm({
           <ArrowLeftRight aria-hidden="true" size={14} className="mr-2" />
           Swap
         </Button>
-        <Button type="submit">Compare layouts</Button>
+        <Button type="submit">Compare</Button>
       </div>
 
       <div className="mt-4 border-t border-gray-200 pt-3">
@@ -227,7 +227,7 @@ export function ComparisonForm({
           onClick={() => setBlocksOpen((open) => !open)}
           className="text-xs text-gray-500 hover:text-gray-900"
         >
-          {blocksOpen ? 'Hide' : 'Resolve at'} specific blocks
+          {blocksOpen ? 'Hide blocks' : 'Specific blocks'}
           <span className="ml-1 text-[10px]" aria-hidden="true">
             {blocksOpen ? '−' : '+'}
           </span>
@@ -293,9 +293,6 @@ export function ComparisonForm({
           </div>
         )}
       </div>
-      <p className="mt-4 text-xs text-gray-500">
-        Checks whether To can interpret storage described by From.
-      </p>
     </form>
   );
 }

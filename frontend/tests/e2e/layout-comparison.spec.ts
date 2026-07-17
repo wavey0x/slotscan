@@ -231,7 +231,7 @@ test('prefill focuses To, validates locally, and submits URL-owned intent with E
   await to.fill(TO);
   await to.press('Enter');
   await expect(page).toHaveURL(new RegExp(`from=${FROM}.*to=${TO}`));
-  await expect(page.getByRole('heading', { name: 'Storage conflicts found' })).toBeVisible();
+  await expect(page.getByRole('table')).toBeVisible();
   expect(requests).toHaveLength(1);
   expect(requests[0].searchParams.get('from_address')).toBe(FROM);
   expect(requests[0].searchParams.get('to_address')).toBe(TO);
@@ -253,8 +253,8 @@ test('malformed exact-link hashes fail inline without making an API request', as
   expect(requests).toHaveLength(0);
 
   await page.getByLabel('From block').fill('101');
-  await page.getByRole('button', { name: 'Compare layouts' }).click();
-  await expect(page.getByRole('heading', { name: 'Storage conflicts found' })).toBeVisible();
+  await page.getByRole('button', { name: 'Compare' }).click();
+  await expect(page.getByRole('table')).toBeVisible();
   expect(requests).toHaveLength(1);
   expect(requests[0].searchParams.get('from_block')).toBe('101');
   expect(requests[0].searchParams.has('from_block_hash')).toBe(false);
@@ -282,14 +282,14 @@ test('Swap moves selectors and exact hashes, while an edited side drops its stal
   await page.getByRole('button', { name: 'Swap' }).click();
   await expect(page.getByLabel('From', { exact: true })).toHaveValue(TO);
   await expect(page.getByLabel('From block')).toHaveValue('200');
-  await page.getByRole('button', { name: 'Compare layouts' }).click();
+  await page.getByRole('button', { name: 'Compare' }).click();
   await expect(page).toHaveURL(new RegExp(`from=${TO}.*to=${FROM}`));
   let url = new URL(page.url());
   expect(url.searchParams.get('fromBlockHash')).toBe(TO_HASH);
   expect(url.searchParams.get('toBlockHash')).toBe(FROM_HASH);
 
   await page.getByLabel('From', { exact: true }).fill(THIRD);
-  await page.getByRole('button', { name: 'Compare layouts' }).click();
+  await page.getByRole('button', { name: 'Compare' }).click();
   await expect(page).toHaveURL(new RegExp(`from=${THIRD}`));
   url = new URL(page.url());
   expect(url.searchParams.get('from')).toBe(THIRD);
@@ -298,7 +298,7 @@ test('Swap moves selectors and exact hashes, while an edited side drops its stal
   expect(url.searchParams.get('toBlockHash')).toBe(FROM_HASH);
 });
 
-test('resolved subjects, verdict, exact link, and browser history remain reproducible', async ({
+test('resolved subjects, counts, exact link, and browser history remain reproducible', async ({
   page,
   context,
 }) => {
@@ -310,8 +310,12 @@ test('resolved subjects, verdict, exact link, and browser history remain reprodu
   await expect(page.getByText('DelegateVault', { exact: true })).toBeVisible();
   await expect(page.getByText('Storage', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('Code', { exact: true }).first()).toBeVisible();
-  await expect(page.getByText(/4 conflicts/)).toBeVisible();
-  await expect(page.getByText(/does not analyze values, initialization/)).toBeVisible();
+  const counts = page.getByLabel('Comparison counts');
+  await expect(counts).toContainText('Changes 1');
+  await expect(counts).toContainText('Conflicts 4');
+  await expect(counts).toContainText('Ambiguous 0');
+  await expect(counts).toContainText('Unchanged 1');
+  await expect(page.getByText(/does not analyze values, initialization/)).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Copy exact link' }).click();
   const copied = await page.evaluate(() => navigator.clipboard.readText());
@@ -322,35 +326,60 @@ test('resolved subjects, verdict, exact link, and browser history remain reprodu
   expect(exact.searchParams.get('toBlockHash')).toBe(TO_HASH);
 
   await page.getByLabel('To', { exact: true }).fill(THIRD);
-  await page.getByRole('button', { name: 'Compare layouts' }).click();
+  await page.getByRole('button', { name: 'Compare' }).click();
   await expect(page).toHaveURL(new RegExp(`to=${THIRD}`));
   await page.goBack();
   await expect(page).toHaveURL(new RegExp(`to=${TO}`));
   await expect(page.getByLabel('To', { exact: true })).toHaveValue(TO);
 
   await page.goto(copied);
-  await expect(page.getByRole('heading', { name: 'Storage conflicts found' })).toBeVisible();
+  await expect(page.getByRole('table')).toBeVisible();
   expect(requests.at(-1)?.searchParams.get('from_block_hash')).toBe(FROM_HASH);
   expect(requests.at(-1)?.searchParams.get('to_block_hash')).toBe(TO_HASH);
 });
 
-test('all factual verdicts render with the exact-layout disclaimer', async ({ page }) => {
+test('neutral counts replace verdict prose and identical layouts show their rows', async ({ page }) => {
+  const unchangedEntries = [
+    comparisonEntry(
+      'unchanged',
+      'unchanged',
+      'none',
+      region({
+        slot: '0x2',
+        path: 'owner',
+        label: 'address',
+        byteSize: '20',
+      }),
+      region({
+        slot: '0x2',
+        path: 'owner',
+        label: 'address',
+        byteSize: '20',
+      }),
+      ['The physical location and recursive storage shape are unchanged.'],
+    ),
+  ];
   let response = availableReport({
     verdict: 'no_conflicts',
     summary: {
       conflicts: 0,
       ambiguous: 0,
-      changes: 1,
+      changes: 0,
       unchanged: 1,
     },
+    entries: unchangedEntries,
   });
   await page.route('**/api/slotscan/layout-comparisons/1?*', async (route) => {
     await route.fulfill({ json: response });
   });
 
   await page.goto(`/1/compare?from=${FROM}&to=${TO}`);
-  await expect(page.getByRole('heading', { name: 'No storage conflicts' })).toBeVisible();
-  await expect(page.getByText(/does not analyze values, initialization/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    page.getByRole('button', { name: 'Expand details for slot 2 · bytes 0–19' }),
+  ).toBeVisible();
+  await expect(page.getByText('No matching rows.')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'No storage conflicts' })).toHaveCount(0);
 
   response = availableReport({
     verdict: 'indeterminate',
@@ -362,9 +391,9 @@ test('all factual verdicts render with the exact-layout disclaimer', async ({ pa
     },
   });
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'Comparison indeterminate' })).toBeVisible();
-  await expect(page.getByText(/1 ambiguous/)).toBeVisible();
-  await expect(page.getByText(/overall safety/)).toBeVisible();
+  await expect(page.getByLabel('Comparison counts')).toContainText('Ambiguous 1');
+  await expect(page.getByRole('heading', { name: 'Comparison indeterminate' })).toHaveCount(0);
+  await expect(page.getByText(/overall safety/)).toHaveCount(0);
 });
 
 test('request failures offer a retry without losing submitted intent', async ({ page }) => {
@@ -389,7 +418,7 @@ test('request failures offer a retry without losing submitted intent', async ({ 
   await page.goto(`/1/compare?from=${FROM}&to=${TO}`);
   await expect(page.getByText('Comparison request failed')).toBeVisible();
   await page.getByRole('button', { name: 'Retry' }).click();
-  await expect(page.getByRole('heading', { name: 'Storage conflicts found' })).toBeVisible();
+  await expect(page.getByRole('table')).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`from=${FROM}.*to=${TO}`));
   expect(attempts).toBe(2);
 });
@@ -405,7 +434,7 @@ test('the comparison table keeps Location as the anchor and exposes all objectiv
   await expect(table.getByRole('button', { name: 'Expand details for slot 9 · bytes 0–19 → slot 12 · bytes 0–19' })).toBeVisible();
   await expect(table.getByRole('button', { name: 'Expand details for — → slot 13 · bytes 0–0' })).toBeVisible();
   await expect(table.getByRole('button', { name: 'Expand details for slot 14 → —' })).toBeVisible();
-  await expect(table.getByRole('button', { name: 'Expand details for slot 2 · bytes 0–19' })).toBeHidden();
+  await expect(table.getByRole('button', { name: 'Expand details for slot 2 · bytes 0–19' })).toBeVisible();
   await expect(table.getByText('Result', { exact: true })).toHaveCount(0);
   await expect(table.getByText('Change', { exact: true })).toHaveCount(0);
 
@@ -414,8 +443,8 @@ test('the comparison table keeps Location as the anchor and exposes all objectiv
   await expect(page.getByRole('listitem').filter({ hasText: 'Objective detail two.' })).toBeVisible();
   await expect(page.getByText('Storage conflict.', { exact: true }).first()).toBeAttached();
 
-  await page.getByRole('button', { name: 'All' }).click();
-  await expect(table.getByRole('button', { name: 'Expand details for slot 2 · bytes 0–19' })).toBeVisible();
+  await page.getByRole('button', { name: 'Changes' }).click();
+  await expect(table.getByRole('button', { name: 'Expand details for slot 2 · bytes 0–19' })).toBeHidden();
   await page.getByRole('button', { name: 'Conflicts' }).click();
   await expect(table.getByRole('button', { name: 'Expand details for — → slot 13 · bytes 0–0' })).toBeHidden();
 });
@@ -464,7 +493,7 @@ test('unavailable reports preserve a successful side and explain exact-evidence 
   }));
   await page.goto(`/1/compare?from=${FROM}&to=${TO}`);
 
-  await expect(page.getByRole('heading', { name: 'Comparison unavailable' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Layout unavailable' })).toBeVisible();
   await expect(page.getByText('Layout evidence is not exact')).toBeVisible();
   await expect(page.getByText('ExactVault', { exact: true })).toBeVisible();
   await expect(page.getByText('The From layout depends on inferred or non-exact evidence.')).toBeVisible();
