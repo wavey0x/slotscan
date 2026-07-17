@@ -22,6 +22,18 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
+managed_table_names = frozenset(target_metadata.tables)
+
+
+def include_name(
+    name: str | None,
+    type_: str,
+    _parent_names: dict[str, str | None],
+) -> bool:
+    """Exclude tables owned by other applications in the shared database."""
+    if type_ == "table":
+        return name in managed_table_names
+    return True
 
 
 def run_migrations_offline() -> None:
@@ -30,6 +42,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=url,
         target_metadata=target_metadata,
+        include_name=include_name,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -39,7 +52,11 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_name=include_name,
+    )
 
     with context.begin_transaction():
         context.run_migrations()
