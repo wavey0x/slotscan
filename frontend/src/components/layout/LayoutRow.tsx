@@ -79,7 +79,7 @@ export const LayoutRow = memo(function LayoutRow({
           expanded && 'bg-gray-50/30'
         )}
       >
-        <td className="px-1 py-2 align-top text-center">
+        <td className="px-0.5 py-2 align-top text-center sm:px-1">
           {isInteractive && (
             <button
               onClick={() => setExpanded(!expanded)}
