@@ -204,6 +204,12 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                   <a href={getAddressExplorerUrl(chain, contract.storage_address)} target="_blank" rel="noopener noreferrer" className="block truncate text-gray-700 hover:underline" title={contract.storage_address}>
                     {contractDisplayLabel(contract)}
                   </a>
+                  <span className="flex min-w-0 items-center text-[10px] text-gray-500">
+                    <Link href={`/${chain}/${contract.storage_address}`} className="truncate hover:underline" title={contract.storage_address}>
+                      {truncateAddress(contract.storage_address)}
+                    </Link>
+                    <CopyButton value={contract.storage_address} label="Copy contract address" className="-my-1 p-1" />
+                  </span>
                 </td>
               )}
               <td className={`${storageCellClass} min-w-0 overflow-hidden`} data-testid="timeline-variable">

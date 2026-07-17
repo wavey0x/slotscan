@@ -567,7 +567,7 @@ test('packed change detection uses full values rather than compact display text'
   await expect(page.getByText('anchor', { exact: true })).toBeVisible();
 });
 
-test('timeline promotes one packed member into a compact canonical mobile path', async ({ page }) => {
+test('timeline keeps packed paths compact and exposes contract identity across viewports', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   const singleMemberSlot = packedMappingStructSlot({ index: 20 });
@@ -653,6 +653,13 @@ test('timeline promotes one packed member into a compact canonical mobile path',
   expect(singleBox!.height).toBeLessThan(multiBox!.height);
   const scroll = page.getByTestId('data-table-scroll');
   expect(await scroll.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const contractAddress = singleRow.getByRole('link', { name: '0x6666...6666' });
+  await expect(contractAddress).toBeVisible();
+  await expect(contractAddress).toHaveAttribute('href', `/1/${contract.storage_address}`);
+  await singleRow.getByRole('button', { name: 'Copy contract address' }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(contract.storage_address);
 });
 
 test('grouped view preserves keyed parents and compacts one changed packed member', async ({ page }) => {
