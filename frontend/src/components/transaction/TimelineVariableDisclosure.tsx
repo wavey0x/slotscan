@@ -7,30 +7,43 @@ import { DetailPopover, DetailSection } from '@/components/ui/DetailPopover';
 import { getAddressExplorerUrl } from '@/lib/constants';
 import { contractDisplayLabel } from '@/lib/contract-resolution';
 import type { ContractHistoryResponse } from '@/lib/types';
-import { truncateAddress } from '@/lib/utils';
+import { cn, truncateAddress } from '@/lib/utils';
 
 function DetailAddress({
   address,
   chain,
   copyLabel,
   explorerLabel,
+  prefix,
+  subdued = false,
 }: {
   address: string;
   chain: string;
   copyLabel: string;
   explorerLabel: string;
+  prefix?: string;
+  subdued?: boolean;
 }) {
   return (
-    <div className="flex min-w-0 items-start gap-1">
+    <div className={cn('flex min-w-0 items-start gap-1', subdued && 'text-[10px]')}>
+      {prefix && <span className="shrink-0 text-gray-500">{prefix}</span>}
       <a
         href={getAddressExplorerUrl(chain, address)}
         target="_blank"
         rel="noopener noreferrer"
         title={explorerLabel}
-        className="flex min-w-0 flex-1 items-start gap-1 font-mono text-gray-700 hover:text-gray-900 hover:underline"
+        className={cn(
+          'flex min-w-0 flex-1 items-start gap-1 font-mono hover:text-gray-900 hover:underline',
+          subdued ? 'text-gray-500' : 'text-gray-700',
+        )}
       >
         <span className="min-w-0 break-all">{address}</span>
-        <ExternalLink aria-hidden="true" size={11} strokeWidth={1.25} className="mt-0.5 shrink-0" />
+        <ExternalLink
+          aria-hidden="true"
+          size={subdued ? 10 : 11}
+          strokeWidth={1.25}
+          className="mt-0.5 shrink-0"
+        />
       </a>
       <CopyButton
         value={address}
@@ -38,6 +51,85 @@ function DetailAddress({
         className="-my-1 shrink-0"
       />
     </div>
+  );
+}
+
+interface VariablePart {
+  kind: 'name' | 'key';
+  value: string;
+}
+
+function variableParts(variable: string): VariablePart[] {
+  const parts: VariablePart[] = [];
+  let cursor = 0;
+
+  while (cursor < variable.length) {
+    const open = variable.indexOf('[', cursor);
+    if (open === -1) {
+      parts.push({ kind: 'name', value: variable.slice(cursor) });
+      break;
+    }
+
+    if (open > cursor) {
+      parts.push({ kind: 'name', value: variable.slice(cursor, open) });
+    }
+
+    let depth = 1;
+    let close = open + 1;
+    while (close < variable.length && depth > 0) {
+      if (variable[close] === '[') depth += 1;
+      if (variable[close] === ']') depth -= 1;
+      close += 1;
+    }
+
+    if (depth !== 0) {
+      parts.push({ kind: 'name', value: variable.slice(open) });
+      break;
+    }
+
+    parts.push({ kind: 'key', value: variable.slice(open, close) });
+    cursor = close;
+  }
+
+  return parts;
+}
+
+function VariableDetailValue({
+  variable,
+  isRawSlot,
+}: {
+  variable: string;
+  isRawSlot: boolean;
+}) {
+  if (isRawSlot) {
+    return (
+      <span
+        className="min-w-0 break-all font-mono text-xs text-gray-700"
+        data-testid="detail-variable-value"
+      >
+        {variable}
+      </span>
+    );
+  }
+
+  const parts = variableParts(variable);
+  return (
+    <span
+      className="min-w-0 break-words font-mono text-sm leading-snug text-gray-900 [overflow-wrap:anywhere]"
+      data-testid="detail-variable-value"
+    >
+      {parts.map((part, index) => (
+        <span key={`${part.kind}:${index}`} className="contents">
+          {index > 0 && <wbr />}
+          <span
+            className={part.kind === 'key' ? 'text-xs text-gray-500' : undefined}
+            data-testid={part.kind === 'key' ? 'detail-variable-key' : 'detail-variable-name'}
+          >
+            {part.value}
+          </span>
+        </span>
+      ))}
+    </span>
   );
 }
 
@@ -71,36 +163,9 @@ export function TimelineVariableDisclosure({
       maxWidth="max-w-sm"
       content={(
         <div data-testid="timeline-variable-detail" className="min-w-0">
-          <DetailSection title="Contract">
-            <div className="text-sm font-medium text-gray-900">{contractDisplayLabel(contract)}</div>
-            <DetailAddress
-              address={storageAddress}
-              chain={chain}
-              copyLabel="Copy storage contract address"
-              explorerLabel="View storage contract on Etherscan"
-            />
-          </DetailSection>
-
-          {implementationAddresses.length > 0 && (
-            <div className="mt-2 border-t border-gray-200 pt-2">
-              <DetailSection title="Written via" className="space-y-1.5">
-                {implementationAddresses.map((address) => (
-                  <DetailAddress
-                    key={address}
-                    address={address}
-                    chain={chain}
-                    copyLabel={`Copy implementation address ${truncateAddress(address)}`}
-                    explorerLabel="View implementation on Etherscan"
-                  />
-                ))}
-              </DetailSection>
-            </div>
-          )}
-
-          <div className="my-2 border-t border-gray-200" />
           <DetailSection title={isRawSlot ? 'Raw slot' : 'Variable'}>
-            <div className="flex min-w-0 items-start gap-1 rounded-[0.375rem] bg-gray-50 px-2 py-1.5">
-              <span className="min-w-0 break-all font-mono text-sm text-gray-900">{variable}</span>
+            <div className="flex min-w-0 items-start gap-1">
+              <VariableDetailValue variable={variable} isRawSlot={isRawSlot} />
               <CopyButton
                 value={variable}
                 label={isRawSlot ? 'Copy raw slot' : 'Copy full path'}
@@ -108,9 +173,32 @@ export function TimelineVariableDisclosure({
               />
             </div>
             {typeLabel && (
-              <div className="flex items-baseline gap-2 text-[10px]">
-                <span className="text-gray-400">Type</span>
-                <span className="break-all font-mono text-gray-700">{typeLabel}</span>
+              <div className="break-all font-mono text-[10px] text-gray-500">{typeLabel}</div>
+            )}
+          </DetailSection>
+
+          <div className="my-1.5 border-t border-gray-200" />
+          <DetailSection title="Contract">
+            <div className="text-xs font-medium text-gray-900">{contractDisplayLabel(contract)}</div>
+            <DetailAddress
+              address={storageAddress}
+              chain={chain}
+              copyLabel="Copy storage contract address"
+              explorerLabel="View storage contract on Etherscan"
+            />
+            {implementationAddresses.length > 0 && (
+              <div className="mt-0.5 space-y-0.5">
+                {implementationAddresses.map((address) => (
+                  <DetailAddress
+                    key={address}
+                    address={address}
+                    chain={chain}
+                    copyLabel={`Copy implementation address ${truncateAddress(address)}`}
+                    explorerLabel="View implementation on Etherscan"
+                    prefix="via"
+                    subdued
+                  />
+                ))}
               </div>
             )}
           </DetailSection>

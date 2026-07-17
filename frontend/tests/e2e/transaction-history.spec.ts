@@ -879,7 +879,8 @@ test('timeline contains single-key mapping paths on mobile', async ({ page }) =>
   await expect(pathDetail).toContainText('YearnV3Vault');
   await expect(pathDetail).toContainText(contract.storage_address);
   await expect(pathDetail).toContainText(implementation);
-  await expect(pathDetail.getByText('Written via', { exact: true })).toBeVisible();
+  await expect(pathDetail.getByText('Written via', { exact: true })).toHaveCount(0);
+  await expect(pathDetail.getByText('via', { exact: true })).toBeVisible();
   await expect(pathDetail.getByRole('link', { name: contract.storage_address })).toHaveAttribute(
     'href',
     `https://etherscan.io/address/${contract.storage_address}`,
@@ -892,7 +893,14 @@ test('timeline contains single-key mapping paths on mobile', async ({ page }) =>
   const variableLabelBox = await pathDetail.getByText('Variable', { exact: true }).boundingBox();
   expect(contractLabelBox).not.toBeNull();
   expect(variableLabelBox).not.toBeNull();
-  expect(contractLabelBox!.y).toBeLessThan(variableLabelBox!.y);
+  expect(variableLabelBox!.y).toBeLessThan(contractLabelBox!.y);
+  const variableNameSize = await pathDetail.getByTestId('detail-variable-name').first().evaluate(
+    (element) => parseFloat(getComputedStyle(element).fontSize),
+  );
+  const variableKeySize = await pathDetail.getByTestId('detail-variable-key').evaluate(
+    (element) => parseFloat(getComputedStyle(element).fontSize),
+  );
+  expect(variableKeySize).toBeLessThan(variableNameSize);
   const appearance = await pathDetail.evaluate((element) => {
     const style = getComputedStyle(element);
     return {
@@ -910,6 +918,7 @@ test('timeline contains single-key mapping paths on mobile', async ({ page }) =>
   expect(detailBox).not.toBeNull();
   expect(detailBox!.x).toBeGreaterThanOrEqual(7);
   expect(detailBox!.x + detailBox!.width).toBeLessThanOrEqual(383);
+  expect(detailBox!.height).toBeLessThanOrEqual(180);
 
   await pathDetail.getByRole('button', { name: 'Copy full path' }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(slot.variable_path);
