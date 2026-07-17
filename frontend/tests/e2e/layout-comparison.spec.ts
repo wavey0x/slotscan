@@ -442,8 +442,13 @@ test('the comparison table keeps Location as the anchor and exposes all objectiv
   await expect(table.getByText('Change', { exact: true })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Expand details for slots 4–5 → slots 4–8' }).click();
-  await expect(page.getByRole('listitem').filter({ hasText: 'Objective detail one.' })).toBeVisible();
-  await expect(page.getByRole('listitem').filter({ hasText: 'Objective detail two.' })).toBeVisible();
+  await expect(page.getByTestId('comparison-details').getByRole('cell')).toHaveText([
+    '',
+    'offset 0 · 64 bytes',
+    'offset 0 · 160 bytes',
+  ]);
+  await expect(page.getByText('Objective detail one.')).toHaveCount(0);
+  await expect(page.getByText('Objective detail two.')).toHaveCount(0);
   await expect(page.getByText('Storage conflict.', { exact: true }).first()).toBeAttached();
 
   await page.getByRole('button', { name: 'Changes' }).click();

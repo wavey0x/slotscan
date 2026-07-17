@@ -155,7 +155,6 @@ function searchable(entry: ComparisonEntry): string {
   );
   return [
     entry.kind,
-    ...entry.details,
     ...regions.flatMap((region) => [
       region.path,
       region.type.label,
@@ -189,15 +188,9 @@ function evidence(region: ComparisonRegion | null) {
   );
 }
 
-function fullLocation(region: ComparisonRegion): string {
-  const location = region.location;
-  return [
-    `scope ${region.scope.id}`,
-    `slot ${location.slot}`,
-    location.end_slot !== location.slot ? `through ${location.end_slot}` : null,
-    `byte offset ${location.byte_offset}`,
-    `${location.byte_size} bytes`,
-  ].filter(Boolean).join(' · ');
+function regionMetadata(region: ComparisonRegion | null): string {
+  if (!region) return '—';
+  return `offset ${region.location.byte_offset} · ${region.location.byte_size} bytes`;
 }
 
 export function ComparisonTable({
@@ -339,21 +332,17 @@ export function ComparisonTable({
                       <td className={dataTableCellClass}>{evidence(entry.to_region)}</td>
                     </tr>,
                     expanded && canExpand ? (
-                      <tr key={`${entry.id}:details`} className="border-b border-gray-300 bg-gray-50">
-                        <td colSpan={3} className="px-7 py-3">
-                          <ul className="space-y-1 text-xs text-gray-700">
-                            {entry.details.map((detail) => (
-                              <li key={detail}>• {detail}</li>
-                            ))}
-                          </ul>
-                          <div className="mt-2 space-y-0.5 break-all text-[10px] text-gray-500">
-                            {entry.from_region && (
-                              <div>From · {fullLocation(entry.from_region)}</div>
-                            )}
-                            {entry.to_region && (
-                              <div>To · {fullLocation(entry.to_region)}</div>
-                            )}
-                          </div>
+                      <tr
+                        key={`${entry.id}:details`}
+                        data-testid="comparison-details"
+                        className="border-b border-gray-300 bg-gray-50"
+                      >
+                        <td className="px-2 py-2" />
+                        <td className="px-2 py-2 font-mono text-[10px] text-gray-500">
+                          {regionMetadata(entry.from_region)}
+                        </td>
+                        <td className="px-2 py-2 font-mono text-[10px] text-gray-500">
+                          {regionMetadata(entry.to_region)}
                         </td>
                       </tr>
                     ) : null,

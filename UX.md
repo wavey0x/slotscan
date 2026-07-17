@@ -48,8 +48,10 @@ Do not add legacy redirects or a second contract-scoped transaction UI.
   Put byte ranges, roots, and other location qualifiers on a smaller muted line
   below the identifier.
 - Group scopes under Default storage or their proven ERC-7201 identifier. Every
-  changed row exposes all backend-owned objective details in one keyboard
-  accessible disclosure. Unchanged rows do not show disclosure controls.
+  changed row may expose compact structured byte metadata in one keyboard
+  accessible disclosure. Keep From and To metadata in their respective columns;
+  do not repeat the scope, slot, or backend narrative. Unchanged rows do not
+  show disclosure controls.
 - Mark conflicts with text for assistive technology and a restrained visual
   indicator; never rely on color. Stack inputs and subjects on narrow screens
   and preserve dark theme and reduced-motion behavior.
