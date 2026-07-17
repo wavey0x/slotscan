@@ -97,6 +97,40 @@ class PhysicalShape:
             ),
         )
 
+    def nominal_key(self) -> tuple:
+        """Return the bounded recursive shape including names and type labels."""
+        if self.recursive:
+            return (
+                "recursive",
+                self.recursive_depth,
+                self.kind,
+                self.encoding,
+                self.byte_size,
+                self.label,
+            )
+        return (
+            self.kind,
+            self.encoding,
+            self.byte_size,
+            self.label,
+            self.key.nominal_key() if self.key else None,
+            self.value.nominal_key() if self.value else None,
+            self.element.nominal_key() if self.element else None,
+            self.array_length,
+            self.element_stride,
+            self.elements_per_slot,
+            tuple(
+                (
+                    member.name,
+                    member.slot,
+                    member.byte_offset,
+                    member.byte_size,
+                    member.shape.nominal_key(),
+                )
+                for member in self.members
+            ),
+        )
+
     def mapping_key_key(self) -> tuple:
         """Return the preimage-encoding shape of a Solidity mapping key."""
         if self.encoding == "bytes":

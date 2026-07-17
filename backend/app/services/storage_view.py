@@ -19,7 +19,11 @@ from app.services.compiled_layout import (
 from app.services.decoder import TypeDecoder
 from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
-from app.services.storage import StorageReader, plan_compiled_scalar_reads
+from app.services.storage import (
+    StorageReader,
+    is_one_word_scalar,
+    plan_compiled_scalar_reads,
+)
 from app.services.storage_rules import (
     compute_solidity_mapping_slot,
     compute_vyper_mapping_slot,
@@ -42,18 +46,6 @@ class StorageQueryError(ValueError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
-
-
-def _is_scalar(type_info: CompiledType | None) -> bool:
-    return (
-        type_info is not None
-        and type_info.encoding == "inplace"
-        and type_info.kind in {"value", "contract", "enum"}
-        and type_info.array_length is None
-        and not type_info.members
-        and type_info.num_bytes is not None
-        and 0 < type_info.num_bytes <= 32
-    )
 
 
 def _wire_decoded(value: Any) -> Any:
@@ -114,7 +106,7 @@ def _array_element_location(
     element_type = (
         layout.get_type(type_info.element_type) if type_info.element_type else None
     )
-    if not _is_scalar(element_type):
+    if not is_one_word_scalar(element_type):
         raise StorageQueryError(
             "UNSUPPORTED_ACCESS",
             "Only arrays ending in one-word scalar elements are supported",
@@ -244,11 +236,14 @@ class StorageViewService:
         number: int,
         block_hash: str,
     ) -> StorageContext:
-        attempt = await self.web3_provider.create_exact_storage_attempt(
-            chain_id,
-            number,
-            block_hash,
-        )
+        try:
+            attempt = await self.web3_provider.create_exact_storage_attempt(
+                chain_id,
+                number,
+                block_hash,
+            )
+        except ValueError as exc:
+            raise StorageQueryError("INVALID_BLOCK_REF", str(exc)) from exc
         return await self.prepare_on_attempt(attempt, address)
 
     async def prepare_on_attempt(
@@ -353,6 +348,13 @@ class StorageViewService:
                 list(plan.words),
                 attempt.block_ref.number,
             )
+        except Exception:
+            values_wire = {
+                "status": "error",
+                "items": [],
+                "error_code": "STORAGE_READ_FAILED",
+            }
+        else:
             items = []
             for projection in plan.projections:
                 base = {
@@ -368,24 +370,22 @@ class StorageViewService:
                 }
                 if projection.status == "pending":
                     raw_word = word_values[projection.slot]
-                    decoded = self.decoder.decode(
-                        bytes.fromhex(raw_word[2:]),
-                        projection.type_info,
-                        projection.byte_offset,
-                    )
                     base["value_encoded"] = raw_word
-                    base["value_decoded"] = _wire_decoded(decoded.decoded)
+                    try:
+                        decoded = self.decoder.decode(
+                            bytes.fromhex(raw_word[2:]),
+                            projection.type_info,
+                            projection.byte_offset,
+                        )
+                    except Exception:
+                        pass
+                    else:
+                        base["value_decoded"] = _wire_decoded(decoded.decoded)
                 items.append(base)
             values_wire = {
                 "status": "ok",
                 "items": items,
                 "error_code": None,
-            }
-        except Exception:
-            values_wire = {
-                "status": "error",
-                "items": [],
-                "error_code": "STORAGE_READ_FAILED",
             }
 
         layout_wire = layout.canonical_wire()
@@ -501,7 +501,7 @@ class StorageViewService:
                         "The mapping value type is unavailable",
                     )
                 current_type = next_type
-            if not _is_scalar(current_type):
+            if not is_one_word_scalar(current_type):
                 raise StorageQueryError(
                     "UNSUPPORTED_ACCESS",
                     "Mappings must end in a one-word scalar value",
@@ -562,8 +562,10 @@ class StorageViewService:
                 result_type,
                 byte_offset,
             )
-        except Exception as exc:
-            raise RuntimeError(f"Failed to decode storage query result: {exc}") from exc
+        except Exception:
+            decoded_wire = None
+        else:
+            decoded_wire = _wire_decoded(decoded.decoded)
 
         response = {
             "block_ref": block_ref_wire(context.attempt.block_ref),
@@ -576,7 +578,7 @@ class StorageViewService:
                 "byte_size": result_type.num_bytes,
             },
             "value_encoded": raw_word,
-            "value_decoded": _wire_decoded(decoded.decoded),
+            "value_decoded": decoded_wire,
         }
         if length_word is not None:
             response["array_length"] = str(int(length_word, 16))

@@ -34,6 +34,57 @@ class CompiledScalarReadPlan:
     words: tuple[int, ...]
 
 
+def is_one_word_scalar(type_info: CompiledType | None) -> bool:
+    """Return whether a compiled type can be decoded from one storage word."""
+    return (
+        type_info is not None
+        and type_info.encoding == "inplace"
+        and type_info.kind in {"value", "contract", "enum"}
+        and type_info.array_length is None
+        and not type_info.members
+        and type_info.num_bytes is not None
+        and 0 < type_info.num_bytes <= 32
+    )
+
+
+def is_queryable_storage_type(
+    layout: CompiledLayout,
+    type_info: CompiledType,
+) -> bool:
+    """Return whether the typed-query endpoint supports this aggregate."""
+    if type_info.encoding == "mapping":
+        current = type_info
+        visited: set[str] = set()
+        while current.encoding == "mapping":
+            if (
+                current.id in visited
+                or not current.key_type
+                or not current.value_type
+            ):
+                return False
+            visited.add(current.id)
+            next_type = layout.get_type(current.value_type)
+            if next_type is None:
+                return False
+            current = next_type
+        return is_one_word_scalar(current)
+
+    if type_info.kind == "array":
+        if (
+            type_info.encoding == "dynamic_array"
+            and layout.storage_rules.array_storage_scheme == "vyper_legacy_hashed"
+        ):
+            return False
+        element = (
+            layout.get_type(type_info.element_type)
+            if type_info.element_type
+            else None
+        )
+        return is_one_word_scalar(element)
+
+    return False
+
+
 def plan_compiled_scalar_reads(
     layout: CompiledLayout,
     *,
@@ -97,8 +148,7 @@ def plan_compiled_scalar_reads(
 
         status = (
             "on_demand"
-            if type_info.encoding in {"mapping", "dynamic_array"}
-            or type_info.kind == "array"
+            if is_queryable_storage_type(layout, type_info)
             else "unsupported"
         )
         projections.append(

@@ -110,6 +110,67 @@ class ScalarReadPlanningTests(unittest.TestCase):
             ],
         )
 
+    def test_aggregate_queries_are_offered_only_for_scalar_results(self):
+        struct = StorageType(
+            "config",
+            "struct Config",
+            "struct",
+            "inplace",
+            num_bytes=32,
+            members=[
+                StorageVariable("limit", 0, 0, 32, "t_uint256", "uint256")
+            ],
+        )
+        mapping = StorageType(
+            "configs",
+            "mapping(address => struct Config)",
+            "mapping",
+            "mapping",
+            num_bytes=32,
+            key_type="t_address",
+            value_type=struct.id,
+        )
+        array = StorageType(
+            "config_array",
+            "struct Config[]",
+            "array",
+            "dynamic_array",
+            num_bytes=32,
+            element_type=struct.id,
+        )
+        layout = _compiled(
+            [
+                StorageVariable(
+                    "configs",
+                    0,
+                    0,
+                    32,
+                    mapping.id,
+                    mapping.label,
+                ),
+                StorageVariable(
+                    "configList",
+                    1,
+                    0,
+                    32,
+                    array.id,
+                    array.label,
+                ),
+            ],
+            {
+                struct.id: struct,
+                mapping.id: mapping,
+                array.id: array,
+            },
+        )
+
+        plan = plan_compiled_scalar_reads(layout)
+
+        self.assertEqual(
+            [(projection.path, projection.status) for projection in plan.projections],
+            [("configs", "unsupported"), ("configList", "unsupported")],
+        )
+
     def test_budget_defers_new_words_but_keeps_shared_consumers(self):
         layout = _compiled(
             [

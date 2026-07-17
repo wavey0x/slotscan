@@ -521,21 +521,36 @@ class LayoutComparator:
                     from_region,
                     to_region,
                 )
-            elif from_shape.label != to_shape.label:
+                return
+            if from_shape.label != to_shape.label:
                 self._emit(
                     "nominal_type_changed",
                     ComparisonImpact.AMBIGUOUS,
                     from_region,
                     to_region,
                 )
-            else:
+                return
+            if from_shape.nominal_key() == to_shape.nominal_key():
                 self._emit(
                     "unchanged",
                     ComparisonImpact.NONE,
                     from_region,
                     to_region,
                 )
-            return
+                return
+            if (
+                from_shape.kind == "mapping"
+                and from_shape.key
+                and to_shape.key
+                and from_shape.key.nominal_key() != to_shape.key.nominal_key()
+            ):
+                self._emit(
+                    "nominal_type_changed",
+                    ComparisonImpact.AMBIGUOUS,
+                    from_region,
+                    to_region,
+                )
+                return
         if from_shape.kind != to_shape.kind or from_shape.encoding != to_shape.encoding:
             self._emit(
                 "shape_changed",

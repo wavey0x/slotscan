@@ -309,6 +309,41 @@ class ComparatorTests(unittest.TestCase):
             "nominal_type_changed",
         )
 
+    def test_nested_struct_member_rename_is_indeterminate(self):
+        uint = scalar()
+        before_struct = StorageType(
+            "before_struct",
+            "struct Config",
+            "struct",
+            "inplace",
+            32,
+            members=[variable("owner", 0)],
+        )
+        after_struct = StorageType(
+            "after_struct",
+            "struct Config",
+            "struct",
+            "inplace",
+            32,
+            members=[variable("admin", 0)],
+        )
+
+        result = self.compare(
+            layout(
+                [variable("config", 0, before_struct.id, before_struct.label)],
+                {before_struct.id: before_struct, uint.id: uint},
+            ),
+            layout(
+                [variable("config", 0, after_struct.id, after_struct.label)],
+                {after_struct.id: after_struct, uint.id: uint},
+            ),
+        )
+
+        self.assertEqual(result.verdict, ComparisonVerdict.INDETERMINATE)
+        self.assertEqual([entry.kind for entry in result.entries], ["name_changed"])
+        self.assertEqual(result.entries[0].from_region.path, "config.owner")
+        self.assertEqual(result.entries[0].to_region.path, "config.admin")
+
     def test_mapping_key_and_dynamic_array_stride_changes_conflict(self):
         uint = scalar()
         address = scalar("t_address", "address", 20)

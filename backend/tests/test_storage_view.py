@@ -105,6 +105,11 @@ def _service(context):
     return service
 
 
+class _FailingDecoder:
+    def decode(self, *_args, **_kwargs):
+        raise ValueError("unsupported decode")
+
+
 class StorageViewTests(unittest.IsolatedAsyncioTestCase):
     async def test_every_packed_consumer_of_one_word_is_decoded(self):
         layout = compile_layout(
@@ -203,6 +208,33 @@ class StorageViewTests(unittest.IsolatedAsyncioTestCase):
                 "error_code": "STORAGE_READ_FAILED",
             },
         )
+
+    async def test_decode_failure_keeps_the_raw_value(self):
+        context = StorageContext(
+            attempt=StorageAttempt(
+                _Web3(),
+                BlockRef(1, 123, BLOCK_HASH),
+                2,
+            ),
+            metadata=ContractMetadata(
+                chain_id=1,
+                address=ADDRESS,
+                is_verified=True,
+            ),
+            layout=_compiled_layout(),
+            layout_status="ok",
+        )
+        service = _service(context)
+        service.decoder = _FailingDecoder()
+
+        response = await service.get_view(1, ADDRESS, "latest")
+        validated = StorageViewResponse.model_validate(response)
+        by_path = {item.path: item for item in validated.values.items}
+
+        self.assertEqual(validated.values.status, "ok")
+        self.assertEqual(by_path["counter"].status, "ok")
+        self.assertEqual(by_path["counter"].value_encoded, "0x" + f"{42:064x}")
+        self.assertIsNone(by_path["counter"].value_decoded)
 
     async def test_unverified_view_has_no_value_storage_reads(self):
         web3 = _Web3()

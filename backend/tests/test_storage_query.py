@@ -2,9 +2,11 @@ import unittest
 from unittest.mock import AsyncMock
 
 from eth_abi import encode as abi_encode
+from fastapi import HTTPException
 from pydantic import ValidationError
 from web3 import Web3
 
+from app.api.routes.storage import query_storage
 from app.config import Settings
 from app.models.api import StorageQueryRequest, StorageQueryResponse
 from app.models.domain import (
@@ -54,6 +56,11 @@ class _Attempt:
             slot: "0x" + self.values.get(slot, 0).to_bytes(32, "big").hex()
             for slot in slots
         }
+
+
+class _FailingDecoder:
+    def decode(self, *_args, **_kwargs):
+        raise ValueError("unsupported decode")
 
 
 def _layout(
@@ -294,6 +301,54 @@ class StorageQueryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["location"]["byte_offset"], 4)
         self.assertEqual(response["value_decoded"], "17")
         self.assertEqual(attempt.calls, [[9], [data_start]])
+
+    async def test_decode_failure_keeps_the_raw_query_value(self):
+        layout = _mapping_layout()
+        service, _ = _service(layout, {SOLIDITY_ADDRESS_SLOT: 42})
+        service.decoder = _FailingDecoder()
+
+        response = await _query(
+            service,
+            layout,
+            [{"kind": "mapping_key", "value": ADDRESS}],
+        )
+        validated = StorageQueryResponse.model_validate(response)
+
+        self.assertEqual(validated.value_encoded, "0x" + f"{42:064x}")
+        self.assertIsNone(validated.value_decoded)
+
+    async def test_mismatched_exact_block_is_a_client_error(self):
+        provider = type("Provider", (), {})()
+        provider.create_exact_storage_attempt = AsyncMock(
+            side_effect=ValueError(
+                "Block number and hash do not describe the same block"
+            )
+        )
+        service = StorageViewService(
+            web3_provider=provider,
+            resolver=object(),
+            layout_parser=object(),
+            settings=Settings(),
+            decoder=TypeDecoder(),
+        )
+        request = StorageQueryRequest.model_validate(
+            {
+                "chain_id": "1",
+                "address": ADDRESS,
+                "block_ref": {"number": "0x7b", "hash": BLOCK_HASH},
+                "layout_id": "sha256:" + "1" * 64,
+                "access": {
+                    "declaration_id": "decl:0",
+                    "steps": [{"kind": "array_index", "value": "0"}],
+                },
+            }
+        )
+
+        with self.assertRaises(HTTPException) as raised:
+            await query_storage(request, service)
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertEqual(raised.exception.detail["code"], "INVALID_BLOCK_REF")
 
     def test_request_shape_rejects_browser_computed_locations(self):
         request = {
