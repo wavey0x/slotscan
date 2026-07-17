@@ -167,7 +167,9 @@ test('high slots stay exact strings in the table and disclosure', async ({ page 
   });
   await page.goto(`/1/${ADDRESS}`);
 
-  await expect(page.getByTestId('layout-slot')).toBeHidden();
+  const slotCell = page.getByTestId('layout-slot');
+  await expect(slotCell).toBeVisible();
+  await expect(slotCell).toHaveAttribute('title', highSlot);
   await page.getByText('highValue', { exact: true }).click();
   await expect(page.getByRole('dialog').getByText(highSlot, { exact: true })).toBeVisible();
 });
@@ -201,9 +203,10 @@ test('address values stay on one line and use the full table width on mobile', a
   await expect(compactValue).toBeVisible();
   const valueBox = (await compactValue.boundingBox())!;
   expect(valueBox.height).toBeLessThanOrEqual(20);
-  const cellRight = await compactValue.evaluate((element) => element.closest('td')!.getBoundingClientRect().right);
+  const slotRight = await page.getByTestId('layout-slot').first()
+    .evaluate((element) => element.getBoundingClientRect().right);
   const tableRight = await page.getByRole('table').evaluate((element) => element.getBoundingClientRect().right);
-  expect(tableRight - cellRight).toBeLessThanOrEqual(1);
+  expect(tableRight - slotRight).toBeLessThanOrEqual(1);
 });
 
 test('packed values sharing one word remain separate logical rows', async ({ page }) => {

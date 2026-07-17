@@ -110,7 +110,10 @@ export const LayoutRow = memo(function LayoutRow({
           {variable.type_label}
         </td>
 
-        <td data-testid="layout-slot" className="hidden break-all px-1 py-2 font-mono text-xs text-gray-500 sm:table-cell">
+        <td
+          className="hidden truncate px-1 py-2 font-mono text-xs text-gray-500 sm:table-cell"
+          title={variable.slot}
+        >
           {variable.slot}
         </td>
 
@@ -160,11 +163,19 @@ export const LayoutRow = memo(function LayoutRow({
             <span className="text-xs text-gray-400">—</span>
           )}
         </td>
+
+        <td
+          data-testid="layout-slot"
+          className="truncate px-1 py-2 font-mono text-[10px] text-gray-500 sm:hidden"
+          title={variable.slot}
+        >
+          {variable.slot}
+        </td>
       </tr>
 
       {expanded && isMapping && (
-        <tr className="block bg-gray-50/50 sm:table-row">
-          <td colSpan={5} className="block border-b border-gray-100 px-4 pb-2 pt-1 sm:table-cell">
+        <tr className="bg-gray-50/50">
+          <td colSpan={5} className="border-b border-gray-100 px-4 pb-2 pt-1">
             <MappingKeyInput
               declarationId={variable.declaration_id}
               keyTypes={mappingKeyTypes}
@@ -180,8 +191,8 @@ export const LayoutRow = memo(function LayoutRow({
       )}
 
       {expanded && isArray && !isMapping && (
-        <tr className="block bg-gray-50/50 sm:table-row">
-          <td colSpan={5} className="block border-b border-gray-100 px-4 pb-2 pt-1 sm:table-cell">
+        <tr className="bg-gray-50/50">
+          <td colSpan={5} className="border-b border-gray-100 px-4 pb-2 pt-1">
             <ArrayIndexInput
               declarationId={variable.declaration_id}
               arrayLength={varType?.array_length ?? null}

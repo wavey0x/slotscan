@@ -45,9 +45,10 @@ export function LayoutTable({
           <tr className="border-b border-gray-300">
             <th className={cn(dataTableHeadCellClass, 'w-5 sm:w-6')}></th>
             <th className={cn(dataTableHeadCellClass, 'w-[88px] sm:w-[100px]')}>Variable</th>
-            <th className={cn(dataTableHeadCellClass, 'w-[88px] sm:w-[120px]')}>Type</th>
+            <th className={cn(dataTableHeadCellClass, 'w-20 sm:w-[120px]')}>Type</th>
             <th className={cn(dataTableHeadCellClass, 'hidden w-[72px] sm:table-cell')}>Slot</th>
             <th className={dataTableHeadCellClass}>Value</th>
+            <th className={cn(dataTableHeadCellClass, 'w-10 sm:hidden')}>Slot</th>
           </tr>
         </thead>
         <tbody>
