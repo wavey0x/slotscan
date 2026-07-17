@@ -35,12 +35,11 @@ Do not add legacy redirects or a second contract-scoped transaction UI.
 - Show resolved From and To subjects as compact columns. Direct contracts show
   one contract address; proxies and EIP-7702 subjects keep Storage and Code
   identities visibly separate.
-- Show non-overlapping change, conflict, ambiguity, and unchanged counts in a
-  neutral polite live region. Reserve explanatory prose for unavailable data
-  and upstream failures; do not frame available comparison data as a report or
-  conclusion.
+- Fold total, changed, and conflict counts into the table filters in a neutral
+  polite live region. Do not add a separate summary, verdict, or disclaimer.
+  Reserve explanatory prose for unavailable data and upstream failures.
 - Default the comparison table to All, with Changes and Conflicts views. Search
-  appears only at 20 rows or more and covers paths, types, scopes, and slots.
+  appears only at 50 rows or more and covers paths, types, scopes, and slots.
 - The table has exactly `Location / From / To`. Location is formatted from both
   structured regions, including packed extents, inclusive ranges, roots,
   moves, additions, removals, and scope-root changes. Do not add a Result,
@@ -50,7 +49,7 @@ Do not add legacy redirects or a second contract-scoped transaction UI.
   below the identifier.
 - Group scopes under Default storage or their proven ERC-7201 identifier. Every
   changed row exposes all backend-owned objective details in one keyboard
-  accessible disclosure.
+  accessible disclosure. Unchanged rows do not show disclosure controls.
 - Mark conflicts with text for assistive technology and a restrained visual
   indicator; never rely on color. Stack inputs and subjects on narrow screens
   and preserve dark theme and reduced-motion behavior.

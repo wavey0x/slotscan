@@ -83,14 +83,11 @@ function Subject({
             : subject.kind === 'proxy' ? 'Proxy' : 'EIP-7702'
         )}
       </div>
-      <dl className="mt-2 space-y-1 text-xs">
+      <div className="mt-2 text-xs">
         {direct ? (
-          <div className="flex gap-2">
-            <dt className="w-16 shrink-0 text-gray-500">Contract</dt>
-            <dd>{addressLink(chain, subject.input_address, `Copy ${side} contract address`)}</dd>
-          </div>
+          addressLink(chain, subject.input_address, `Copy ${side} contract address`)
         ) : (
-          <>
+          <dl className="space-y-1">
             <div className="flex gap-2">
               <dt className="w-16 shrink-0 text-gray-500">Storage</dt>
               <dd>{addressLink(chain, subject.storage_address, `Copy ${side} storage address`)}</dd>
@@ -99,11 +96,13 @@ function Subject({
               <dt className="w-16 shrink-0 text-gray-500">Code</dt>
               <dd>{addressLink(chain, subject.code_address, `Copy ${side} code address`)}</dd>
             </div>
-          </>
+          </dl>
         )}
-      </dl>
+      </div>
       <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-gray-500">
-        <span>{STATUS[subject.layout_status]}</span>
+        {subject.layout_status !== 'ok' && (
+          <span>{STATUS[subject.layout_status]}</span>
+        )}
         <span>
           Block{' '}
           <a
@@ -173,12 +172,13 @@ export function ComparisonResult({
             <button
               type="button"
               onClick={() => { void copyExact(); }}
-              className="inline-flex items-center text-gray-700 hover:text-gray-900"
+              aria-label={copied ? 'Exact link copied' : 'Copy exact link'}
+              title={copied ? 'Exact link copied' : 'Copy exact link'}
+              className="touch-hitbox inline-flex items-center text-gray-500 hover:text-gray-900"
             >
               {copied
-                ? <Check aria-hidden="true" size={12} className="mr-1 text-green" />
-                : <Copy aria-hidden="true" size={12} className="mr-1" />}
-              {copied ? 'Link copied' : 'Copy exact link'}
+                ? <Check aria-hidden="true" size={14} className="text-green" />
+                : <Copy aria-hidden="true" size={14} />}
             </button>
           )}
         </div>

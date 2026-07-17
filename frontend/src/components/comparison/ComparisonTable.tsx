@@ -211,6 +211,8 @@ export function ComparisonTable({
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState<Set<string>>(() => new Set());
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
+  const changedCount = summary.changes + summary.conflicts + summary.ambiguous;
+  const allCount = changedCount + summary.unchanged;
   const visible = useMemo(() => entries.filter((entry) => {
     if (filter === 'changes' && entry.kind === 'unchanged') return false;
     if (filter === 'conflicts' && entry.impact !== 'conflict') return false;
@@ -236,39 +238,29 @@ export function ComparisonTable({
 
   return (
     <section className="mt-6 border-t border-gray-300 pt-3" aria-label="Layout comparison rows">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <div
-          aria-label="Comparison counts"
-          aria-live="polite"
-          className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500"
-        >
-          <span>Changes <span className="text-gray-900">{summary.changes}</span></span>
-          <span>Conflicts <span className="text-gray-900">{summary.conflicts}</span></span>
-          <span>Ambiguous <span className="text-gray-900">{summary.ambiguous}</span></span>
-          <span>Unchanged <span className="text-gray-900">{summary.unchanged}</span></span>
-        </div>
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
+      <div className="mb-3 flex min-w-0 flex-wrap items-center justify-end gap-2">
+        <div aria-live="polite">
           <ViewSwitch
             label="Rows"
             showLabel={false}
             value={filter}
             options={[
-              { value: 'all', label: 'All' },
-              { value: 'changes', label: 'Changes' },
-              { value: 'conflicts', label: 'Conflicts' },
+              { value: 'all', label: `All ${allCount}` },
+              { value: 'changes', label: `Changes ${changedCount}` },
+              { value: 'conflicts', label: `Conflicts ${summary.conflicts}` },
             ]}
             onChange={setFilter}
           />
-          {entries.length >= 20 && (
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search"
-              aria-label="Search comparison rows"
-              className="h-7 min-w-0 basis-64 px-2 py-0 text-xs"
-            />
-          )}
         </div>
+        {entries.length >= 50 && (
+          <Input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search"
+            aria-label="Search comparison rows"
+            className="h-7 min-w-0 basis-48 px-2 py-0 text-xs"
+          />
+        )}
       </div>
 
       {visible.length === 0 ? (
@@ -299,6 +291,7 @@ export function ComparisonTable({
               </tr>,
               ...rows.flatMap((entry) => {
                 const expanded = open.has(entry.id);
+                const canExpand = entry.kind !== 'unchanged';
                 const location = locationDisplay(entry);
                 return [
                   <tr
@@ -310,17 +303,21 @@ export function ComparisonTable({
                   >
                     <td className={cn(dataTableCellClass, 'text-xs')}>
                       <div className="flex items-start gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => toggle(entry.id)}
-                          aria-expanded={expanded}
-                          aria-label={`${expanded ? 'Collapse' : 'Expand'} details for ${formatComparisonLocation(entry)}`}
-                          className="mt-0.5 shrink-0 text-gray-400 hover:text-gray-900"
-                        >
-                          {expanded
-                            ? <ChevronDown aria-hidden="true" size={13} />
-                            : <ChevronRight aria-hidden="true" size={13} />}
-                        </button>
+                        {canExpand ? (
+                          <button
+                            type="button"
+                            onClick={() => toggle(entry.id)}
+                            aria-expanded={expanded}
+                            aria-label={`${expanded ? 'Collapse' : 'Expand'} details for ${formatComparisonLocation(entry)}`}
+                            className="mt-0.5 shrink-0 text-gray-400 hover:text-gray-900"
+                          >
+                            {expanded
+                              ? <ChevronDown aria-hidden="true" size={13} />
+                              : <ChevronRight aria-hidden="true" size={13} />}
+                          </button>
+                        ) : (
+                          <span aria-hidden="true" className="w-[13px] shrink-0" />
+                        )}
                         <div className="min-w-0">
                           {entry.impact === 'conflict' && (
                             <span className="sr-only">Storage conflict. </span>
@@ -342,7 +339,7 @@ export function ComparisonTable({
                     <td className={dataTableCellClass}>{evidence(entry.from_region)}</td>
                     <td className={dataTableCellClass}>{evidence(entry.to_region)}</td>
                   </tr>,
-                  expanded ? (
+                  expanded && canExpand ? (
                     <tr key={`${entry.id}:details`} className="border-b border-gray-300 bg-gray-50">
                       <td colSpan={3} className="px-7 py-3">
                         <ul className="space-y-1 text-xs text-gray-700">

@@ -310,11 +310,15 @@ test('resolved subjects, counts, exact link, and browser history remain reproduc
   await expect(page.getByText('DelegateVault', { exact: true })).toBeVisible();
   await expect(page.getByText('Storage', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('Code', { exact: true }).first()).toBeVisible();
-  const counts = page.getByLabel('Comparison counts');
-  await expect(counts).toContainText('Changes 1');
-  await expect(counts).toContainText('Conflicts 4');
-  await expect(counts).toContainText('Ambiguous 0');
-  await expect(counts).toContainText('Unchanged 1');
+  await expect(
+    page.getByRole('button', { name: 'All 6', exact: true }),
+  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    page.getByRole('button', { name: 'Changes 5', exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Conflicts 4', exact: true }),
+  ).toBeVisible();
   await expect(page.getByText(/does not analyze values, initialization/)).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Copy exact link' }).click();
@@ -374,10 +378,13 @@ test('neutral counts replace verdict prose and identical layouts show their rows
   });
 
   await page.goto(`/1/compare?from=${FROM}&to=${TO}`);
-  await expect(page.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
   await expect(
-    page.getByRole('button', { name: 'Expand details for slot 2 · bytes 0–19' }),
-  ).toBeVisible();
+    page.getByRole('button', { name: 'All 1', exact: true }),
+  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', {
+    name: 'Expand details for slot 2 · bytes 0–19',
+  })).toHaveCount(0);
+  await expect(page.getByText('owner', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('No matching rows.')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'No storage conflicts' })).toHaveCount(0);
 
@@ -391,7 +398,9 @@ test('neutral counts replace verdict prose and identical layouts show their rows
     },
   });
   await page.reload();
-  await expect(page.getByLabel('Comparison counts')).toContainText('Ambiguous 1');
+  await expect(
+    page.getByRole('button', { name: 'Changes 1', exact: true }),
+  ).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Comparison indeterminate' })).toHaveCount(0);
   await expect(page.getByText(/overall safety/)).toHaveCount(0);
 });
@@ -434,7 +443,10 @@ test('the comparison table keeps Location as the anchor and exposes all objectiv
   await expect(table.getByRole('button', { name: 'Expand details for slot 9 · bytes 0–19 → slot 12 · bytes 0–19' })).toBeVisible();
   await expect(table.getByRole('button', { name: 'Expand details for — → slot 13 · bytes 0–0' })).toBeVisible();
   await expect(table.getByRole('button', { name: 'Expand details for slot 14 → —' })).toBeVisible();
-  await expect(table.getByRole('button', { name: 'Expand details for slot 2 · bytes 0–19' })).toBeVisible();
+  await expect(table.getByRole('button', {
+    name: 'Expand details for slot 2 · bytes 0–19',
+  })).toHaveCount(0);
+  await expect(table.getByText('owner', { exact: true }).first()).toBeVisible();
   await expect(table.getByText('Result', { exact: true })).toHaveCount(0);
   await expect(table.getByText('Change', { exact: true })).toHaveCount(0);
 
@@ -444,13 +456,13 @@ test('the comparison table keeps Location as the anchor and exposes all objectiv
   await expect(page.getByText('Storage conflict.', { exact: true }).first()).toBeAttached();
 
   await page.getByRole('button', { name: 'Changes' }).click();
-  await expect(table.getByRole('button', { name: 'Expand details for slot 2 · bytes 0–19' })).toBeHidden();
+  await expect(table.getByText('owner', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Conflicts' }).click();
   await expect(table.getByRole('button', { name: 'Expand details for — → slot 13 · bytes 0–0' })).toBeHidden();
 });
 
 test('search appears only for large reports and filters paths, labels, scopes, and slots', async ({ page }) => {
-  const entries = Array.from({ length: 20 }, (_, index) => comparisonEntry(
+  const entries = Array.from({ length: 50 }, (_, index) => comparisonEntry(
     `entry-${index}`,
     'addition',
     'none',
@@ -464,7 +476,7 @@ test('search appears only for large reports and filters paths, labels, scopes, a
   ));
   await mockComparison(page, availableReport({
     verdict: 'no_conflicts',
-    summary: { conflicts: 0, ambiguous: 0, changes: 20, unchanged: 0 },
+    summary: { conflicts: 0, ambiguous: 0, changes: 50, unchanged: 0 },
     entries,
   }));
   await page.goto(`/1/compare?from=${FROM}&to=${TO}`);
@@ -511,7 +523,7 @@ test('narrow and dark layouts remain contained and keyboard accessible', async (
   await page.keyboard.press('ArrowRight');
   await page.getByRole('button', { name: 'All' }).focus();
   await page.keyboard.press('Enter');
-  await expect(page.getByRole('button', { name: 'Expand details for slot 2 · bytes 0–19' })).toBeVisible();
+  await expect(page.getByText('owner', { exact: true }).first()).toBeVisible();
 
   const overflowing = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>('body *'))
     .filter((element) => element.getBoundingClientRect().right > window.innerWidth + 1)
