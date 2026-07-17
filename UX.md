@@ -36,8 +36,8 @@ Do not add legacy redirects or a second contract-scoped transaction UI.
 - Fold total, changed, and conflict counts into the table filters in a neutral
   polite live region. Do not add a separate summary, verdict, or disclaimer.
   Reserve explanatory prose for unavailable data and upstream failures.
-- Stack the filters in a narrow left rail beside the table on wide screens and
-  above it on narrow screens.
+- Keep the filters in the shared horizontal toggle pattern directly above the
+  full-width table.
 - Default the comparison table to All, with Changes and Conflicts views. Search
   appears only at 50 rows or more and covers paths, types, scopes, and slots.
 - The table has exactly `Location / From / To`. Location is formatted from both

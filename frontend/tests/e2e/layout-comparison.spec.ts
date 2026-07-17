@@ -428,7 +428,7 @@ test('the comparison table keeps Location as the anchor and exposes all objectiv
   const tableBox = await table.boundingBox();
   expect(filterBox).not.toBeNull();
   expect(tableBox).not.toBeNull();
-  expect(filterBox!.x).toBeLessThan(tableBox!.x);
+  expect(filterBox!.y + filterBox!.height).toBeLessThanOrEqual(tableBox!.y);
   await expect(table.getByRole('button', { name: 'Expand details for slots 4–5 → slots 4–8' })).toBeVisible();
   await expect(table.getByRole('button', { name: 'Expand details for root slot 3' })).toBeVisible();
   await expect(table.getByRole('button', { name: 'Expand details for slot 9 · bytes 0–19 → slot 12 · bytes 0–19' })).toBeVisible();

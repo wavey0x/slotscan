@@ -238,13 +238,12 @@ export function ComparisonTable({
 
   return (
     <section className="mt-4" aria-label="Layout comparison rows">
-      <div className="grid gap-3 lg:grid-cols-[9rem_minmax(0,1fr)] lg:items-start">
-        <div className="min-w-0 space-y-2" aria-live="polite">
+      <div className="mb-2 flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <div aria-live="polite">
           <ViewSwitch
             label="Rows"
             showLabel={false}
             value={filter}
-            orientation="vertical"
             options={[
               { value: 'all', label: `All ${allCount}` },
               { value: 'changes', label: `Changes ${changedCount}` },
@@ -252,24 +251,25 @@ export function ComparisonTable({
             ]}
             onChange={setFilter}
           />
-          {entries.length >= 50 && (
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search"
-              aria-label="Search comparison rows"
-              className="h-7 min-w-0 px-2 py-0 text-xs"
-            />
-          )}
         </div>
-        {visible.length === 0 ? (
-          <div className="border border-gray-300 p-6 text-center text-xs text-gray-500">
-            {entries.length === 0
-              ? 'Both exact layouts declare no persistent storage.'
-              : 'No matching rows.'}
-          </div>
-        ) : (
-          <DataTable minWidth="48rem">
+        {entries.length >= 50 && (
+          <Input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search"
+            aria-label="Search comparison rows"
+            className="h-7 min-w-0 basis-48 px-2 py-0 text-xs"
+          />
+        )}
+      </div>
+      {visible.length === 0 ? (
+        <div className="border border-gray-300 p-6 text-center text-xs text-gray-500">
+          {entries.length === 0
+            ? 'Both exact layouts declare no persistent storage.'
+            : 'No matching rows.'}
+        </div>
+      ) : (
+        <DataTable minWidth="52rem">
             <thead>
               <tr>
                 <th className={cn(dataTableHeadCellClass, 'w-[34%]')}>Location</th>
@@ -361,9 +361,8 @@ export function ComparisonTable({
                 }),
               ])}
             </tbody>
-          </DataTable>
-        )}
-      </div>
+        </DataTable>
+      )}
     </section>
   );
 }
