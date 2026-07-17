@@ -156,7 +156,7 @@ export const LayoutRow = memo(function LayoutRow({
               })}
             </div>
           ) : status === 'on_demand' ? (
-            <span className="text-[10px] text-gray-400">expand to query</span>
+            !expanded && <span className="text-[10px] text-gray-400">expand to query</span>
           ) : status === 'deferred_budget' ? (
             <span className="text-[10px] text-gray-400">deferred by read limit</span>
           ) : (

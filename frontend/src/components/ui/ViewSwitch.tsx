@@ -31,7 +31,7 @@ export function ViewSwitch<T extends string>({
             className={cn(
               'px-2.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-40',
               value === option.value
-                ? 'bg-gray-900 text-white'
+                ? 'bg-gray-700 text-white'
                 : 'text-gray-500 hover:text-gray-900',
             )}
           >
