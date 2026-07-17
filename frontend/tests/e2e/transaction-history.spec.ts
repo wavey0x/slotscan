@@ -567,6 +567,74 @@ test('packed change detection uses full values rather than compact display text'
   await expect(page.getByText('anchor', { exact: true })).toBeVisible();
 });
 
+test('collapsed no-op packed slots retain their packed marker in hex mode', async ({ page }) => {
+  const base = configScalarSlot({
+    slot: 0,
+    variable: 'doHealthCheck',
+    typeLabel: 'bool',
+    beforeValue: false,
+    afterValue: false,
+    beforeEncoded: `0x${'00'.repeat(32)}`,
+    afterEncoded: `0x${'00'.repeat(32)}`,
+    step: 4458,
+  });
+  const zeroAddress = `0x${'00'.repeat(20)}`;
+  const slot = {
+    ...base,
+    packed_fields: [
+      {
+        name: 'doHealthCheck',
+        type_label: 'bool',
+        offset: 0,
+        size: 1,
+        before: { value_decoded: false },
+        after: { value_decoded: false },
+      },
+      {
+        name: 'emergencyAdmin',
+        type_label: 'address',
+        offset: 1,
+        size: 20,
+        before: { value_decoded: zeroAddress },
+        after: { value_decoded: zeroAddress },
+      },
+    ],
+  };
+  const contract = resolutionContract({
+    storage_address: '0x6666666666666666666666666666666666666666',
+    code_addresses: ['0x6666666666666666666666666666666666666666'],
+    name: 'TokenizedStrategy',
+    is_verified: true,
+    layout_available: true,
+    counts: {
+      slots_written: 1,
+      sstore_events: 1,
+      net_changed_slots: 0,
+      restored_slots: 0,
+      reverted_only_slots: 0,
+      noop_only_slots: 1,
+      reverted_writes: 0,
+      noop_writes: 1,
+    },
+    slots: [slot],
+  });
+  await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
+    await route.fulfill({ json: resolutionResponse([contract]) });
+  });
+
+  await page.goto(`/1/tx/${RESOLUTION_TX}?view=grouped&values=hex`);
+  const contractSection = page.getByRole('heading', { name: 'TokenizedStrategy' }).locator('xpath=ancestor::section');
+  await contractSection.getByTestId('contract-toggle').click();
+
+  const collapsedRow = contractSection.getByText('doHealthCheck', { exact: true }).locator('xpath=ancestor::tr');
+  await expect(collapsedRow.getByTestId('packed-slot-marker')).toHaveText('packed');
+
+  await page.getByRole('button', { name: 'Decoded' }).click();
+  await expect(contractSection.getByTestId('packed-slot-marker')).toHaveCount(0);
+  await expect(contractSection.getByText('doHealthCheck', { exact: true })).toBeVisible();
+  await expect(contractSection.getByText('emergencyAdmin', { exact: true })).toBeVisible();
+});
+
 test('timeline keeps packed paths compact and exposes contract identity across viewports', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);

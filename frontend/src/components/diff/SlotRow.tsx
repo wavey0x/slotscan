@@ -222,8 +222,8 @@ export function SlotRow({
                       {variableLabel && (
                         <span className="text-gray-400 ml-1">({variableLabel})</span>
                       )}
-                      {/* A lone changed field still shares its slot; the hover lists its siblings. */}
-                      {singlePackedField && (slot.packed_fields?.length ?? 0) > 1 && (
+                      {/* A collapsed multi-field slot still needs to disclose that it is packed. */}
+                      {(slot.packed_fields?.length ?? 0) > 1 && (
                         <span data-testid="packed-slot-marker" className="ml-1.5 select-none text-[9px] uppercase tracking-wide text-gray-400">packed</span>
                       )}
                     </span>
