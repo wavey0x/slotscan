@@ -193,6 +193,13 @@ function regionMetadata(region: ComparisonRegion | null): string {
   return `offset ${region.location.byte_offset} · ${region.location.byte_size} bytes`;
 }
 
+function rowTint(entry: ComparisonEntry): string | null {
+  if (entry.kind === 'unchanged') return null;
+  return entry.impact === 'conflict'
+    ? 'bg-red/[0.04]'
+    : 'bg-amber-500/[0.04]';
+}
+
 export function ComparisonTable({
   entries,
   summary,
@@ -285,11 +292,13 @@ export function ComparisonTable({
                   const expanded = open.has(entry.id);
                   const canExpand = entry.kind !== 'unchanged';
                   const location = locationDisplay(entry);
+                  const tint = rowTint(entry);
                   return [
                     <tr
                       key={entry.id}
                       className={cn(
                         'border-b border-gray-200',
+                        tint,
                         entry.impact === 'conflict' && 'shadow-[inset_2px_0_0_rgb(var(--color-red))]',
                       )}
                     >
@@ -317,6 +326,9 @@ export function ComparisonTable({
                             {entry.impact === 'ambiguous' && (
                               <span className="sr-only">Indeterminate change. </span>
                             )}
+                            {entry.impact === 'none' && canExpand && (
+                              <span className="sr-only">Storage layout change. </span>
+                            )}
                             <div className="break-words font-mono text-xs text-gray-900">
                               {location.primary}
                             </div>
@@ -335,7 +347,7 @@ export function ComparisonTable({
                       <tr
                         key={`${entry.id}:details`}
                         data-testid="comparison-details"
-                        className="border-b border-gray-300 bg-gray-50"
+                        className={cn('border-b border-gray-300', tint)}
                       >
                         <td className="px-2 py-2" />
                         <td className="px-2 py-2 font-mono text-[10px] text-gray-500">

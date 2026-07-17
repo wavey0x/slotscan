@@ -53,8 +53,10 @@ Do not add legacy redirects or a second contract-scoped transaction UI.
   do not repeat the scope, slot, or backend narrative. Unchanged rows do not
   show disclosure controls.
 - Mark conflicts with text for assistive technology and a restrained visual
-  indicator; never rely on color. Stack inputs and subjects on narrow screens
-  and preserve dark theme and reduced-motion behavior.
+  indicator; never rely on color. Use only a very faint amber row tint for
+  changes and red row tint for conflicts, carrying the tint into expanded
+  metadata. Stack inputs and subjects on narrow screens and preserve dark theme
+  and reduced-motion behavior.
 - Distinguish no code, unverified source, unsupported/non-exact/invalid
   layouts, bounded analysis, and upstream failures. Keep a successfully
   resolved side visible when the other side is unavailable.

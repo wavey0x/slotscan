@@ -440,8 +440,19 @@ test('the comparison table keeps Location as the anchor and exposes all objectiv
   await expect(table.getByText('owner', { exact: true }).first()).toBeVisible();
   await expect(table.getByText('Result', { exact: true })).toHaveCount(0);
   await expect(table.getByText('Change', { exact: true })).toHaveCount(0);
+  await expect(
+    table.getByRole('row').filter({
+      has: page.getByRole('button', { name: 'Expand details for slots 4–5 → slots 4–8' }),
+    }),
+  ).toHaveClass(/bg-red/);
+  await expect(
+    table.getByRole('row').filter({
+      has: page.getByRole('button', { name: 'Expand details for — → slot 13 · bytes 0–0' }),
+    }),
+  ).toHaveClass(/bg-amber/);
 
   await page.getByRole('button', { name: 'Expand details for slots 4–5 → slots 4–8' }).click();
+  await expect(page.getByTestId('comparison-details')).toHaveClass(/bg-red/);
   await expect(page.getByTestId('comparison-details').getByRole('cell')).toHaveText([
     '',
     'offset 0 · 64 bytes',
