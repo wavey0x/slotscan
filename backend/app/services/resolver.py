@@ -148,8 +148,15 @@ class ContractResolver:
                 delegation_status="nested",
             )
 
-        # A cached address binding is usable only while its raw code identity
-        # still matches the selected chain state.
+        # Address caches may reuse a proven layout, but they do not establish
+        # whether the current chain state is a proxy or which implementation it
+        # targets.
+        proxy_info = (
+            await self.detect_proxy(chain_id, address, block_number, bytecode)
+            if follow_proxy
+            else None
+        )
+
         if (
             self.use_binding_cache
             and self.contract_repo
@@ -161,35 +168,33 @@ class ContractResolver:
             if (
                 historical
                 and self._cache_matches_code_hash(historical, code_hash)
-                and (follow_proxy or not historical.is_proxy)
+                and self._cache_matches_proxy(
+                    historical,
+                    proxy_info,
+                    follow_proxy=follow_proxy,
+                )
             ):
                 metadata = self.contract_repo.to_metadata(historical)
                 layout = metadata.storage_layout
                 if isinstance(layout, StorageLayout) and layout.variables:
                     return metadata
 
-        # The address cache is not block-versioned. It is safe only for latest;
-        # proxy bindings remain mutable even while proxy bytecode is unchanged,
-        # so only direct-contract rows can return before proxy detection.
         if self.use_binding_cache and self.contract_repo and block_number is None:
             cached = await self.contract_repo.get(chain_id, address)
             if (
                 cached
                 and self._cache_matches_code_hash(cached, code_hash)
-                and not cached.is_proxy
+                and self._cache_matches_proxy(
+                    cached,
+                    proxy_info,
+                    follow_proxy=follow_proxy,
+                )
             ):
                 logger.debug(f"Cache hit for {address} on chain {chain_id}")
                 metadata = self.contract_repo.to_metadata(cached)
                 layout = metadata.storage_layout
                 if isinstance(layout, StorageLayout) and layout.variables:
                     return metadata
-
-        # Detect proxy (pass bytecode for EIP-1167 detection)
-        proxy_info = (
-            await self.detect_proxy(chain_id, address, block_number, bytecode)
-            if follow_proxy
-            else None
-        )
 
         # Source data is keyed by the runtime code that is actually verified,
         # not by the address whose storage is being interpreted.
@@ -811,6 +816,28 @@ class ContractResolver:
         cached_hash = getattr(row, "code_hash", None)
         return bool(cached_hash) and cached_hash.lower() == code_hash.lower()
 
+    @staticmethod
+    def _cache_matches_proxy(
+        row,
+        proxy_info: ProxyInfo | None,
+        *,
+        follow_proxy: bool,
+    ) -> bool:
+        """Require cached layout identity to match fresh proxy evidence."""
+        cached_is_proxy = bool(getattr(row, "is_proxy", False))
+        if not follow_proxy:
+            return not cached_is_proxy
+        if proxy_info is None:
+            return not cached_is_proxy
+        cached_implementation = getattr(row, "implementation_address", None)
+        return (
+            cached_is_proxy
+            and getattr(row, "proxy_type", None) == proxy_info.proxy_type
+            and bool(cached_implementation)
+            and cached_implementation.lower()
+            == proxy_info.implementation_address.lower()
+        )
+
     async def _save_binding(
         self,
         metadata: ContractMetadata,
@@ -895,35 +922,66 @@ class ContractResolver:
         if not bytecode or not self._contains_opcode(bytecode, 0xF4):
             return None
 
-        try:
-            impl_value, uups_value, zos_value, beacon_value = await asyncio.gather(
-                self.web3_provider.get_storage_at(
-                    chain_id,
-                    proxy_address,
-                    EIP1967_IMPL_SLOT,
-                    block_id,
-                ),
-                self.web3_provider.get_storage_at(
-                    chain_id,
-                    proxy_address,
-                    EIP1822_SLOT,
-                    block_id,
-                ),
-                self.web3_provider.get_storage_at(
-                    chain_id,
-                    proxy_address,
-                    ZEPPELINOS_IMPL_SLOT,
-                    block_id,
-                ),
-                self.web3_provider.get_storage_at(
-                    chain_id,
-                    proxy_address,
-                    EIP1967_BEACON_SLOT,
-                    block_id,
-                ),
+        safe_candidate = self._contains_selector(
+            bytecode,
+            GNOSIS_SAFE_MASTER_COPY_SELECTOR,
+        )
+        evidence_reads = [
+            self.web3_provider.get_storage_at(
+                chain_id,
+                proxy_address,
+                EIP1967_IMPL_SLOT,
+                block_id,
+            ),
+            self.web3_provider.get_storage_at(
+                chain_id,
+                proxy_address,
+                EIP1822_SLOT,
+                block_id,
+            ),
+            self.web3_provider.get_storage_at(
+                chain_id,
+                proxy_address,
+                ZEPPELINOS_IMPL_SLOT,
+                block_id,
+            ),
+            self.web3_provider.get_storage_at(
+                chain_id,
+                proxy_address,
+                EIP1967_BEACON_SLOT,
+                block_id,
+            ),
+        ]
+        if safe_candidate:
+            evidence_reads.extend(
+                (
+                    self.web3_provider.get_storage_at(
+                        chain_id,
+                        proxy_address,
+                        0,
+                        block_id,
+                    ),
+                    self._call_address_getter(
+                        chain_id,
+                        proxy_address,
+                        GNOSIS_SAFE_MASTER_COPY_SELECTOR,
+                        block_id,
+                    ),
+                )
             )
+        try:
+            slot_values = await asyncio.gather(*evidence_reads)
+            impl_value, uups_value, zos_value, beacon_value = slot_values[:4]
         except Exception as exc:
             raise RPCError("eth_getStorageAt", str(exc)) from exc
+
+        safe_slot_implementation = None
+        safe_getter_implementation = None
+        if safe_candidate:
+            safe_slot_implementation = self._extract_address(
+                bytes(slot_values[4])
+            )
+            safe_getter_implementation = slot_values[5]
 
         for proxy_type, slot_value in (
             ("eip1967", impl_value),
@@ -971,34 +1029,33 @@ class ContractResolver:
                     admin_address=None,
                 )
 
-        # Safe exposes its singleton through a proxy-owned masterCopy() branch.
-        # Requiring both the dispatcher constant and executable DELEGATECALL
-        # avoids probing arbitrary contracts that merely inherit that method.
-        if self._contains_push4(bytecode, GNOSIS_SAFE_MASTER_COPY_SELECTOR):
-            implementation = await self._call_address_getter(
+        # Safe's proxy-owned masterCopy() branch returns the singleton in slot
+        # zero. The selector literal is only a cheap prefilter; matching the
+        # getter and slot at the same block is the proxy proof.
+        if (
+            safe_slot_implementation
+            and safe_getter_implementation
+            and safe_slot_implementation.lower()
+            == safe_getter_implementation.lower()
+            and await self._is_valid_proxy_target(
                 chain_id,
                 proxy_address,
-                GNOSIS_SAFE_MASTER_COPY_SELECTOR,
-                block_id,
-            )
-            if implementation and await self._is_valid_proxy_target(
-                chain_id,
-                proxy_address,
-                implementation,
+                safe_slot_implementation,
                 block,
-            ):
-                return ProxyInfo(
-                    proxy_type="gnosis_safe",
-                    implementation_address=implementation,
-                    admin_address=None,
-                )
+            )
+        ):
+            return ProxyInfo(
+                proxy_type="gnosis_safe",
+                implementation_address=safe_slot_implementation,
+                admin_address=None,
+            )
 
         # Aragon AppProxy and other ERC-897 proxies advertise both methods.
         # The proxyType() check distinguishes the standard from unrelated
         # contracts that happen to expose an implementation() getter.
         if (
-            self._contains_push4(bytecode, BEACON_IMPL_SELECTOR)
-            and self._contains_push4(bytecode, ERC897_PROXY_TYPE_SELECTOR)
+            self._contains_selector(bytecode, BEACON_IMPL_SELECTOR)
+            and self._contains_selector(bytecode, ERC897_PROXY_TYPE_SELECTOR)
         ):
             implementation, proxy_type_value = await asyncio.gather(
                 self._call_address_getter(
@@ -1060,17 +1117,10 @@ class ContractResolver:
         return False
 
     @staticmethod
-    def _contains_push4(bytecode: bytes, selector: str) -> bool:
-        """Find a selector used as a PUSH4 dispatcher constant."""
+    def _contains_selector(bytecode: bytes, selector: str) -> bool:
+        """Use a selector literal as a non-evidentiary probing prefilter."""
         target = bytes.fromhex(selector.removeprefix("0x"))
-        offset = 0
-        while offset < len(bytecode):
-            opcode = bytecode[offset]
-            push_size = opcode - 0x5F if 0x60 <= opcode <= 0x7F else 0
-            if push_size == 4 and bytecode[offset + 1:offset + 5] == target:
-                return True
-            offset += 1 + push_size
-        return False
+        return target in bytecode
 
     async def _call_address_getter(
         self,

@@ -785,12 +785,20 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
                     implementation,
                 )
 
-    async def test_safe_master_copy_dispatch_resolves_deployed_singleton(self):
+    async def test_safe_push4_dispatch_resolves_matching_slot_zero_singleton(self):
         implementation = Web3.to_checksum_address("0x" + "22" * 20)
         test = self
 
         class Provider:
-            async def get_storage_at(self, *args):
+            async def get_storage_at(
+                self,
+                chain_id,
+                address,
+                slot,
+                block,
+            ):
+                if slot == 0:
+                    return bytes(12) + bytes.fromhex(implementation[2:])
                 return bytes(32)
 
             async def eth_call(self, chain_id, transaction, block):
@@ -816,6 +824,125 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(detected.proxy_type, "gnosis_safe")
         self.assertEqual(detected.implementation_address, implementation)
+
+    async def test_deployed_safe_push32_dispatch_resolves_singleton(self):
+        implementation = Web3.to_checksum_address(
+            "0xfb1bffC9d739B8D520DaF37dF666da4C687191EA"
+        )
+        runtime = bytes.fromhex(
+            "608060405273ffffffffffffffffffffffffffffffffffffffff600054167f"
+            "a619486e00000000000000000000000000000000000000000000000000000000"
+            "60003514156050578060005260206000f35b3660008037600080366000845af4"
+            "3d6000803e60008114156070573d6000fd5b3d6000f3fea26469706673582212"
+            "20d1429297349653a4918076d650332de1a1068c5f3e07c5c82360c277770b9"
+            "55264736f6c63430007060033"
+        )
+        test = self
+
+        class Provider:
+            async def get_storage_at(
+                self,
+                chain_id,
+                address,
+                slot,
+                block,
+            ):
+                if slot == 0:
+                    return bytes(12) + bytes.fromhex(implementation[2:])
+                return bytes(32)
+
+            async def eth_call(self, chain_id, transaction, block):
+                test.assertEqual(
+                    transaction,
+                    {
+                        "to": ADDRESS,
+                        "data": GNOSIS_SAFE_MASTER_COPY_SELECTOR,
+                    },
+                )
+                return bytes(12) + bytes.fromhex(implementation[2:])
+
+            async def get_code(self, chain_id, address, block):
+                return b"\x60\x00" if address == implementation else b""
+
+        self.assertEqual(len(runtime), 171)
+        detected = await _make_resolver(Provider()).detect_proxy(
+            1,
+            ADDRESS,
+            block=25_559_529,
+            bytecode=runtime,
+        )
+
+        self.assertEqual(detected.proxy_type, "gnosis_safe")
+        self.assertEqual(detected.implementation_address, implementation)
+
+    async def test_safe_requires_slot_zero_and_getter_to_agree(self):
+        slot_implementation = Web3.to_checksum_address("0x" + "22" * 20)
+        getter_implementation = Web3.to_checksum_address("0x" + "33" * 20)
+
+        class Provider:
+            async def get_storage_at(
+                self,
+                chain_id,
+                address,
+                slot,
+                block,
+            ):
+                if slot == 0:
+                    return bytes(12) + bytes.fromhex(slot_implementation[2:])
+                return bytes(32)
+
+            async def eth_call(self, chain_id, transaction, block):
+                return bytes(12) + bytes.fromhex(getter_implementation[2:])
+
+            async def get_code(self, *args):
+                raise AssertionError("mismatched Safe evidence must not be followed")
+
+        detected = await _make_resolver(Provider()).detect_proxy(
+            1,
+            ADDRESS,
+            block=123,
+            bytecode=(
+                b"\x63"
+                + bytes.fromhex(GNOSIS_SAFE_MASTER_COPY_SELECTOR[2:])
+                + b"\x50\xf4"
+            ),
+        )
+
+        self.assertIsNone(detected)
+
+    async def test_safe_requires_deployed_singleton(self):
+        implementation = Web3.to_checksum_address("0x" + "22" * 20)
+
+        class Provider:
+            async def get_storage_at(
+                self,
+                chain_id,
+                address,
+                slot,
+                block,
+            ):
+                if slot == 0:
+                    return bytes(12) + bytes.fromhex(implementation[2:])
+                return bytes(32)
+
+            async def eth_call(self, chain_id, transaction, block):
+                return bytes(12) + bytes.fromhex(implementation[2:])
+
+            async def get_code(self, chain_id, address, block):
+                return b""
+
+        detected = await _make_resolver(Provider()).detect_proxy(
+            1,
+            ADDRESS,
+            block=123,
+            bytecode=(
+                b"\x63"
+                + bytes.fromhex(GNOSIS_SAFE_MASTER_COPY_SELECTOR[2:])
+                + b"\x50\xf4"
+            ),
+        )
+
+        self.assertIsNone(detected)
 
     async def test_erc897_requires_proxy_type_and_implementation_getters(self):
         implementation = Web3.to_checksum_address("0x" + "22" * 20)

@@ -6,12 +6,13 @@ from unittest.mock import AsyncMock, call, patch
 from web3 import Web3
 
 from app.config import Settings
-from app.models.domain import VerificationResult
 from app.models.domain import (
+    ContractMetadata,
     RawCompilerArtifact,
     StorageLayout,
     StorageType,
     StorageVariable,
+    VerificationResult,
 )
 from app.services.decoder import TypeDecoder
 from app.services.layout import LayoutParser
@@ -20,6 +21,7 @@ from app.services.resolver import (
     EIP1167_SUFFIX,
     EIP1967_BEACON_SLOT,
     EIP1967_IMPL_SLOT,
+    GNOSIS_SAFE_MASTER_COPY_SELECTOR,
     ContractResolver,
 )
 from app.services.storage_view import StorageViewService
@@ -165,6 +167,31 @@ class _MemoryBindings(_NoBindings):
             and not row.is_proxy
             and row.storage_layout
         ][:limit]
+
+
+class _CachedBindings(_NoBindings):
+    def __init__(self, row, metadata):
+        self.row = row
+        self.metadata = metadata
+        self.saved = []
+
+    async def get(self, chain_id, address):
+        return self.row
+
+    async def get_at_block(self, chain_id, address, block_number):
+        return self.row
+
+    def to_metadata(self, row):
+        return self.metadata
+
+    async def save(self, metadata):
+        self.saved.append(metadata)
+        return self.row
+
+    async def save_at_block(self, metadata, block_number):
+        self.saved.append(metadata)
+        return self.row
+
 
 class _Provider:
     def __init__(
@@ -585,6 +612,180 @@ class ResolverSourceIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.is_verified)
         service._fetch_verification.assert_awaited_once_with(1, PROXY_A.lower())
         self.assertEqual(provider.storage_calls, [])
+
+    async def test_fresh_safe_evidence_replaces_stale_direct_binding(self):
+        runtime = bytes.fromhex(
+            "608060405273ffffffffffffffffffffffffffffffffffffffff600054167f"
+            "a619486e00000000000000000000000000000000000000000000000000000000"
+            "60003514156050578060005260206000f35b3660008037600080366000845af4"
+            "3d6000803e60008114156070573d6000fd5b3d6000f3fea26469706673582212"
+            "20d1429297349653a4918076d650332de1a1068c5f3e07c5c82360c277770b9"
+            "55264736f6c63430007060033"
+        )
+        code_hash = Web3.keccak(runtime).hex()
+        stale_layout = StorageLayout(
+            "StaleProxy",
+            [
+                StorageVariable(
+                    "singleton",
+                    0,
+                    0,
+                    32,
+                    "t_address",
+                    "address",
+                )
+            ],
+            {
+                "t_address": StorageType(
+                    "t_address",
+                    "address",
+                    "value",
+                    "inplace",
+                    20,
+                )
+            },
+        )
+        row = SimpleNamespace(
+            code_hash=code_hash,
+            is_proxy=False,
+            proxy_type=None,
+            implementation_address=None,
+        )
+        stale = ContractMetadata(
+            chain_id=1,
+            address=PROXY_A,
+            code_hash=code_hash,
+            storage_layout=stale_layout,
+        )
+        bindings = _CachedBindings(row, stale)
+        test = self
+
+        class Provider:
+            async def get_code(self, chain_id, address, block):
+                if address == PROXY_A:
+                    return runtime
+                if address == IMPLEMENTATION_A:
+                    return b"\x60\x00"
+                return b""
+
+            async def get_storage_at(
+                self,
+                chain_id,
+                address,
+                slot,
+                block,
+            ):
+                if slot == 0:
+                    return _address_word(IMPLEMENTATION_A)
+                return bytes(32)
+
+            async def eth_call(self, chain_id, transaction, block):
+                test.assertEqual(
+                    transaction["data"],
+                    GNOSIS_SAFE_MASTER_COPY_SELECTOR,
+                )
+                return _address_word(IMPLEMENTATION_A)
+
+        service = VerificationService(Settings(), http_client=object())
+        service._fetch_verification = AsyncMock(
+            return_value=_verification_with_layout(
+                "SafeImplementation",
+                "uint256",
+            )
+        )
+        resolver = _resolver(
+            Provider(),
+            service,
+            _MemorySourceCache(),
+            bindings=bindings,
+        )
+
+        result = await resolver.resolve(1, PROXY_A)
+
+        self.assertTrue(result.is_proxy)
+        self.assertEqual(result.proxy_type, "gnosis_safe")
+        self.assertEqual(result.implementation_address, IMPLEMENTATION_A)
+        self.assertEqual(result.name, "SafeImplementation")
+        service._fetch_verification.assert_awaited_once_with(
+            1,
+            IMPLEMENTATION_A.lower(),
+        )
+        self.assertTrue(bindings.saved[-1].is_proxy)
+
+    async def test_changed_proxy_target_replaces_historical_binding(self):
+        runtime = b"\x60\x00\xf4"
+        code_hash = Web3.keccak(runtime).hex()
+        stale_layout = StorageLayout(
+            "OldImplementation",
+            [
+                StorageVariable(
+                    "value",
+                    0,
+                    0,
+                    32,
+                    "t_uint256",
+                    "uint256",
+                )
+            ],
+            {
+                "t_uint256": StorageType(
+                    "t_uint256",
+                    "uint256",
+                    "value",
+                    "inplace",
+                    32,
+                )
+            },
+        )
+        row = SimpleNamespace(
+            code_hash=code_hash,
+            is_proxy=True,
+            proxy_type="eip1967",
+            implementation_address=IMPLEMENTATION_A.lower(),
+        )
+        stale = ContractMetadata(
+            chain_id=1,
+            address=PROXY_A,
+            code_hash=code_hash,
+            is_proxy=True,
+            proxy_type="eip1967",
+            implementation_address=IMPLEMENTATION_A,
+            name="OldImplementation",
+            storage_layout=stale_layout,
+        )
+        bindings = _CachedBindings(row, stale)
+        provider = _Provider(
+            codes={
+                PROXY_A.lower(): runtime,
+                IMPLEMENTATION_B.lower(): b"\x60\xbb",
+            },
+            implementations={PROXY_A.lower(): IMPLEMENTATION_B},
+        )
+        service = VerificationService(Settings(), http_client=object())
+        service._fetch_verification = AsyncMock(
+            return_value=_verification_with_layout(
+                "NewImplementation",
+                "address",
+            )
+        )
+        resolver = _resolver(
+            provider,
+            service,
+            _MemorySourceCache(),
+            bindings=bindings,
+        )
+
+        result = await resolver.resolve(1, PROXY_A, block_number=123)
+
+        self.assertTrue(result.is_proxy)
+        self.assertEqual(result.proxy_type, "eip1967")
+        self.assertEqual(result.implementation_address, IMPLEMENTATION_B)
+        self.assertEqual(result.name, "NewImplementation")
+        service._fetch_verification.assert_awaited_once_with(
+            1,
+            IMPLEMENTATION_B.lower(),
+        )
+        self.assertEqual(bindings.saved[-1].implementation_address, IMPLEMENTATION_B)
 
     async def test_authorities_share_delegate_and_changes_select_new_identity(self):
         provider = _Provider(
