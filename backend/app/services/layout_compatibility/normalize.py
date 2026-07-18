@@ -232,11 +232,8 @@ class LayoutNormalizer:
                 for region in regions
             ):
                 raise LayoutNormalizationUnavailable("invalid_layout")
-            for index, region in enumerate(regions):
-                if any(
-                    self._regions_overlap(region, other)
-                    for other in regions[index + 1:]
-                ):
+            for previous, current in zip(regions, regions[1:]):
+                if self._regions_overlap(previous, current):
                     raise LayoutNormalizationUnavailable("invalid_layout")
             scopes.append(
                 NormalizedScope(

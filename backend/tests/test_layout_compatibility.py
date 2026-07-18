@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 from fastapi import HTTPException
 from web3 import Web3
@@ -745,6 +745,24 @@ class ComparatorTests(unittest.TestCase):
 
         self.assertEqual(result.verdict, ComparisonVerdict.UNAVAILABLE)
         self.assertEqual(result.limitations, ("invalid_layout",))
+
+    def test_overlap_validation_is_linear_at_the_layout_limit(self):
+        source = compile_layout(
+            layout(
+                [
+                    variable(f"value_{slot}", slot)
+                    for slot in range(4096)
+                ]
+            )
+        )
+        normalizer = LayoutNormalizer()
+        overlap = normalizer._regions_overlap
+        normalizer._regions_overlap = Mock(wraps=overlap)
+
+        normalized = normalizer.normalize(source)
+
+        self.assertEqual(len(normalized.scopes[0].regions), 4096)
+        self.assertEqual(normalizer._regions_overlap.call_count, 4095)
 
 
 class ExactNamespaceTests(unittest.TestCase):
