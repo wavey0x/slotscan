@@ -714,6 +714,38 @@ class PrestateRecoveryTests(TestCase):
 
 
 class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
+    async def test_owner_limit_runs_before_metadata_resolution(self):
+        one_owner = replace(
+            artifact(),
+            write_events=[
+                event
+                for event in artifact().write_events
+                if event["address"] == ADDRESS_A
+            ],
+        )
+        tracer = TransactionAnalysisService(
+            _NoopProvider(),
+            Settings(
+                MAX_SSTORE_OPS=100,
+                MAX_STORAGE_OWNERS_PER_TRANSACTION=1,
+            ),
+            TypeDecoder(),
+            trace_cache_repo=_CachedArtifactRepository(one_owner),
+        )
+        service = _HistoryService(
+            tracer=tracer,
+            web3_provider=_NoopProvider(),
+            settings=tracer.settings,
+            layout_parser=None,
+            verification_service=object(),
+        )
+        service.resolution_calls = []
+
+        with self.assertRaises(TraceNotAvailableError):
+            await service.analyze(1, one_owner.tx_hash)
+
+        self.assertEqual(service.resolution_calls, [])
+
     async def test_concurrent_cold_trace_requests_share_one_extraction(self):
         repository = _SharedArtifactRepository()
         single_flight = TraceSingleFlight()

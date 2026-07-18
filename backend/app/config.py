@@ -55,6 +55,10 @@ class Settings(BaseSettings):
         default=8,
         alias="MAX_PARALLEL_CONTRACT_RESOLUTIONS",
     )
+    max_storage_owners_per_transaction: int = Field(
+        default=128,
+        alias="MAX_STORAGE_OWNERS_PER_TRANSACTION",
+    )
     contract_resolution_timeout_seconds: int = Field(
         default=20,
         alias="CONTRACT_RESOLUTION_TIMEOUT_SECONDS",

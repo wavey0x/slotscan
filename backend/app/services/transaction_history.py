@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from app.config import Settings
 from app.db import async_session_factory
 from app.models.domain import ContractMetadata, StorageLayout, TransactionDiff
-from app.models.errors import NotAContractError
+from app.models.errors import NotAContractError, TraceNotAvailableError
 from app.repositories.compiler_artifacts import CompilerArtifactRepository
 from app.repositories.contracts import ContractRepository
 from app.repositories.source_cache import SourceCacheRepository
@@ -77,19 +77,33 @@ class TransactionHistoryService:
     ) -> TransactionHistoryAnalysis:
         artifact = await self.tracer.load_trace_artifact(chain_id, tx_hash)
         journal = self.tracer.build_journal(artifact)
-        owners = storage_addresses or self.tracer.persistent_storage_owners(
+        discovered_owners = storage_addresses or self.tracer.persistent_storage_owners(
             artifact,
             journal,
         )
+        owners = tuple(dict.fromkeys(owner.lower() for owner in discovered_owners))
         code_addresses_by_owner: dict[str, tuple[str, ...]] = {}
         if artifact.capabilities.get("code_attribution_complete", False):
             for event in journal.events:
                 if event.namespace.value != "persistent" or not event.code_address:
                     continue
-                current = list(code_addresses_by_owner.get(event.address, ()))
-                if event.code_address not in current:
-                    current.append(event.code_address)
-                    code_addresses_by_owner[event.address] = tuple(current)
+                owner = event.address.lower()
+                code_address = event.code_address.lower()
+                current = list(code_addresses_by_owner.get(owner, ()))
+                if code_address not in current:
+                    current.append(code_address)
+                    code_addresses_by_owner[owner] = tuple(current)
+
+        direct_targets = {
+            code_address
+            for owner in owners
+            for code_address in code_addresses_by_owner.get(owner, ())
+        }
+        resolution_count = len(owners) + len(direct_targets)
+        if resolution_count > self.settings.max_storage_owners_per_transaction:
+            raise TraceNotAvailableError(
+                "Transaction exceeds the configured storage owner limit"
+            )
 
         semaphore = asyncio.Semaphore(
             max(1, self.settings.max_parallel_contract_resolutions)
@@ -170,7 +184,7 @@ class TransactionHistoryService:
         owner_resolutions = dict(zip(owners, owner_results))
 
         direct_resolutions: dict[str, MetadataResolution] = {}
-        direct_targets: list[str] = []
+        pending_direct_targets: list[str] = []
         for owner in owners:
             owner_result = owner_resolutions[owner]
             for target in code_addresses_by_owner.get(owner.lower(), ()):
@@ -184,19 +198,19 @@ class TransactionHistoryService:
                     )
                 ):
                     direct_resolutions[target] = owner_result
-                elif target not in direct_targets:
-                    direct_targets.append(target)
+                elif target not in pending_direct_targets:
+                    pending_direct_targets.append(target)
 
-        if direct_targets:
+        if pending_direct_targets:
             direct_results = await asyncio.gather(*(
                 resolve_target(
                     target,
                     follow_proxy=False,
                     follow_delegation=False,
                 )
-                for target in direct_targets
+                for target in pending_direct_targets
             ))
-            direct_resolutions.update(zip(direct_targets, direct_results))
+            direct_resolutions.update(zip(pending_direct_targets, direct_results))
 
         async def project(address: str) -> ContractHistoryProjection:
             owner_resolution = owner_resolutions[address]
