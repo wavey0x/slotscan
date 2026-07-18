@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/Button';
 import {
   StorageQueryLookup,
   StorageViewResponse,
+  StorageViewType,
 } from '@/lib/types';
 import { queryStorage } from '@/lib/api';
 import { LookupResultsTable } from './LookupResultsTable';
@@ -17,6 +18,7 @@ interface ArrayIndexInputProps {
   address: string;
   blockRef: StorageViewResponse['block_ref'];
   layoutId: string;
+  resultType?: StorageViewType;
   lookups: StorageQueryLookup[];
   onLookup: (lookup: StorageQueryLookup) => void;
 }
@@ -28,6 +30,7 @@ export function ArrayIndexInput({
   address,
   blockRef,
   layoutId,
+  resultType,
   lookups,
   onLookup,
 }: ArrayIndexInputProps) {
@@ -80,6 +83,7 @@ export function ArrayIndexInput({
             setIndexInput(event.target.value);
             setError(null);
           }}
+          aria-label="Array index"
           placeholder={arrayLength ? `Enter index (length ${arrayLength})` : 'Enter array index'}
           className="h-7 w-52 font-mono text-xs"
           disabled={isLoading}
@@ -101,6 +105,7 @@ export function ArrayIndexInput({
         lookups={lookups}
         chainId={chainId}
         keyLabel="Index"
+        resultType={resultType}
         renderKey={(lookup) => `[${lookup.index}]`}
       />
     </div>

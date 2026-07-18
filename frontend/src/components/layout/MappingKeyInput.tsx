@@ -8,17 +8,19 @@ import { storageKeyDisplay } from '@/components/diff/slotDisplay';
 import {
   StorageQueryLookup,
   StorageViewResponse,
+  StorageViewType,
 } from '@/lib/types';
 import { queryStorage } from '@/lib/api';
 import { LookupResultsTable } from './LookupResultsTable';
 
 interface MappingKeyInputProps {
   declarationId: string;
-  keyTypes: { type: string; label: string }[];
+  keyTypes: { type: string; label: string; name: string }[];
   chainId: string;
   address: string;
   blockRef: StorageViewResponse['block_ref'];
   layoutId: string;
+  resultType?: StorageViewType;
   lookups: StorageQueryLookup[];
   onLookup: (lookup: StorageQueryLookup) => void;
 }
@@ -30,6 +32,15 @@ function keyHint(type: string): string {
   if (normalized.includes('bytes')) return '0x… bytes';
   if (normalized.includes('int')) return 'integer';
   return 'mapping key';
+}
+
+function namedKeyHint(name: string, type: string): string {
+  if (/^Key \d+$/.test(name)) return keyHint(type);
+  const normalized = type.toLowerCase();
+  if (normalized.includes('address')) return `${name} (0x…)`;
+  if (normalized.includes('bool')) return `${name} (true/false)`;
+  if (normalized.includes('bytes')) return `${name} (0x…)`;
+  return name;
 }
 
 function syntaxError(value: string, type: string): string | null {
@@ -57,6 +68,7 @@ export function MappingKeyInput({
   address,
   blockRef,
   layoutId,
+  resultType,
   lookups,
   onLookup,
 }: MappingKeyInputProps) {
@@ -69,7 +81,7 @@ export function MappingKeyInput({
     for (let index = 0; index < keys.length; index += 1) {
       const validationError = syntaxError(keys[index], keyTypes[index].type);
       if (validationError) {
-        setError(`Key ${index + 1}: ${validationError}`);
+        setError(`${keyTypes[index].name}: ${validationError}`);
         return;
       }
     }
@@ -103,10 +115,12 @@ export function MappingKeyInput({
 
   return (
     <div className="space-y-3">
-      <form onSubmit={handleSubmit} className="flex flex-wrap items-center gap-2">
+      <form onSubmit={handleSubmit} className="flex flex-wrap items-start gap-2">
         {keyTypes.map((keyType, index) => (
-          <div key={`${keyType.type}:${index}`} className="flex items-center gap-2">
-            {index > 0 && <span className="font-mono text-xs text-gray-400">→</span>}
+          <div key={`${keyType.type}:${index}`} className="flex items-start gap-2">
+            {index > 0 && (
+              <span className="mt-1.5 font-mono text-xs text-gray-400">→</span>
+            )}
             <div className="flex flex-col">
               <Input
                 type="text"
@@ -117,12 +131,16 @@ export function MappingKeyInput({
                   setKeys(next);
                   setError(null);
                 }}
-                placeholder={keyHint(keyType.type)}
+                aria-label={`${keyType.name} mapping key`}
+                placeholder={namedKeyHint(keyType.name, keyType.type)}
                 className="h-7 w-56 font-mono text-xs sm:w-64"
                 disabled={isLoading}
               />
               {keyTypes.length > 1 && (
-                <span className="mt-0.5 text-[10px] text-gray-400">{keyType.label}</span>
+                <span className="mt-0.5 text-[10px] text-gray-400">
+                  {keyType.name}
+                  <span className="text-gray-300"> · {keyType.label}</span>
+                </span>
               )}
             </div>
           </div>
@@ -144,19 +162,25 @@ export function MappingKeyInput({
         lookups={lookups}
         chainId={chainId}
         keyLabel={keyTypes.length > 1 ? 'Keys' : 'Key'}
+        resultType={resultType}
         renderKey={(lookup) => (
           <span className="flex flex-col gap-0.5">
             {(lookup.keys ?? []).map((key, index) => (
-              <span key={`${key}:${index}`} className="inline-flex items-center">
-                [
-                <HoverCell
-                  display={storageKeyDisplay(key)?.display ?? key}
-                  value={key}
-                  chainId={chainId}
-                  copyLabel={`Copy mapping key ${storageKeyDisplay(key)?.display ?? key}`}
-                  colorClass="font-mono text-gray-700"
-                />
-                ]
+              <span key={`${key}:${index}`} className="flex min-w-0 items-center gap-1">
+                {(keyTypes.length > 1 || !/^Key \d+$/.test(keyTypes[index]?.name ?? '')) && (
+                  <span className="shrink-0 text-gray-400">{keyTypes[index]?.name}</span>
+                )}
+                <span className="inline-flex min-w-0 items-center">
+                  [
+                  <HoverCell
+                    display={storageKeyDisplay(key)?.display ?? key}
+                    value={key}
+                    chainId={chainId}
+                    copyLabel={`Copy mapping key ${storageKeyDisplay(key)?.display ?? key}`}
+                    colorClass="font-mono text-gray-700"
+                  />
+                  ]
+                </span>
               </span>
             ))}
           </span>

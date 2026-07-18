@@ -35,6 +35,84 @@ function keyTypeLabel(keyType: string): string {
   return 'key';
 }
 
+function keyName(typeLabel: string, type: string, index: number): string {
+  const finalIdentifier = typeLabel.match(/([A-Za-z_$][\w$]*)\s*$/)?.[1];
+  if (finalIdentifier && finalIdentifier.toLowerCase() !== type.toLowerCase()) {
+    return finalIdentifier;
+  }
+  return `Key ${index + 1}`;
+}
+
+function resolveStructFieldType(
+  rootType: StorageViewType,
+  relativePath: string,
+  types: Record<string, StorageViewType>,
+): string {
+  let currentType: StorageViewType | undefined = rootType;
+  let label = 'unknown';
+
+  for (const segment of relativePath.split('.')) {
+    const member: StorageViewType['members'][number] | undefined = currentType?.members.find(
+      (candidate) => candidate.name === segment,
+    );
+    if (!member) return label;
+    label = member.label;
+    currentType = types[member.type_id];
+  }
+
+  return currentType?.label ?? label;
+}
+
+function ValueDisplay({
+  value,
+  showHex,
+}: {
+  value: StorageViewValueItem;
+  showHex: boolean;
+}) {
+  if (value.status === 'on_demand') {
+    return <span className="text-[10px] text-gray-400">query required</span>;
+  }
+  if (value.status === 'deferred_budget') {
+    return <span className="text-[10px] text-gray-400">deferred by read limit</span>;
+  }
+  if (value.status !== 'ok' || !value.value_encoded) {
+    return <span className="text-xs text-gray-400">—</span>;
+  }
+
+  const rendered = showHex
+    ? value.value_encoded
+    : formatDecodedValue(value.value_decoded, { fullAddresses: true });
+  const compact = showHex
+    ? truncateHash(value.value_encoded, 6)
+    : formatDecodedValue(value.value_decoded);
+  const copyValue = showHex
+    ? value.value_encoded
+    : String(value.value_decoded ?? value.value_encoded);
+
+  return (
+    <div className="flex min-w-0 items-center gap-1">
+      <span className={cn(
+        'font-mono leading-tight text-gray-900',
+        showHex ? 'text-[10px]' : 'text-xs',
+      )}>
+        {compact === rendered ? rendered : (
+          <>
+            <span className="sm:hidden">{compact}</span>
+            <span className="hidden break-all sm:inline">{rendered}</span>
+          </>
+        )}
+      </span>
+      {shouldShowCopyAction(value.value_decoded ?? value.value_encoded, compact) && (
+        <CopyButton
+          label={`Copy ${value.path} value`}
+          value={copyValue}
+        />
+      )}
+    </div>
+  );
+}
+
 export const LayoutRow = memo(function LayoutRow({
   variable,
   types,
@@ -52,15 +130,27 @@ export const LayoutRow = memo(function LayoutRow({
   const isDynamicArray = varType?.encoding === 'dynamic_array';
   const isStaticArray = varType?.kind === 'array' && varType.encoding === 'inplace';
   const isArray = isDynamicArray || isStaticArray;
+  const arrayResultType = varType?.element_type
+    ? types[varType.element_type]
+    : undefined;
   const status = values[0]?.status;
   const isInteractive = (isMapping || isArray) && status === 'on_demand';
+  const structValues = varType?.kind === 'struct'
+    ? values.filter((value) => value.path !== variable.name)
+    : [];
+  const hasStructDetails = structValues.length > 0;
+  const canExpand = isInteractive || hasStructDetails;
 
-  const mappingKeyTypes: { type: string; label: string }[] = [];
+  const mappingKeyTypes: { type: string; label: string; name: string }[] = [];
   let currentType: StorageViewType | undefined = varType;
   while (currentType?.encoding === 'mapping' && currentType.key_type) {
+    const keyType = types[currentType.key_type];
+    const typeLabel = keyType?.label ?? currentType.key_type;
+    const label = keyTypeLabel(typeLabel);
     mappingKeyTypes.push({
-      type: currentType.key_type,
-      label: keyTypeLabel(currentType.key_type),
+      type: typeLabel,
+      label,
+      name: keyName(typeLabel, label, mappingKeyTypes.length),
     });
     currentType = currentType.value_type
       ? types[currentType.value_type]
@@ -79,8 +169,14 @@ export const LayoutRow = memo(function LayoutRow({
           expanded ? 'bg-gray-50/50' : 'border-b border-gray-100'
         )}
       >
-        <td className="px-0.5 py-2 align-top text-center sm:px-1">
-          {isInteractive && (
+        <td className="relative px-0.5 py-2 align-top text-center sm:px-1">
+          {expanded && hasStructDetails && (
+            <span
+              aria-hidden="true"
+              className="absolute bottom-0 left-1/2 top-1/2 border-l border-gray-300"
+            />
+          )}
+          {canExpand && (
             <button
               onClick={() => setExpanded(!expanded)}
               aria-label={expanded ? `Collapse ${variable.name}` : `Expand ${variable.name}`}
@@ -128,45 +224,19 @@ export const LayoutRow = memo(function LayoutRow({
         </td>
 
         <td className="px-1 py-2">
-          {successfulValues.length > 0 ? (
+          {hasStructDetails ? (
+            <span className="font-mono text-[10px] text-gray-400">
+              {structValues.length} {structValues.length === 1 ? 'field' : 'fields'}
+            </span>
+          ) : successfulValues.length > 0 ? (
             <div className="space-y-1">
-              {successfulValues.map((value) => {
-                const rendered = showHex
-                  ? value.value_encoded!
-                  : formatDecodedValue(value.value_decoded, { fullAddresses: true });
-                const compact = showHex
-                  ? truncateHash(value.value_encoded!, 6)
-                  : formatDecodedValue(value.value_decoded);
-                const copyValue = showHex
-                  ? value.value_encoded!
-                  : String(value.value_decoded ?? value.value_encoded);
-                return (
-                  <div key={`${value.declaration_id}:${value.path}`} className="flex min-w-0 items-center gap-1">
-                    {value.path !== variable.name && (
-                      <span className="shrink-0 font-mono text-[10px] text-gray-400">
-                        {value.path}
-                      </span>
-                    )}
-                    <span className={cn(
-                      'break-all font-mono leading-tight text-gray-900',
-                      showHex ? 'text-[10px]' : 'text-xs'
-                    )}>
-                      {compact === rendered ? rendered : (
-                        <>
-                          <span className="sm:hidden">{compact}</span>
-                          <span className="hidden sm:inline">{rendered}</span>
-                        </>
-                      )}
-                    </span>
-                    {shouldShowCopyAction(value.value_decoded ?? value.value_encoded, compact) && (
-                      <CopyButton
-                        label={`Copy ${value.path} value`}
-                        value={copyValue}
-                      />
-                    )}
-                  </div>
-                );
-              })}
+              {successfulValues.map((value) => (
+                <ValueDisplay
+                  key={`${value.declaration_id}:${value.path}`}
+                  value={value}
+                  showHex={showHex}
+                />
+              ))}
             </div>
           ) : status === 'on_demand' ? (
             !expanded && <span className="text-[10px] text-gray-400">expand to query</span>
@@ -186,6 +256,82 @@ export const LayoutRow = memo(function LayoutRow({
         </td>
       </tr>
 
+      {expanded && hasStructDetails && structValues.map((value, index) => {
+        const relativePath = value.path.startsWith(`${variable.name}.`)
+          ? value.path.slice(variable.name.length + 1)
+          : value.path;
+        const typeLabel = resolveStructFieldType(varType!, relativePath, types);
+        const slotLocation = value.byte_offset > 0
+          ? `${value.slot} +${value.byte_offset}B`
+          : value.slot;
+
+        return (
+          <tr
+            key={`${value.declaration_id}:${value.path}`}
+            className={cn(
+              'bg-gray-50/50 hover:bg-gray-100/50',
+              index === structValues.length - 1 && 'border-b border-gray-100',
+            )}
+          >
+            <td className="relative px-0.5 py-1.5 sm:px-1">
+              <span
+                aria-hidden="true"
+                className={cn(
+                  'absolute left-1/2 top-0 border-l border-gray-300',
+                  index === structValues.length - 1 ? 'bottom-1/2' : 'bottom-0',
+                )}
+              />
+              <span
+                aria-hidden="true"
+                className="absolute left-1/2 top-1/2 w-[calc(50%+1rem)] border-t border-gray-300"
+              />
+            </td>
+            <td className="py-1.5 pl-4 pr-1 font-mono text-xs text-gray-700">
+              <DetailPopover
+                className="max-w-full"
+                dialogLabel={`Full path for ${value.path}`}
+                content={(
+                  <span className="block break-all font-mono text-xs text-gray-700">
+                    {value.path}
+                  </span>
+                )}
+              >
+                <span className="block truncate" title={relativePath}>{relativePath}</span>
+              </DetailPopover>
+            </td>
+            <td className="px-1 py-1.5 font-mono text-xs text-gray-500">
+              <DetailPopover
+                className="max-w-full"
+                dialogLabel={`Full type for ${value.path}`}
+                content={(
+                  <span className="block whitespace-normal font-mono text-xs text-gray-700 [overflow-wrap:anywhere]">
+                    {typeLabel}
+                  </span>
+                )}
+              >
+                <span className="block truncate">{typeLabel}</span>
+              </DetailPopover>
+            </td>
+            <td
+              className="hidden truncate px-1 py-1.5 font-mono text-xs text-gray-500 sm:table-cell"
+              title={`${value.slot} · byte offset ${value.byte_offset}`}
+            >
+              {slotLocation}
+            </td>
+            <td className="px-1 py-1.5">
+              <ValueDisplay value={value} showHex={showHex} />
+            </td>
+            <td
+              data-testid="layout-slot"
+              className="truncate px-1 py-1.5 font-mono text-[10px] text-gray-500 sm:hidden"
+              title={`${value.slot} · byte offset ${value.byte_offset}`}
+            >
+              {slotLocation}
+            </td>
+          </tr>
+        );
+      })}
+
       {expanded && isInteractive && isMapping && (
         <tr className="bg-gray-50/50">
           <td colSpan={5} className="border-b border-gray-100 px-4 pb-2 pt-1">
@@ -196,6 +342,7 @@ export const LayoutRow = memo(function LayoutRow({
               address={address}
               blockRef={blockRef}
               layoutId={layoutId}
+              resultType={currentType}
               lookups={lookups}
               onLookup={(lookup) => setLookups((previous) => [...previous, lookup])}
             />
@@ -213,6 +360,7 @@ export const LayoutRow = memo(function LayoutRow({
               address={address}
               blockRef={blockRef}
               layoutId={layoutId}
+              resultType={arrayResultType}
               lookups={lookups}
               onLookup={(lookup) => setLookups((previous) => [...previous, lookup])}
             />

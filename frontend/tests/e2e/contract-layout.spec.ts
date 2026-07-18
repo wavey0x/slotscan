@@ -277,6 +277,70 @@ test('packed values sharing one word remain separate logical rows', async ({ pag
   await expect(page.getByRole('button', { name: /Copy (enabled|count) value/ })).toHaveCount(0);
 });
 
+test('struct values expand into semantic member rows', async ({ page }) => {
+  const config = {
+    ...scalarType('config', 'struct ConfigData'),
+    kind: 'struct',
+    num_bytes: '64',
+    members: [
+      {
+        name: 'oracle',
+        slot: '0x0',
+        byte_offset: 0,
+        byte_size: '20',
+        type_id: 't_address',
+        label: 'address',
+      },
+      {
+        name: 'maxLTV',
+        slot: '0x1',
+        byte_offset: 0,
+        byte_size: '32',
+        type_id: 't_uint256',
+        label: 'uint256',
+      },
+    ],
+  };
+  await mockView(page, {
+    variables: [
+      variable('decl:0', 'config', '0x6', config.id, config.label),
+    ],
+    types: {
+      config,
+      t_address: scalarType('t_address', 'address', '20'),
+      t_uint256: scalarType(),
+    },
+    values: [
+      value('decl:0', 'config.oracle', '0x6', '0xff12b7B0dF9a2A96CBc09b3822B4Db43a575cCEE'),
+      value('decl:0', 'config.maxLTV', '0x7', '95000'),
+    ],
+  });
+  await page.goto(`/1/${ADDRESS}`);
+
+  await expect(page.getByText('2 fields', { exact: true })).toBeVisible();
+  await expect(page.getByText('oracle', { exact: true })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Expand config' }).click();
+
+  const oracleRow = page.getByRole('row').filter({
+    has: page.getByText('oracle', { exact: true }),
+  });
+  await expect(oracleRow).toContainText('address');
+  await expect(oracleRow).toContainText('0x6');
+  await expect(oracleRow).toContainText('0xff12b7B0dF9a2A96CBc09b3822B4Db43a575cCEE');
+  await expect(oracleRow.locator('td').nth(4)).not.toContainText('config.oracle');
+
+  const maxLtvRow = page.getByRole('row').filter({
+    has: page.getByText('maxLTV', { exact: true }),
+  });
+  await expect(maxLtvRow).toContainText('uint256');
+  await expect(maxLtvRow).toContainText('0x7');
+  await expect(maxLtvRow).toContainText('95,000');
+
+  await page.getByRole('button', { name: 'Collapse config' }).click();
+  await expect(page.getByText('oracle', { exact: true })).toHaveCount(0);
+});
+
 test('a value-read failure keeps the valid layout visible', async ({ page }) => {
   await mockView(page, {
     variables: [variable('decl:0', 'owner', '0x2')],
@@ -425,10 +489,14 @@ test('packed struct mappings expand and render decoded members', async ({ page }
   await page.getByRole('button', { name: 'Lookup' }).click();
 
   const history = page.getByText('Lookup history').locator('..');
-  await expect(history.getByText('protocolId', { exact: true })).toBeVisible();
-  await expect(history.getByText('7', { exact: true })).toBeVisible();
-  await expect(history.getByText('deployTime', { exact: true })).toBeVisible();
-  await expect(history.getByText('1,725,000,000', { exact: true })).toBeVisible();
+  const protocolRow = history.getByRole('row').filter({ hasText: 'protocolId' });
+  await expect(protocolRow).toContainText('uint40');
+  await expect(protocolRow).toContainText('0xabc');
+  await expect(protocolRow).toContainText('7');
+  const deployTimeRow = history.getByRole('row').filter({ hasText: 'deployTime' });
+  await expect(deployTimeRow).toContainText('uint40');
+  await expect(deployTimeRow).toContainText('0xabc +5B');
+  await expect(deployTimeRow).toContainText('1,725,000,000');
   await expect(history.getByRole('button', { name: 'Copy raw storage value' })).toBeVisible();
   expect(requestBody!.access.steps).toEqual([
     { kind: 'mapping_key', value: ADDRESS },
@@ -480,7 +548,7 @@ test('mapping queries send raw keys and exact identities, never a computed slot'
   await page.getByRole('button', { name: 'Expand balances' }).click();
   await page.getByPlaceholder('0x… address').fill(ADDRESS);
   await page.getByRole('button', { name: 'Lookup' }).click();
-  await expect(page.getByText('0xabc', { exact: true })).toBeVisible();
+  await expect(page.getByText('0xabc', { exact: true }).first()).toBeVisible();
   const keyCopy = page.getByRole('button', { name: 'Copy mapping key 0x1234...5678' });
   await expect(keyCopy).toBeVisible();
   await keyCopy.click();
@@ -501,6 +569,8 @@ test('mapping queries send raw keys and exact identities, never a computed slot'
 });
 
 test('nested mappings preserve the raw ordered key sequence', async ({ page }) => {
+  const voterType = scalarType('t_voter', 'address voter', '20');
+  const proposalType = scalarType('t_proposal', 'uint256 proposalId');
   const outer = {
     id: 'outer',
     label: 'mapping(address => mapping(uint256 => uint256))',
@@ -510,7 +580,7 @@ test('nested mappings preserve the raw ordered key sequence', async ({ page }) =
     base_type: null,
     element_type: null,
     array_length: null,
-    key_type: 't_address',
+    key_type: voterType.id,
     value_type: 'inner',
     members: [],
   };
@@ -518,7 +588,7 @@ test('nested mappings preserve the raw ordered key sequence', async ({ page }) =
     ...outer,
     id: 'inner',
     label: 'mapping(uint256 => uint256)',
-    key_type: 't_uint256',
+    key_type: proposalType.id,
     value_type: 't_uint256',
   };
   await mockView(page, {
@@ -526,7 +596,8 @@ test('nested mappings preserve the raw ordered key sequence', async ({ page }) =
     types: {
       outer,
       inner,
-      t_address: scalarType('t_address', 'address', '20'),
+      [voterType.id]: voterType,
+      [proposalType.id]: proposalType,
       t_uint256: scalarType(),
     },
     values: [value('decl:0', 'votes', '0x7', null, 'on_demand')],
@@ -549,8 +620,10 @@ test('nested mappings preserve the raw ordered key sequence', async ({ page }) =
   });
   await page.goto(`/1/${ADDRESS}`);
   await page.getByRole('button', { name: 'Expand votes' }).click();
-  await page.getByPlaceholder('0x… address').fill(ADDRESS);
-  await page.getByPlaceholder('integer').fill('5');
+  await page.getByPlaceholder('voter (0x…)').fill(ADDRESS);
+  await page.getByPlaceholder('proposalId').fill('5');
+  await expect(page.getByText('voter · address', { exact: true })).toBeVisible();
+  await expect(page.getByText('proposalId · uint256', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Lookup' }).click();
 
   expect(steps).toEqual([
