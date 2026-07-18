@@ -2,7 +2,7 @@
 
 import { CopyButton } from '@/components/ui/CopyButton';
 import { getAddressExplorerUrl } from '@/lib/constants';
-import { isAddress, shouldShowCopyAction } from '@/lib/utils';
+import { cn, isAddress, shouldShowCopyAction } from '@/lib/utils';
 import { canonicalVariablePath, storageKeyDisplay } from './slotDisplay';
 
 interface PathSegment {
@@ -16,6 +16,8 @@ interface KeyedVariablePathProps {
   chainId: string;
   /** Keep a single leaf field in canonical order while truncating only its base name. */
   canonicalLeaf?: boolean;
+  /** Override primary-path typography for the surrounding surface. */
+  primaryClassName?: string;
 }
 
 function splitPath(path: string): string[] {
@@ -130,6 +132,7 @@ export function KeyedVariablePath({
   typeLabel,
   chainId,
   canonicalLeaf = false,
+  primaryClassName,
 }: KeyedVariablePathProps) {
   const fullPath = canonicalVariablePath(path);
   const segments = splitPath(fullPath).map(parseSegment);
@@ -153,7 +156,10 @@ export function KeyedVariablePath({
   if (canonicalBase) {
     const canonicalDisplay = (
       <span
-        className="flex min-w-0 items-center overflow-hidden whitespace-nowrap text-xs font-medium text-gray-900"
+        className={cn(
+          'flex min-w-0 items-center overflow-hidden whitespace-nowrap text-xs font-medium text-gray-900',
+          primaryClassName,
+        )}
         data-testid="keyed-variable-primary"
       >
         <span className="min-w-0 truncate" data-testid="keyed-variable-base">
@@ -177,7 +183,10 @@ export function KeyedVariablePath({
 
   const primary = (
     <span
-      className="block min-w-0 max-w-full overflow-hidden break-words text-xs font-medium text-gray-900"
+      className={cn(
+        'block min-w-0 max-w-full overflow-hidden break-words text-xs font-medium text-gray-900',
+        primaryClassName,
+      )}
       data-testid="keyed-variable-primary"
     >
       {hasLeafField || stackKeys
