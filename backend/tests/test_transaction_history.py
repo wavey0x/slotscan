@@ -2,7 +2,7 @@ import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, TestCase
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi import HTTPException
 
@@ -17,7 +17,7 @@ from app.models.domain import (
     StorageType,
     StorageVariable,
 )
-from app.models.errors import RPCError
+from app.models.errors import RPCError, TraceNotAvailableError
 from app.repositories.trace_cache import (
     TransactionTraceArtifactData,
 )
@@ -199,6 +199,14 @@ class _CompactTraceProvider:
         }
 
 
+class _PrestateProvider:
+    def __init__(self, result):
+        self.result = result
+
+    async def make_request(self, chain_id, method, params):
+        return {"result": self.result}
+
+
 class _HistoryService(TransactionHistoryService):
     async def _resolve_metadata(
         self,
@@ -364,7 +372,7 @@ class Eip7702TraceTests(IsolatedAsyncioTestCase):
             ):
                 tracer = TransactionAnalysisService(
                     _NoopProvider(),
-                    Settings(MAX_SSTORE_OPS=100),
+                    Settings(MAX_SSTORE_OPS=1),
                     TypeDecoder(),
                 )
                 write = dict(artifact().write_events[0])
@@ -397,7 +405,14 @@ class Eip7702TraceTests(IsolatedAsyncioTestCase):
 
     async def test_compact_trace_preserves_exact_effective_code_output(self):
         provider = _CompactTraceProvider()
-        client = TraceRPCClient(provider)
+        client = TraceRPCClient(
+            provider,
+            Settings(
+                MAX_SSTORE_OPS=2,
+                MAX_TRACE_STEPS=10,
+                MAX_TRACE_SHA3_OPS=1,
+            ),
+        )
 
         result = await client._execute_compact_storage_trace(
             1,
@@ -422,6 +437,42 @@ class Eip7702TraceTests(IsolatedAsyncioTestCase):
             tracer_source.count("this.effectiveCode(requested, db)"),
             2,
         )
+        self.assertIn("this.steps >= 10", tracer_source)
+        self.assertIn("this.writes.length >= 2", tracer_source)
+        self.assertIn("this.sha3s.length >= 1", tracer_source)
+
+    async def test_compact_trace_rejects_the_first_write_above_the_limit(self):
+        client = TraceRPCClient(
+            _CompactTraceProvider(),
+            Settings(MAX_SSTORE_OPS=1),
+        )
+
+        with self.assertRaises(TraceNotAvailableError):
+            await client._execute_compact_storage_trace(
+                1,
+                "0x" + "ab" * 32,
+            )
+
+    async def test_prestate_trace_rejects_oversized_storage_before_normalization(self):
+        client = TraceRPCClient(
+            _PrestateProvider(
+                {
+                    "pre": {
+                        ADDRESS_A: {
+                            "storage": {
+                                SLOT_1: ONE,
+                                ZERO: ONE,
+                            }
+                        }
+                    },
+                    "post": {},
+                }
+            ),
+            Settings(MAX_PRESTATE_STORAGE_ENTRIES=1),
+        )
+
+        with self.assertRaises(TraceNotAvailableError):
+            await client.execute_prestate_trace(1, artifact().tx_hash)
 
     def test_raw_structlogs_mark_code_attribution_inferred(self):
         client = TraceRPCClient(_NoopProvider())
@@ -630,6 +681,39 @@ class PrestateRecoveryTests(TestCase):
 
 
 class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
+    async def test_trace_limit_runs_before_journaling_or_preimage_hashing(self):
+        repository = SimpleNamespace(
+            get=AsyncMock(return_value=None),
+            save=AsyncMock(),
+        )
+        tracer = TransactionAnalysisService(
+            _NoopProvider(),
+            Settings(MAX_SSTORE_OPS=1),
+            TypeDecoder(),
+            trace_cache_repo=repository,
+        )
+        tracer.trace_extractor.extract = AsyncMock(
+            return_value=TransactionTraceEvidence(
+                receipt={
+                    "blockNumber": artifact().block_number,
+                    "status": 1,
+                },
+                prestate_diff={"pre": {}, "post": {}},
+                writes=artifact().write_events[:2],
+                sha3_operations=[],
+                evm_step_count=10,
+            )
+        )
+        tracer.journal_builder.build = Mock()
+        tracer.preimage_resolver.build_preimage_lookup = Mock()
+
+        with self.assertRaises(TraceNotAvailableError):
+            await tracer.load_trace_artifact(1, artifact().tx_hash)
+
+        tracer.journal_builder.build.assert_not_called()
+        tracer.preimage_resolver.build_preimage_lookup.assert_not_called()
+        repository.save.assert_not_awaited()
+
     async def test_transaction_api_redacts_upstream_rpc_error_details(self):
         with self.assertRaises(HTTPException) as raised:
             await get_transaction_storage_history(

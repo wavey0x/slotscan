@@ -36,6 +36,20 @@ class Settings(BaseSettings):
     # Limits
     max_slots_per_contract: int = Field(default=10000, alias="MAX_SLOTS_PER_CONTRACT")
     max_sstore_ops: int = Field(default=10000, alias="MAX_SSTORE_OPS")
+    max_trace_steps: int = Field(default=5_000_000, alias="MAX_TRACE_STEPS")
+    max_trace_sha3_ops: int = Field(default=20_000, alias="MAX_TRACE_SHA3_OPS")
+    max_trace_preimage_bytes: int = Field(
+        default=5 * 1024 * 1024,
+        alias="MAX_TRACE_PREIMAGE_BYTES",
+    )
+    max_prestate_accounts: int = Field(
+        default=10_000,
+        alias="MAX_PRESTATE_ACCOUNTS",
+    )
+    max_prestate_storage_entries: int = Field(
+        default=100_000,
+        alias="MAX_PRESTATE_STORAGE_ENTRIES",
+    )
     request_timeout_seconds: int = Field(default=45, alias="REQUEST_TIMEOUT_SECONDS")
     max_parallel_contract_resolutions: int = Field(
         default=8,

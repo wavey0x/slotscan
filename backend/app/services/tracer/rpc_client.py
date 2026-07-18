@@ -5,6 +5,7 @@ import re
 
 from web3 import Web3
 
+from app.config import Settings
 from app.models.errors import RPCError, TraceNotAvailableError, TransactionNotFoundError
 from app.services.web3_provider import Web3Provider
 from app.utils.addresses import normalize_evm_address
@@ -15,8 +16,24 @@ logger = logging.getLogger(__name__)
 class TraceRPCClient:
     """Handles RPC calls for transaction tracing."""
 
-    def __init__(self, web3_provider: Web3Provider):
+    def __init__(
+        self,
+        web3_provider: Web3Provider,
+        settings: Settings | None = None,
+    ):
         self.web3_provider = web3_provider
+        self.max_writes = settings.max_sstore_ops if settings else 10_000
+        self.max_steps = settings.max_trace_steps if settings else 5_000_000
+        self.max_sha3_ops = settings.max_trace_sha3_ops if settings else 20_000
+        self.max_preimage_bytes = (
+            settings.max_trace_preimage_bytes if settings else 5 * 1024 * 1024
+        )
+        self.max_prestate_accounts = (
+            settings.max_prestate_accounts if settings else 10_000
+        )
+        self.max_prestate_storage_entries = (
+            settings.max_prestate_storage_entries if settings else 100_000
+        )
 
     async def get_receipt(self, chain_id: int, tx_hash: str) -> dict:
         """Fetch transaction receipt with error handling."""
@@ -75,10 +92,14 @@ class TraceRPCClient:
                 raise TraceNotAvailableError(error_msg)
             raise RPCError("debug_traceTransaction", error_msg)
 
-        return result.get("result", {})
+        trace = result.get("result", {})
+        self._validate_prestate_size(trace)
+        return trace
 
     async def execute_structlogs_trace(
-        self, chain_id: int, tx_hash: str, tx_to_address: str | None = None
+        self,
+        chain_id: int,
+        tx_hash: str,
     ) -> tuple[list[dict], list[dict], int]:
         """
         Parse structLogs to extract SSTORE and SHA3 operations.
@@ -96,77 +117,16 @@ class TraceRPCClient:
         - DELEGATECALL/CALLCODE: Code from target but storage stays with caller
         - CREATE/CREATE2: New contract created, constructor writes to new contract's storage
 
-        Args:
-            tx_to_address: The transaction's "to" address (top-level contract at depth=1)
-
         Returns (sstores, sha3s) where sha3s contains preimage data.
         """
         compact = await self._execute_compact_storage_trace(chain_id, tx_hash)
         if compact is not None:
             return compact
-
-        include_memory = True
-        sha3_from_tracer = []
-
-        try:
-            result = await self.web3_provider.make_request(
-                chain_id,
-                "debug_traceTransaction",
-                [tx_hash, {
-                    "enableMemory": True,
-                    "enableReturnData": True,
-                }]
-            )
-        except Exception as e:
-            logger.warning(f"structLogs trace failed for {tx_hash}: {e}")
-            return [], [], 0
-
-        if "error" in result:
-            error = result["error"]
-            error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-
-            if "too big" in error_msg.lower() or "exceeded" in error_msg.lower():
-                logger.info(f"structLogs trace too large for {tx_hash}, using custom SHA3 tracer + no-memory structLogs")
-                sha3_from_tracer = await self._get_sha3_via_custom_tracer(chain_id, tx_hash)
-
-                try:
-                    result = await self.web3_provider.make_request(
-                        chain_id,
-                        "debug_traceTransaction",
-                        [tx_hash, {
-                            "disableMemory": True,
-                            "disableStorage": True,
-                            "enableReturnData": False,
-                        }]
-                    )
-                    include_memory = False
-                    if "error" in result:
-                        logger.warning(f"structLogs trace (no memory) error for {tx_hash}: {result['error']}")
-                        return [], [], 0
-                except Exception as e2:
-                    logger.warning(f"structLogs trace (no memory) failed for {tx_hash}: {e2}")
-                    return [], [], 0
-            else:
-                logger.warning(f"structLogs trace error for {tx_hash}: {error_msg}")
-                return [], [], 0
-
-        struct_logs = result.get("result", {}).get("structLogs", [])
-        if not struct_logs:
-            logger.warning(f"No structLogs in trace for {tx_hash}")
-            return [], [], 0
-
-        logger.info(f"structLogs trace: {len(struct_logs)} steps (memory={'enabled' if include_memory else 'disabled'})")
-
-        # Parse the structLogs
-        sstores, sha3s = self._parse_structlogs(struct_logs, tx_to_address, include_memory)
-
-        if sha3_from_tracer:
-            sha3s = sha3_from_tracer
-            logger.info(f"structLogs parsed: sstores={len(sstores)}, sha3s={len(sha3s)} (from custom tracer)")
-        else:
-            logger.info(f"structLogs parsed: sstores={len(sstores)}, sha3s={len(sha3s)}")
-
-        return sstores, sha3s, len(struct_logs)
+        logger.warning(
+            "Compact storage tracer unavailable for %s; raw structLogs are disabled",
+            tx_hash,
+        )
+        return [], [], 0
 
     async def _execute_compact_storage_trace(
         self,
@@ -183,6 +143,7 @@ class TraceRPCClient:
         tracer = r"""
         {
           writes: [], sha3s: [], steps: 0, lastOp: null, lastDepth: null,
+          sha3Bytes: 0,
           frames: {}, frameStack: [], pendingCalls: {}, nextFrameId: 1,
           effectiveCode: function(requested, db) {
             var requestedHex = toHex(requested).toLowerCase();
@@ -230,6 +191,9 @@ class TraceRPCClient:
             return this.frames[this.frameStack[this.frameStack.length - 1]];
           },
           step: function(log, db) {
+            if (this.steps >= __MAX_STEPS__) {
+              throw new Error('slotscan trace limit exceeded: steps');
+            }
             this.lastOp = log.op.toString();
             this.lastDepth = log.getDepth();
             this.ensureRoot(log, db);
@@ -238,6 +202,9 @@ class TraceRPCClient:
             var op = log.op.toString();
 
             if (op === 'SSTORE' || op === 'TSTORE') {
+              if (this.writes.length >= __MAX_WRITES__) {
+                throw new Error('slotscan trace limit exceeded: writes');
+              }
               var slotValue = log.stack.peek(0);
               var value = log.stack.peek(1);
               var oldValue = null;
@@ -259,12 +226,17 @@ class TraceRPCClient:
               var offset = parseInt(log.stack.peek(0).toString());
               var size = parseInt(log.stack.peek(1).toString());
               if (size >= 32 && size <= 256) {
+                if (this.sha3s.length >= __MAX_SHA3S__ ||
+                    this.sha3Bytes + size > __MAX_SHA3_BYTES__) {
+                  throw new Error('slotscan trace limit exceeded: sha3');
+                }
                 this.sha3s.push({
                   address: frame.storage,
                   preimage: toHex(log.memory.slice(offset, offset + size)),
                   size: size,
                   depth: log.getDepth()
                 });
+                this.sha3Bytes += size;
               }
             }
             if (op === 'CALL' || op === 'STATICCALL' || op === 'DELEGATECALL' || op === 'CALLCODE') {
@@ -304,6 +276,12 @@ class TraceRPCClient:
           }
         }
         """
+        tracer = (
+            tracer.replace("__MAX_STEPS__", str(self.max_steps))
+            .replace("__MAX_WRITES__", str(self.max_writes))
+            .replace("__MAX_SHA3S__", str(self.max_sha3_ops))
+            .replace("__MAX_SHA3_BYTES__", str(self.max_preimage_bytes))
+        )
         try:
             response = await self.web3_provider.make_request(
                 chain_id,
@@ -315,6 +293,8 @@ class TraceRPCClient:
             return None
 
         if "error" in response:
+            if "slotscan trace limit exceeded" in str(response["error"]).lower():
+                raise TraceNotAvailableError("Trace exceeds configured limits")
             logger.info(
                 "Compact storage tracer rejected: %s",
                 response["error"],
@@ -335,6 +315,7 @@ class TraceRPCClient:
 
         step_count = int(result.get("stepCount") or 0)
         sha3s = result.get("sha3s") or []
+        self._validate_compact_limits(writes, sha3s, step_count)
         for operation in sha3s:
             preimage = self._normalize_preimage(operation.get("preimage"))
             if not preimage:
@@ -355,6 +336,59 @@ class TraceRPCClient:
         )
         return writes, sha3s, step_count
 
+    def _validate_compact_limits(
+        self,
+        writes: list[dict],
+        sha3s: list[dict],
+        step_count: int,
+    ) -> None:
+        if len(writes) > self.max_writes:
+            raise TraceNotAvailableError("Trace exceeds the configured write limit")
+        if step_count > self.max_steps:
+            raise TraceNotAvailableError("Trace exceeds the configured step limit")
+        if len(sha3s) > self.max_sha3_ops:
+            raise TraceNotAvailableError("Trace exceeds the configured SHA3 limit")
+
+        preimage_bytes = 0
+        for operation in sha3s:
+            preimage = operation.get("preimage")
+            if isinstance(preimage, str):
+                preimage_bytes += (len(preimage.removeprefix("0x")) + 1) // 2
+            if preimage_bytes > self.max_preimage_bytes:
+                raise TraceNotAvailableError(
+                    "Trace exceeds the configured preimage limit"
+                )
+
+    def _validate_prestate_size(self, trace: dict) -> None:
+        if not isinstance(trace, dict):
+            raise TraceNotAvailableError("Prestate trace is malformed")
+
+        sides = (
+            (trace.get("pre", {}), trace.get("post", {}))
+            if "pre" in trace or "post" in trace
+            else (trace,)
+        )
+        account_count = 0
+        storage_count = 0
+        for accounts in sides:
+            if not isinstance(accounts, dict):
+                raise TraceNotAvailableError("Prestate trace is malformed")
+            account_count += len(accounts)
+            if account_count > self.max_prestate_accounts:
+                raise TraceNotAvailableError(
+                    "Prestate trace exceeds the configured account limit"
+                )
+            for state in accounts.values():
+                if not isinstance(state, dict):
+                    continue
+                storage = state.get("storage", {})
+                if isinstance(storage, dict):
+                    storage_count += len(storage)
+                if storage_count > self.max_prestate_storage_entries:
+                    raise TraceNotAvailableError(
+                        "Prestate trace exceeds the configured storage limit"
+                    )
+
     def _parse_structlogs(
         self,
         struct_logs: list[dict],
@@ -362,6 +396,9 @@ class TraceRPCClient:
         include_memory: bool,
     ) -> tuple[list[dict], list[dict]]:
         """Parse structLogs to extract SSTORE and SHA3 operations."""
+        if len(struct_logs) > self.max_steps:
+            raise TraceNotAvailableError("Trace exceeds the configured step limit")
+
         # PASS 1: Find all CREATE/CREATE2 and their resulting addresses
         create_info: dict[int, dict] = {}
         MAX_CONSTRUCTOR_STEPS = 100_000
@@ -390,6 +427,7 @@ class TraceRPCClient:
         # PASS 2: Parse SSTOREs and SHA3s with proper address tracking
         sstores = []
         sha3s = []
+        sha3_bytes = 0
         pending_sha3 = None
 
         call_stack: list[tuple[str, str]] = []
@@ -422,8 +460,23 @@ class TraceRPCClient:
                 if stack:
                     hash_result = stack[-1] if stack else None
                     if hash_result:
+                        preimage = pending_sha3.get("preimage")
+                        pending_bytes = (
+                            (len(preimage.removeprefix("0x")) + 1) // 2
+                            if isinstance(preimage, str)
+                            else 0
+                        )
+                        if (
+                            len(sha3s) >= self.max_sha3_ops
+                            or sha3_bytes + pending_bytes
+                            > self.max_preimage_bytes
+                        ):
+                            raise TraceNotAvailableError(
+                                "Trace exceeds the configured SHA3 limit"
+                            )
                         pending_sha3["hash"] = self._normalize_slot(hash_result)
                         sha3s.append(pending_sha3)
+                        sha3_bytes += pending_bytes
                 pending_sha3 = None
 
             if op in ("CALL", "STATICCALL"):
@@ -454,6 +507,10 @@ class TraceRPCClient:
 
             if op in ("SSTORE", "TSTORE"):
                 if len(stack) >= 2:
+                    if len(sstores) >= self.max_writes:
+                        raise TraceNotAvailableError(
+                            "Trace exceeds the configured write limit"
+                        )
                     slot = stack[-1]
                     value = stack[-2]
                     normalized_slot = self._normalize_slot(slot)
@@ -581,71 +638,14 @@ class TraceRPCClient:
             if not re.fullmatch(r"[0-9a-fA-F]*", full_memory):
                 return None
             start_nibble = offset * 2
-            end_nibble = (offset + size) * 2
-
-            if end_nibble > len(full_memory):
-                full_memory = full_memory + "0" * (end_nibble - len(full_memory))
-
-            slice_hex = full_memory[start_nibble:end_nibble]
-            return "0x" + slice_hex if slice_hex else None
+            requested_nibbles = size * 2
+            slice_hex = full_memory[
+                start_nibble : start_nibble + requested_nibbles
+            ].ljust(requested_nibbles, "0")
+            return "0x" + slice_hex if requested_nibbles else None
         except Exception as e:
             logger.debug(f"Failed to extract memory slice: {e}")
             return None
-
-    async def _get_sha3_via_custom_tracer(self, chain_id: int, tx_hash: str) -> list[dict]:
-        """Get SHA3 preimages using a custom JS tracer."""
-        tracer = """
-        {
-            data: [],
-            step: function(log, db) {
-                var op = log.op.toString();
-                if (op === 'SHA3' || op === 'KECCAK256') {
-                    var offset = log.stack.peek(0).valueOf();
-                    var size = log.stack.peek(1).valueOf();
-                    if (size >= 32 && size <= 256) {
-                        this.data.push({
-                            preimage: toHex(log.memory.slice(offset, offset + size)),
-                            size: size
-                        });
-                    }
-                }
-            },
-            fault: function(log, db) {},
-            result: function(ctx, db) { return this.data; }
-        }
-        """
-
-        try:
-            result = await self.web3_provider.make_request(
-                chain_id,
-                "debug_traceTransaction",
-                [tx_hash, {"tracer": tracer}]
-            )
-
-            if "error" in result:
-                logger.warning(f"Custom SHA3 tracer failed: {result['error']}")
-                return []
-
-            sha3_ops = result.get("result", [])
-            logger.info(f"Custom SHA3 tracer: got {len(sha3_ops)} preimages")
-
-            sha3_list = []
-            for op in sha3_ops:
-                preimage = self._normalize_preimage(op.get("preimage"))
-                if preimage:
-                    preimage_bytes = bytes.fromhex(preimage.removeprefix("0x"))
-                    hash_value = Web3.keccak(preimage_bytes).hex()
-                    sha3_list.append({
-                        "preimage": preimage,
-                        "hash": hash_value,
-                        "size": int(op.get("size", 64)),
-                    })
-
-            return sha3_list
-
-        except Exception as e:
-            logger.warning(f"Custom SHA3 tracer error: {e}")
-            return []
 
     @staticmethod
     def _normalize_preimage(preimage: str | None) -> str | None:

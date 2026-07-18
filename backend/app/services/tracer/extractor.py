@@ -34,12 +34,10 @@ class TransactionTraceExtractor:
             self.rpc_client.execute_prestate_trace(chain_id, tx_hash),
             self.rpc_client.get_receipt(chain_id, tx_hash),
         )
-        tx_to_address = receipt.get("to") or receipt.get("contractAddress")
         writes, sha3_operations, evm_step_count = (
             await self.rpc_client.execute_structlogs_trace(
                 chain_id,
                 tx_hash,
-                tx_to_address,
             )
         )
         self._normalize_diff(prestate_diff)

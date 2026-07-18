@@ -204,6 +204,14 @@ class FrameOutcomeTests(unittest.TestCase):
             ),
             "0x1122",
         )
+        self.assertEqual(
+            client._extract_memory_slice(
+                ["0x" + "11" * 32],
+                10**9,
+                2,
+            ),
+            "0x0000",
+        )
 
     def test_parent_revert_marks_descendant_writes_reverted(self):
         logs = [

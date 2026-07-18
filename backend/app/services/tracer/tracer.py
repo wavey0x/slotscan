@@ -25,7 +25,11 @@ from app.services.tracer.slot_resolver import SlotPathResolver
 from app.services.layout_index import array_packing
 from app.services.layout_index import LayoutIndex, StorageLocation, StorageNamespace
 from app.services.tracer.journal import StorageJournal, StorageJournalBuilder
-from app.services.tracer.extractor import TransactionTraceExtractor
+from app.services.tracer.extractor import (
+    TransactionTraceEvidence,
+    TransactionTraceExtractor,
+)
+from app.models.errors import TraceNotAvailableError
 from app.utils.vyper import LEGACY_HASHED_STORAGE
 
 logger = logging.getLogger(__name__)
@@ -47,7 +51,7 @@ class TransactionAnalysisService:
         self.trace_cache_repo = trace_cache_repo
 
         # Composed services
-        self.rpc_client = TraceRPCClient(web3_provider)
+        self.rpc_client = TraceRPCClient(web3_provider, settings)
         self.trace_extractor = TransactionTraceExtractor(self.rpc_client)
         self.preimage_resolver = PreimageResolver()
         self.slot_resolver = SlotPathResolver()
@@ -66,6 +70,7 @@ class TransactionAnalysisService:
 
         logger.info("Trace artifact MISS for %s - executing RPC calls", tx_hash[:10])
         evidence = await self.trace_extractor.extract(chain_id, tx_hash)
+        self._enforce_trace_limits(evidence)
         receipt = evidence.receipt
         root_succeeded = self._quantity(receipt.get("status", 1)) == 1
         journal = self.journal_builder.build(
@@ -120,6 +125,26 @@ class TransactionAnalysisService:
             except Exception as exc:
                 logger.warning("Failed to save trace artifact: %s", exc)
         return artifact
+
+    def _enforce_trace_limits(self, evidence: TransactionTraceEvidence) -> None:
+        if len(evidence.writes) > self.settings.max_sstore_ops:
+            raise TraceNotAvailableError("Trace exceeds the configured write limit")
+        if evidence.evm_step_count > self.settings.max_trace_steps:
+            raise TraceNotAvailableError("Trace exceeds the configured step limit")
+        if len(evidence.sha3_operations) > self.settings.max_trace_sha3_ops:
+            raise TraceNotAvailableError("Trace exceeds the configured SHA3 limit")
+
+        preimage_bytes = 0
+        for operation in evidence.sha3_operations:
+            preimage = operation.get("preimage")
+            if not isinstance(preimage, str):
+                continue
+            clean = preimage.removeprefix("0x")
+            preimage_bytes += (len(clean) + 1) // 2
+            if preimage_bytes > self.settings.max_trace_preimage_bytes:
+                raise TraceNotAvailableError(
+                    "Trace exceeds the configured preimage limit"
+                )
 
     def build_journal(self, artifact: TransactionTraceArtifactData) -> StorageJournal:
         return self.journal_builder.build(
