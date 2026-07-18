@@ -970,9 +970,7 @@ async def get_transaction_storage_history(
                 code_addresses=list(projection.code_addresses),
                 first_write_step=min(steps) if steps else None,
                 last_write_step=max(steps) if steps else None,
-                layout_available=bool(
-                    projection.diff.layout and projection.diff.layout.variables
-                ),
+                layout_available=bool(projection.layouts_by_code_address),
                 resolution_status=projection.resolution_status,
                 resolution=ContractResolutionResponse(
                     resolved=resolved,

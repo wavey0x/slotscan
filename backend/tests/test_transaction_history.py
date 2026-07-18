@@ -336,28 +336,44 @@ class TransactionOwnerTests(TestCase):
             ],
         )
         uint_type = StorageType(
-            "t_uint256", "uint256", "value", "inplace", 32
+            "t_compiler_local", "uint256", "value", "inplace", 32
+        )
+        address_type = StorageType(
+            "t_compiler_local", "address", "value", "inplace", 20
         )
 
-        def layout(name, slot):
+        def layout(name, slot, value_type):
             return StorageLayout(
                 name,
-                [StorageVariable(name, slot, 0, 32, uint_type.id, uint_type.label)],
-                {uint_type.id: uint_type},
+                [
+                    StorageVariable(
+                        name,
+                        slot,
+                        0,
+                        value_type.num_bytes,
+                        value_type.id,
+                        value_type.label,
+                    )
+                ],
+                {value_type.id: value_type},
             )
 
         diff = self.tracer.project_trace_artifact(
             value,
             ADDRESS_A,
             layouts_by_code_address={
-                CODE_A: layout("ownerNonce", 1),
-                CODE_B: layout("strategyDebt", 2),
+                CODE_A: layout("ownerNonce", 1, uint_type),
+                CODE_B: layout("strategyOwner", 2, address_type),
             },
         )
 
         self.assertEqual(
             [change.variable_path for change in diff.changes],
-            ["ownerNonce", "strategyDebt"],
+            ["ownerNonce", "strategyOwner"],
+        )
+        self.assertEqual(
+            [change.new_decoded.type_label for change in diff.changes],
+            ["uint256", "address"],
         )
 
     def test_exact_trace_code_name_precedes_generic_or_stale_proxy_names(self):
@@ -816,7 +832,7 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
         self.assertNotIn("secret", str(raised.exception.detail))
         self.assertNotIn("token", str(raised.exception.detail))
 
-    async def test_proxy_self_code_includes_implementation_layout(self):
+    async def test_proxy_self_code_uses_only_its_direct_layout(self):
         value_type = StorageType(
             "t_uint256",
             "uint256",
@@ -898,10 +914,20 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
         self.assertEqual(
             [change.variable_path for change in result.contracts[0].diff.changes],
             [
-                "implementationValue",
-                "implementationValue",
-                "implementationValue",
+                None,
+                None,
+                None,
             ],
+        )
+        self.assertEqual(
+            list(result.contracts[0].layouts_by_code_address),
+            [ADDRESS_A],
+        )
+        self.assertEqual(
+            result.contracts[0].layouts_by_code_address[
+                ADDRESS_A
+            ].contract_name,
+            "proxyValue",
         )
 
     async def test_non_proxy_self_code_reuses_owner_resolution(self):

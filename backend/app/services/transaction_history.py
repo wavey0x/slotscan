@@ -221,42 +221,10 @@ class TransactionHistoryService:
                 for target, resolved in direct_metadata.items()
                 if resolved.sources
             }
-            fallback_layout = self._layout(metadata)
-            if (
-                metadata
-                and metadata.is_proxy
-                and fallback_layout
-                and fallback_layout.variables
-                and address.lower() in code_addresses
-            ):
-                direct_layout = layouts_by_code_address.get(address.lower())
-                proxy_layout = self._combine_layouts([
-                    fallback_layout,
-                    *([direct_layout] if direct_layout else []),
-                ])
-                if proxy_layout:
-                    # Writes attributed to a proxy's own address may originate
-                    # in its delegated implementation. Retain both layouts but
-                    # present the implementation identity selected by the
-                    # proxy-aware owner resolution.
-                    proxy_layout.contract_name = fallback_layout.contract_name
-                    layouts_by_code_address[address.lower()] = proxy_layout
-                if metadata.sources:
-                    sources_by_code_address[address.lower()] = metadata.sources
-            if fallback_layout and fallback_layout.variables:
-                for target in code_addresses:
-                    layouts_by_code_address.setdefault(target, fallback_layout)
-            all_layouts = list(layouts_by_code_address.values())
-            if fallback_layout and fallback_layout.variables:
-                all_layouts.append(fallback_layout)
-            combined_layout = self._combine_layouts(all_layouts)
 
-            fallback_sources = metadata.sources if metadata else None
             diff = self.tracer.project_trace_artifact(
                 artifact,
                 address,
-                layout=combined_layout,
-                sources=fallback_sources,
                 layouts_by_code_address=layouts_by_code_address,
                 sources_by_code_address=sources_by_code_address,
                 journal=journal,
@@ -403,42 +371,6 @@ class TransactionHistoryService:
             )
 
         return normalize(left) == normalize(right)
-
-    @staticmethod
-    def _combine_layouts(layouts: list[StorageLayout]) -> StorageLayout | None:
-        if not layouts:
-            return None
-        variables = {}
-        types = {}
-        for layout in layouts:
-            types.update(layout.types)
-            for variable in layout.variables:
-                variables[
-                    (variable.name, variable.slot, variable.offset, variable.type_id)
-                ] = variable
-        return StorageLayout(
-            contract_name=" + ".join(dict.fromkeys(
-                layout.contract_name for layout in layouts if layout.contract_name
-            )),
-            variables=list(variables.values()),
-            types=types,
-            language=next(
-                (layout.language for layout in layouts if layout.language),
-                None,
-            ),
-            compiler_version=next(
-                (
-                    layout.compiler_version
-                    for layout in layouts
-                    if layout.compiler_version
-                ),
-                None,
-            ),
-            storage_scheme=next(
-                (layout.storage_scheme for layout in layouts if layout.storage_scheme),
-                None,
-            ),
-        )
 
     @staticmethod
     def _layout(metadata: ContractMetadata | None) -> StorageLayout | None:
