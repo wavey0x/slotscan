@@ -1,12 +1,21 @@
 """Contract resolver for fetching metadata, proxy detection, and verification lookup."""
 
+import asyncio
+from dataclasses import dataclass
+import json
 import logging
 from typing import Optional
 
 from web3 import Web3
 
 from app.config import Settings
-from app.models.domain import ContractMetadata, ProxyInfo, StorageLayout
+from app.models.domain import (
+    ContractMetadata,
+    ProxyInfo,
+    RawCompilerArtifact,
+    StorageLayout,
+    VerificationResult,
+)
 from app.models.errors import NotAContractError, RPCError
 from app.repositories.compiler_artifacts import CompilerArtifactRepository
 from app.repositories.contracts import ContractRepository
@@ -42,6 +51,9 @@ EIP1967_BEACON_SLOT = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582
 # Standard beacon implementation() function selector
 BEACON_IMPL_SELECTOR = "0x5c60da1b"
 
+# ERC-897 proxyType() function selector
+ERC897_PROXY_TYPE_SELECTOR = "0x4555d5c9"
+
 # Gnosis Safe proxy masterCopy() function selector
 GNOSIS_SAFE_MASTER_COPY_SELECTOR = "0xa619486e"
 
@@ -58,6 +70,14 @@ EIP1167_SUFFIX = bytes.fromhex("5af43d82803e903d91602b57fd5bf3")
 # Vyper minimal proxy variant
 VYPER_PROXY_PREFIX = bytes.fromhex("366000600037611000600036600073")
 VYPER_PROXY_SUFFIX = bytes.fromhex("5af4602c57600080fd5b6110006000f3")
+
+
+@dataclass(frozen=True)
+class _EquivalentLayout:
+    source_address: str
+    layout: StorageLayout
+    verification: VerificationResult
+    artifact: RawCompilerArtifact
 
 
 def _parse_eip7702_designator(bytecode: bytes) -> Optional[str]:
@@ -213,8 +233,20 @@ class ContractResolver:
             verification_code_hash,
             self.source_cache_repo,
         )
+        equivalent = None
+        if verification is None:
+            equivalent = await self._resolve_equivalent_layout(
+                chain_id,
+                verification_code_hash,
+                verification_bytecode,
+            )
+            if equivalent:
+                parsed_layout = equivalent.layout
+                compiler_artifact = equivalent.artifact
         if verification:
             language = getattr(verification, "language", None) or "Solidity"
+        elif equivalent:
+            language = equivalent.verification.language or "Solidity"
 
         if not parsed_layout and verification and verification.storage_layout:
             try:
@@ -434,6 +466,9 @@ class ContractResolver:
                     compiler_version=verification.compiler_version,
                     max_slots=self.settings.max_slots_per_contract,
                 )
+        layout_identity = verification or (
+            equivalent.verification if equivalent else None
+        )
         result = ContractMetadata(
             chain_id=chain_id,
             address=address,
@@ -445,16 +480,34 @@ class ContractResolver:
             ),
             is_verified=verification is not None,
             verification_source=verification.source if verification else None,
-            name=verification.name if verification else None,
-            compiler_version=verification.compiler_version if verification else None,
-            compilation_target=(
-                verification.compilation_target if verification else None
+            name=layout_identity.name if layout_identity else None,
+            compiler_version=(
+                layout_identity.compiler_version if layout_identity else None
             ),
-            sources=verification.sources if verification else None,
-            compiler_settings=verification.compiler_settings if verification else None,
+            compilation_target=(
+                layout_identity.compilation_target if layout_identity else None
+            ),
+            sources=layout_identity.sources if layout_identity else None,
+            compiler_settings=(
+                layout_identity.compiler_settings if layout_identity else None
+            ),
             storage_layout=parsed_layout,
             compiler_artifact_fingerprint=(
                 compiler_artifact.fingerprint if compiler_artifact else None
+            ),
+            layout_provenance=(
+                "bytecode_equivalent"
+                if parsed_layout and equivalent
+                else "verified_source"
+                if parsed_layout and verification
+                else None
+            ),
+            layout_source_address=(
+                equivalent.source_address
+                if parsed_layout and equivalent
+                else code_address
+                if parsed_layout and verification
+                else None
             ),
         )
 
@@ -517,7 +570,241 @@ class ContractResolver:
             compiler_artifact_fingerprint=(
                 delegate.compiler_artifact_fingerprint if delegate else None
             ),
+            layout_provenance=delegate.layout_provenance if delegate else None,
+            layout_source_address=(
+                delegate.layout_source_address if delegate else None
+            ),
         )
+
+    async def _resolve_equivalent_layout(
+        self,
+        chain_id: int,
+        code_hash: str,
+        runtime_bytecode: bytes,
+    ) -> _EquivalentLayout | None:
+        candidate_lookup = getattr(
+            self.contract_repo,
+            "get_verified_layout_candidates",
+            None,
+        )
+        if not candidate_lookup:
+            return None
+        candidates = await candidate_lookup(chain_id, code_hash)
+        if not candidates or len(candidates) > 25:
+            return None
+
+        proofs: dict[tuple[str, str], _EquivalentLayout] = {}
+        for candidate in candidates:
+            proof = await self._prove_equivalent_candidate(
+                chain_id,
+                candidate,
+                code_hash,
+                runtime_bytecode,
+            )
+            if proof is None:
+                continue
+            identity = (
+                proof.artifact.fingerprint,
+                json.dumps(
+                    proof.layout.to_dict(),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            )
+            proofs.setdefault(identity, proof)
+
+        if len(proofs) != 1:
+            if len(proofs) > 1:
+                logger.warning(
+                    "Rejecting ambiguous equivalent layouts for code hash %s",
+                    code_hash,
+                )
+            return None
+        return next(iter(proofs.values()))
+
+    async def _prove_equivalent_candidate(
+        self,
+        chain_id: int,
+        candidate,
+        code_hash: str,
+        runtime_bytecode: bytes,
+    ) -> _EquivalentLayout | None:
+        source_row = await self.source_cache_repo.get(
+            chain_id,
+            candidate.address,
+            code_hash,
+        )
+        if (
+            source_row is None
+            or source_row.status != "verified"
+            or not isinstance(source_row.result, dict)
+        ):
+            return None
+        verification = VerificationResult.from_dict(source_row.result)
+        if (
+            verification.language != "Solidity"
+            or verification.match_type not in {"full", "exact_match"}
+            or not verification.sources
+            or not verification.compiler_version
+        ):
+            return None
+
+        compilation_target = None
+        if verification.compilation_target:
+            if len(verification.compilation_target) != 1:
+                return None
+            target_path, target_name = next(
+                iter(verification.compilation_target.items())
+            )
+            compilation_target = f"{target_path}:{target_name}"
+        contract_name = verification.name or candidate.name
+        if not contract_name:
+            return None
+
+        try:
+            layout, artifact = await self.layout_parser.parse_with_artifact(
+                contract_name=contract_name,
+                sources=verification.sources,
+                compiler_version=verification.compiler_version,
+                compiler_settings=verification.compiler_settings,
+                metadata_settings=verification.compiler_settings,
+                contract_fqname=compilation_target,
+            )
+            if not self._artifact_matches_runtime(
+                artifact,
+                verification,
+                runtime_bytecode,
+            ):
+                return None
+            layout.language = "Solidity"
+            layout.compiler_version = verification.compiler_version
+            layout.storage_scheme = "solidity"
+            layout = self.namespace_parser.promote_exact_erc7201(
+                layout,
+                compiler_output=artifact.compiler_output,
+                sources=verification.sources,
+                compiler_version=verification.compiler_version,
+                max_slots=self.settings.max_slots_per_contract,
+            )
+            if not layout.variables or not self._layout_is_exact(layout):
+                return None
+            if self.compiler_artifact_repo:
+                await self.compiler_artifact_repo.save(artifact)
+        except Exception as exc:
+            logger.info(
+                "Equivalent layout proof unavailable for %s: %s",
+                candidate.address,
+                exc,
+            )
+            return None
+
+        return _EquivalentLayout(
+            source_address=Web3.to_checksum_address(candidate.address),
+            layout=layout,
+            verification=verification,
+            artifact=artifact,
+        )
+
+    @staticmethod
+    def _layout_is_exact(layout: StorageLayout) -> bool:
+        return all(
+            variable.provenance == "compiler_layout"
+            and variable.confidence == "exact"
+            for variable in layout.variables
+        ) and all(
+            scope.kind in {"default", "erc7201"}
+            and scope.provenance == "compiler_layout"
+            and scope.confidence == "exact"
+            for scope in layout.scopes
+        )
+
+    @classmethod
+    def _artifact_matches_runtime(
+        cls,
+        artifact: RawCompilerArtifact,
+        verification: VerificationResult,
+        runtime_bytecode: bytes,
+    ) -> bool:
+        contract_output = cls._artifact_contract_output(
+            artifact,
+            verification,
+        )
+        deployed = (
+            contract_output.get("evm", {}).get("deployedBytecode", {})
+            if contract_output
+            else {}
+        )
+        compiled_hex = str(deployed.get("object") or "").removeprefix("0x")
+        runtime_hex = runtime_bytecode.hex()
+        if not compiled_hex or len(compiled_hex) != len(runtime_hex):
+            return False
+
+        if len(runtime_bytecode) < 2:
+            return False
+        metadata_length = int.from_bytes(runtime_bytecode[-2:], "big")
+        metadata_start = len(runtime_bytecode) - metadata_length - 2
+        if metadata_length <= 0 or metadata_start < 0:
+            return False
+        metadata = runtime_bytecode[metadata_start:-2]
+        if not any(marker in metadata for marker in (b"ipfs", b"bzzr")):
+            return False
+
+        ignored_ranges = cls._deployed_bytecode_ranges(deployed)
+        ignored_offsets: set[int] = set()
+        for start, length in ignored_ranges:
+            end = start + length
+            if start < 0 or length <= 0 or end > metadata_start:
+                return False
+            ignored_offsets.update(range(start, end))
+
+        for offset in range(len(runtime_bytecode)):
+            if offset in ignored_offsets:
+                continue
+            compiled_byte = compiled_hex[offset * 2: offset * 2 + 2]
+            if (
+                len(compiled_byte) != 2
+                or any(character not in "0123456789abcdefABCDEF" for character in compiled_byte)
+                or compiled_byte.lower() != runtime_hex[offset * 2: offset * 2 + 2]
+            ):
+                return False
+        return True
+
+    @staticmethod
+    def _artifact_contract_output(
+        artifact: RawCompilerArtifact,
+        verification: VerificationResult,
+    ) -> dict | None:
+        contracts = artifact.compiler_output.get("contracts", {})
+        if verification.compilation_target:
+            if len(verification.compilation_target) != 1:
+                return None
+            filename, name = next(iter(verification.compilation_target.items()))
+            output = contracts.get(filename, {}).get(name)
+            return output if isinstance(output, dict) else None
+
+        matches = [
+            output
+            for source_contracts in contracts.values()
+            for name, output in source_contracts.items()
+            if name == verification.name and isinstance(output, dict)
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    @staticmethod
+    def _deployed_bytecode_ranges(deployed: dict) -> tuple[tuple[int, int], ...]:
+        ranges = []
+        for references in deployed.get("immutableReferences", {}).values():
+            ranges.extend(
+                (int(reference["start"]), int(reference["length"]))
+                for reference in references
+            )
+        for source_references in deployed.get("linkReferences", {}).values():
+            for references in source_references.values():
+                ranges.extend(
+                    (int(reference["start"]), int(reference["length"]))
+                    for reference in references
+                )
+        return tuple(ranges)
 
     @staticmethod
     def _cache_matches_code_hash(row, code_hash: str) -> bool:
@@ -587,23 +874,245 @@ class ContractResolver:
         block: Optional[int] = None,
         bytecode: Optional[bytes] = None,
     ) -> Optional[ProxyInfo]:
-        """Resolve only a proxy relationship proven by exact runtime bytecode."""
-        del chain_id, address, block
+        """Resolve canonical proxy relationships at one chain state."""
+        block_id = block if block is not None else "latest"
+        proxy_address = Web3.to_checksum_address(address)
 
         if bytecode:
             implementation = self._detect_minimal_proxy(bytecode)
-            if implementation and implementation != ZERO_ADDRESS:
+            if implementation and await self._is_valid_proxy_target(
+                chain_id,
+                proxy_address,
+                implementation,
+                block,
+            ):
                 return ProxyInfo(
                     proxy_type="eip1167",
                     implementation_address=implementation,
                     admin_address=None,
                 )
 
+        if not bytecode or not self._contains_opcode(bytecode, 0xF4):
+            return None
+
+        try:
+            impl_value, uups_value, zos_value, beacon_value = await asyncio.gather(
+                self.web3_provider.get_storage_at(
+                    chain_id,
+                    proxy_address,
+                    EIP1967_IMPL_SLOT,
+                    block_id,
+                ),
+                self.web3_provider.get_storage_at(
+                    chain_id,
+                    proxy_address,
+                    EIP1822_SLOT,
+                    block_id,
+                ),
+                self.web3_provider.get_storage_at(
+                    chain_id,
+                    proxy_address,
+                    ZEPPELINOS_IMPL_SLOT,
+                    block_id,
+                ),
+                self.web3_provider.get_storage_at(
+                    chain_id,
+                    proxy_address,
+                    EIP1967_BEACON_SLOT,
+                    block_id,
+                ),
+            )
+        except Exception as exc:
+            raise RPCError("eth_getStorageAt", str(exc)) from exc
+
+        for proxy_type, slot_value in (
+            ("eip1967", impl_value),
+            ("eip1822", uups_value),
+            ("zeppelinos", zos_value),
+        ):
+            implementation = self._extract_address(bytes(slot_value))
+            if implementation and await self._is_valid_proxy_target(
+                chain_id,
+                proxy_address,
+                implementation,
+                block,
+            ):
+                return ProxyInfo(
+                    proxy_type=proxy_type,
+                    implementation_address=implementation,
+                    admin_address=None,
+                )
+
+        beacon_address = self._extract_address(bytes(beacon_value))
+        if beacon_address and await self._is_valid_proxy_target(
+            chain_id,
+            proxy_address,
+            beacon_address,
+            block,
+        ):
+            try:
+                result = await self.web3_provider.eth_call(
+                    chain_id,
+                    {"to": beacon_address, "data": BEACON_IMPL_SELECTOR},
+                    block_id,
+                )
+            except Exception as exc:
+                raise RPCError("eth_call", str(exc)) from exc
+            implementation = self._extract_address(bytes(result))
+            if implementation and await self._is_valid_proxy_target(
+                chain_id,
+                proxy_address,
+                implementation,
+                block,
+            ):
+                return ProxyInfo(
+                    proxy_type="beacon",
+                    implementation_address=implementation,
+                    admin_address=None,
+                )
+
+        # Safe exposes its singleton through a proxy-owned masterCopy() branch.
+        # Requiring both the dispatcher constant and executable DELEGATECALL
+        # avoids probing arbitrary contracts that merely inherit that method.
+        if self._contains_push4(bytecode, GNOSIS_SAFE_MASTER_COPY_SELECTOR):
+            implementation = await self._call_address_getter(
+                chain_id,
+                proxy_address,
+                GNOSIS_SAFE_MASTER_COPY_SELECTOR,
+                block_id,
+            )
+            if implementation and await self._is_valid_proxy_target(
+                chain_id,
+                proxy_address,
+                implementation,
+                block,
+            ):
+                return ProxyInfo(
+                    proxy_type="gnosis_safe",
+                    implementation_address=implementation,
+                    admin_address=None,
+                )
+
+        # Aragon AppProxy and other ERC-897 proxies advertise both methods.
+        # The proxyType() check distinguishes the standard from unrelated
+        # contracts that happen to expose an implementation() getter.
+        if (
+            self._contains_push4(bytecode, BEACON_IMPL_SELECTOR)
+            and self._contains_push4(bytecode, ERC897_PROXY_TYPE_SELECTOR)
+        ):
+            implementation, proxy_type_value = await asyncio.gather(
+                self._call_address_getter(
+                    chain_id,
+                    proxy_address,
+                    BEACON_IMPL_SELECTOR,
+                    block_id,
+                ),
+                self._call_uint256_getter(
+                    chain_id,
+                    proxy_address,
+                    ERC897_PROXY_TYPE_SELECTOR,
+                    block_id,
+                ),
+            )
+            if (
+                proxy_type_value in {1, 2}
+                and implementation
+                and await self._is_valid_proxy_target(
+                    chain_id,
+                    proxy_address,
+                    implementation,
+                    block,
+                )
+            ):
+                return ProxyInfo(
+                    proxy_type="erc897",
+                    implementation_address=implementation,
+                    admin_address=None,
+                )
         return None
+
+    async def _is_valid_proxy_target(
+        self,
+        chain_id: int,
+        proxy_address: str,
+        target_address: str,
+        block: Optional[int],
+    ) -> bool:
+        if target_address.lower() in {
+            ZERO_ADDRESS.lower(),
+            proxy_address.lower(),
+        }:
+            return False
+        return bool(await self._read_code(chain_id, target_address, block))
+
+    @staticmethod
+    def _contains_opcode(bytecode: bytes, target: int) -> bool:
+        """Find an opcode without treating PUSH data as executable code."""
+        offset = 0
+        while offset < len(bytecode):
+            opcode = bytecode[offset]
+            if opcode == target:
+                return True
+            if 0x60 <= opcode <= 0x7F:
+                offset += 1 + opcode - 0x5F
+            else:
+                offset += 1
+        return False
+
+    @staticmethod
+    def _contains_push4(bytecode: bytes, selector: str) -> bool:
+        """Find a selector used as a PUSH4 dispatcher constant."""
+        target = bytes.fromhex(selector.removeprefix("0x"))
+        offset = 0
+        while offset < len(bytecode):
+            opcode = bytecode[offset]
+            push_size = opcode - 0x5F if 0x60 <= opcode <= 0x7F else 0
+            if push_size == 4 and bytecode[offset + 1:offset + 5] == target:
+                return True
+            offset += 1 + push_size
+        return False
+
+    async def _call_address_getter(
+        self,
+        chain_id: int,
+        address: str,
+        selector: str,
+        block_id: int | str,
+    ) -> str | None:
+        try:
+            result = await self.web3_provider.eth_call(
+                chain_id,
+                {"to": address, "data": selector},
+                block_id,
+            )
+        except Exception as exc:
+            logger.info("Proxy getter %s failed for %s: %s", selector, address, exc)
+            return None
+        return self._extract_address(bytes(result))
+
+    async def _call_uint256_getter(
+        self,
+        chain_id: int,
+        address: str,
+        selector: str,
+        block_id: int | str,
+    ) -> int | None:
+        try:
+            result = bytes(
+                await self.web3_provider.eth_call(
+                    chain_id,
+                    {"to": address, "data": selector},
+                    block_id,
+                )
+            )
+        except Exception as exc:
+            logger.info("Proxy getter %s failed for %s: %s", selector, address, exc)
+            return None
+        return int.from_bytes(result, "big") if len(result) == 32 else None
 
     def _extract_address(self, slot_value: bytes) -> Optional[str]:
         """Extract address from 32-byte slot value (last 20 bytes)."""
-        if len(slot_value) != 32:
+        if len(slot_value) != 32 or slot_value[:12] != bytes(12):
             return None
 
         address_bytes = slot_value[12:32]

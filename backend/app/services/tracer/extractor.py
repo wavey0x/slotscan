@@ -42,7 +42,12 @@ class TransactionTraceExtractor:
         )
         self._normalize_diff(prestate_diff)
         missing = self._missing_initial_values(writes, prestate_diff)
-        if missing:
+        has_persistent_writes = any(
+            write.get("namespace", "persistent") == "persistent"
+            and write.get("address")
+            for write in writes
+        )
+        if has_persistent_writes:
             try:
                 full_prestate = await self.rpc_client.execute_prestate_trace(
                     chain_id,
@@ -127,21 +132,34 @@ class TransactionTraceExtractor:
         normalized_storage_by_address = {
             address: {
                 cls._word(raw_slot): cls._word(value)
-                for raw_slot, value in accounts.get(address, {})
-                .get("storage", {})
-                .items()
+                for raw_slot, value in state.get("storage", {}).items()
             }
-            for address in {address for address, _ in missing}
+            for address, state in accounts.items()
         }
+
+        # Full prestate mode records every storage word the execution observed,
+        # including unchanged reads such as Solidity dynamic-array lengths.
+        # Retain that bounded evidence. A word absent from both sides of the
+        # original diff is unchanged (or restored), so mirror it into post.
+        for address, storage in normalized_storage_by_address.items():
+            pre_storage = pre.setdefault(address, {}).setdefault("storage", {})
+            post_storage = post.setdefault(address, {}).setdefault("storage", {})
+            for slot, initial in storage.items():
+                absent_from_diff = slot not in pre_storage and slot not in post_storage
+                pre_storage.setdefault(slot, initial)
+                if absent_from_diff:
+                    post_storage[slot] = initial
+
         for address, slot in missing:
             initial = normalized_storage_by_address.get(address, {}).get(
                 slot,
                 ZERO_WORD,
             )
-            pre.setdefault(address, {}).setdefault("storage", {})[slot] = initial
+            pre_storage = pre.setdefault(address, {}).setdefault("storage", {})
+            post_storage = post.setdefault(address, {}).setdefault("storage", {})
+            absent_from_diff = slot not in pre_storage and slot not in post_storage
+            pre_storage.setdefault(slot, initial)
             # Only an omitted post value proves no durable change. A post-only
             # diff is the normal zero-to-nonzero net-change representation.
-            post.setdefault(address, {}).setdefault("storage", {}).setdefault(
-                slot,
-                initial,
-            )
+            if absent_from_diff:
+                post_storage[slot] = initial

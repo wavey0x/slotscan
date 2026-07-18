@@ -86,6 +86,8 @@ function storageView(overrides: ViewOverrides = {}) {
       is_verified: true,
       is_proxy: false,
       proxy_type: null,
+      layout_provenance: 'verified_source',
+      layout_source_address: ADDRESS,
       ...overrides.contract,
     },
     layout_id: layoutStatus === 'ok' ? LAYOUT_ID : null,
@@ -159,6 +161,25 @@ test('proxy and delegated views keep storage and effective code addresses distin
   await expect(page.locator('main header').getByText('Proxy · Verified')).toBeVisible();
   await expect(page.getByText(/Implementation/)).toBeVisible();
   await expect(page.getByRole('link', { name: '0x3333...3333' })).toBeVisible();
+});
+
+test('bytecode-equivalent layouts keep the target visibly unverified', async ({ page }) => {
+  await mockView(page, {
+    contract: {
+      is_verified: false,
+      layout_provenance: 'bytecode_equivalent',
+      layout_source_address: IMPLEMENTATION,
+    },
+  });
+  await page.goto(`/1/${ADDRESS}`);
+
+  await expect(page.locator('main header').getByText('Unverified')).toBeVisible();
+  await expect(
+    page.getByText(/Layout from verified bytecode-equivalent/),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Copy layout source address' }),
+  ).toBeVisible();
 });
 
 test('high slots stay exact strings in the table and disclosure', async ({ page }) => {

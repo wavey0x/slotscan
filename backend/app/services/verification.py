@@ -310,6 +310,12 @@ class VerificationService:
                 raise ValueError("expected a result object")
             if not result.get("SourceCode"):
                 return None
+            if result.get("SimilarMatch"):
+                logger.info(
+                    "Ignoring non-exact Etherscan SimilarMatch for %s",
+                    address,
+                )
+                return None
             return self._parse_etherscan_response(result)
         except httpx.RequestError as exc:
             logger.warning("Etherscan request failed: %s", exc)
@@ -400,7 +406,7 @@ class VerificationService:
 
         return VerificationResult(
             source="etherscan",
-            match_type="full",
+            match_type="exact_match",
             name=contract_name,
             compilation_target=None,
             compiler_version=compiler_version,

@@ -7,6 +7,12 @@ from web3 import Web3
 
 from app.config import Settings
 from app.models.domain import VerificationResult
+from app.models.domain import (
+    RawCompilerArtifact,
+    StorageLayout,
+    StorageType,
+    StorageVariable,
+)
 from app.services.decoder import TypeDecoder
 from app.services.layout import LayoutParser
 from app.services.resolver import (
@@ -143,6 +149,23 @@ class _MemoryBindings(_NoBindings):
         self.rows[(metadata.chain_id, metadata.address.lower())] = row
         return row
 
+    async def get_verified_layout_candidates(
+        self,
+        chain_id,
+        code_hash,
+        *,
+        limit=26,
+    ):
+        return [
+            row
+            for (row_chain_id, _), row in sorted(self.rows.items())
+            if row_chain_id == chain_id
+            and row.code_hash.lower() == code_hash.lower()
+            and row.is_verified
+            and not row.is_proxy
+            and row.storage_layout
+        ][:limit]
+
 class _Provider:
     def __init__(
         self,
@@ -234,6 +257,151 @@ def _resolver(
 
 
 class ResolverSourceIdentityTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _equivalence_fixture(runtime):
+        verification = VerificationResult(
+            source="sourcify",
+            match_type="exact_match",
+            name="Equivalent",
+            compilation_target={"Equivalent.sol": "Equivalent"},
+            compiler_version="0.8.30",
+            compiler_settings={"optimizer": {"enabled": False}},
+            sources={
+                "Equivalent.sol": (
+                    "contract Equivalent { uint256 public value; }"
+                )
+            },
+            language="Solidity",
+        )
+        value_type = StorageType(
+            "t_uint256",
+            "uint256",
+            "value",
+            "inplace",
+            32,
+        )
+        layout = StorageLayout(
+            "Equivalent",
+            [
+                StorageVariable(
+                    "value",
+                    0,
+                    0,
+                    32,
+                    value_type.id,
+                    value_type.label,
+                )
+            ],
+            {value_type.id: value_type},
+        )
+        artifact = RawCompilerArtifact(
+            fingerprint="ab" * 32,
+            language="Solidity",
+            compiler_version="0.8.30",
+            pipeline="solc-standard-json",
+            standard_input={},
+            compiler_output={
+                "contracts": {
+                    "Equivalent.sol": {
+                        "Equivalent": {
+                            "evm": {
+                                "deployedBytecode": {
+                                    "object": runtime.hex(),
+                                    "immutableReferences": {},
+                                    "linkReferences": {},
+                                }
+                            },
+                            "storageLayout": layout.to_dict(),
+                        }
+                    }
+                }
+            },
+            source_hashes={},
+        )
+        return verification, layout, artifact
+
+    async def test_unverified_duplicate_reuses_only_compiler_proven_layout(self):
+        source = Web3.to_checksum_address("0x" + "15" * 20)
+        metadata = b"\xa1\x64ipfs\x41\x01"
+        runtime = b"\x60\x00" + metadata + len(metadata).to_bytes(2, "big")
+        code_hash = Web3.keccak(runtime).hex()
+        verification, layout, artifact = self._equivalence_fixture(runtime)
+        cache = _MemorySourceCache()
+        await cache.save_verified(1, source, code_hash, verification)
+        bindings = _MemoryBindings()
+        bindings.rows[(1, source.lower())] = SimpleNamespace(
+            address=source.lower(),
+            code_hash=code_hash,
+            is_verified=True,
+            is_proxy=False,
+            storage_layout=layout.to_dict(),
+            name="Equivalent",
+        )
+        provider = _Provider(codes={DIRECT.lower(): runtime})
+        service = VerificationService(Settings(), http_client=object())
+        service._fetch_verification = AsyncMock(return_value=None)
+        parser = LayoutParser()
+        parser.parse_with_artifact = AsyncMock(
+            return_value=(layout, artifact)
+        )
+        resolver = ContractResolver(
+            web3_provider=provider,
+            settings=Settings(),
+            verification_service=service,
+            source_cache_repo=cache,
+            contract_repo=bindings,
+            layout_parser=parser,
+        )
+
+        result = await resolver.resolve(1, DIRECT)
+
+        self.assertFalse(result.is_verified)
+        self.assertEqual(result.layout_provenance, "bytecode_equivalent")
+        self.assertEqual(result.layout_source_address, source)
+        self.assertEqual(result.name, "Equivalent")
+        self.assertEqual(result.storage_layout.to_dict(), layout.to_dict())
+        self.assertEqual(
+            result.compiler_artifact_fingerprint,
+            artifact.fingerprint,
+        )
+
+    async def test_metadata_free_duplicate_remains_unresolved(self):
+        source = Web3.to_checksum_address("0x" + "15" * 20)
+        runtime = b"\x60\x00"
+        code_hash = Web3.keccak(runtime).hex()
+        verification, layout, artifact = self._equivalence_fixture(runtime)
+        cache = _MemorySourceCache()
+        await cache.save_verified(1, source, code_hash, verification)
+        bindings = _MemoryBindings()
+        bindings.rows[(1, source.lower())] = SimpleNamespace(
+            address=source.lower(),
+            code_hash=code_hash,
+            is_verified=True,
+            is_proxy=False,
+            storage_layout=layout.to_dict(),
+            name="Equivalent",
+        )
+        service = VerificationService(Settings(), http_client=object())
+        service._fetch_verification = AsyncMock(return_value=None)
+        parser = LayoutParser()
+        parser.parse_with_artifact = AsyncMock(
+            return_value=(layout, artifact)
+        )
+        resolver = ContractResolver(
+            web3_provider=_Provider(codes={DIRECT.lower(): runtime}),
+            settings=Settings(),
+            verification_service=service,
+            source_cache_repo=cache,
+            contract_repo=bindings,
+            layout_parser=parser,
+        )
+
+        result = await resolver.resolve(1, DIRECT)
+
+        self.assertIsNone(result.storage_layout)
+        self.assertIsNone(result.layout_provenance)
+        self.assertIsNone(result.layout_source_address)
+
     async def test_identical_bytecode_does_not_share_layouts_across_addresses(self):
         provider = _Provider(
             codes={

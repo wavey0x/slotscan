@@ -2,6 +2,7 @@
 
 import asyncio
 from bisect import bisect_right
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 import logging
 from dataclasses import asdict, dataclass
@@ -27,7 +28,11 @@ from app.services.tracer.preimage_resolver import PreimageResolver
 from app.services.tracer.slot_resolver import SlotPathResolver
 from app.services.layout_index import array_packing
 from app.services.layout_index import LayoutIndex, StorageLocation, StorageNamespace
-from app.services.tracer.journal import StorageJournal, StorageJournalBuilder
+from app.services.tracer.journal import (
+    StorageJournal,
+    StorageJournalBuilder,
+    WriteEffect,
+)
 from app.services.tracer.extractor import (
     TransactionTraceEvidence,
     TransactionTraceExtractor,
@@ -293,6 +298,11 @@ class TransactionAnalysisService:
             ]
 
         raw_changes.sort(key=lambda change: change[4])
+        storage_timelines = self._storage_value_timelines(
+            artifact,
+            journal,
+            contract_address,
+        )
         is_complete = (
             write_history_complete
             and code_attribution_complete
@@ -329,7 +339,12 @@ class TransactionAnalysisService:
                     for slot_hash, preimage in constants.items():
                         code_preimages.setdefault(slot_hash, preimage)
                 decoded_changes.extend(
-                    self._decode_changes(code_changes, code_layout, code_preimages)
+                    self._decode_changes(
+                        code_changes,
+                        code_layout,
+                        code_preimages,
+                        storage_timelines,
+                    )
                 )
             decoded_changes.sort(key=lambda change: change.change_index)
         else:
@@ -344,6 +359,7 @@ class TransactionAnalysisService:
                 raw_changes,
                 layout,
                 preimage_lookup,
+                storage_timelines,
             )
         self._apply_journal_metadata(decoded_changes, journal, contract_address)
         return TransactionDiff(
@@ -463,6 +479,94 @@ class TransactionAnalysisService:
         padded = hex_part.zfill(64)
         return "0x" + padded.lower()
 
+    def _storage_value_timelines(
+        self,
+        artifact: TransactionTraceArtifactData,
+        journal: StorageJournal,
+        contract_address: str,
+    ) -> dict[int, tuple[int | None, tuple[tuple[int, int], ...]]]:
+        """Return proven initial words plus durable writes for one owner."""
+        normalized_address = contract_address.lower()
+        initial_by_slot: dict[int, int] = {}
+        for raw_address, state in artifact.prestate_diff.get("pre", {}).items():
+            if raw_address.lower() != normalized_address:
+                continue
+            initial_by_slot.update(
+                {
+                    int(self._normalize_slot(slot), 16): int(
+                        self._normalize_value(value),
+                        16,
+                    )
+                    for slot, value in state.get("storage", {}).items()
+                }
+            )
+
+        writes_by_slot: dict[int, list[tuple[int, int]]] = {}
+        for history in journal.for_contract(
+            contract_address,
+            StorageNamespace.PERSISTENT,
+        ):
+            slot = int(history.slot, 16)
+            if history.initial_value is not None:
+                initial_by_slot.setdefault(slot, int(history.initial_value, 16))
+            for event in history.writes:
+                if event.effect == WriteEffect.REVERTED:
+                    continue
+                writes_by_slot.setdefault(slot, []).append(
+                    (event.step, int(event.value_after, 16))
+                )
+
+        return {
+            slot: (
+                initial_by_slot.get(slot),
+                tuple(sorted(writes_by_slot.get(slot, ()))),
+            )
+            for slot in initial_by_slot.keys() | writes_by_slot.keys()
+        }
+
+    @staticmethod
+    def _storage_value_at_step(
+        timelines: dict[int, tuple[int | None, tuple[tuple[int, int], ...]]],
+        slot: int,
+        step: int,
+    ) -> int | None:
+        timeline = timelines.get(slot)
+        if timeline is None:
+            return None
+        value, writes = timeline
+        for write_step, write_value in writes:
+            if write_step >= step:
+                break
+            value = write_value
+        return value
+
+    @staticmethod
+    def _array_match_covers_change(
+        match: dict | None,
+        old_value: str | None,
+        new_value: str,
+    ) -> bool:
+        if match is None:
+            return False
+        locations = match.get("element_locations")
+        if not locations or old_value is None:
+            return True
+        old_bytes = bytes.fromhex(old_value.removeprefix("0x")).rjust(32, b"\x00")
+        new_bytes = bytes.fromhex(new_value.removeprefix("0x")).rjust(32, b"\x00")
+        if old_bytes == new_bytes:
+            return True
+        return any(
+            old_bytes[
+                32 - location.byte_offset - location.byte_size:
+                32 - location.byte_offset
+            ]
+            != new_bytes[
+                32 - location.byte_offset - location.byte_size:
+                32 - location.byte_offset
+            ]
+            for _, location in locations
+        )
+
     @staticmethod
     def _vyper_layout_evidence_conflicts(
         layout: StorageLayout,
@@ -512,10 +616,14 @@ class TransactionAnalysisService:
         raw_changes: list[tuple[str, str | None, str, int | None, int]],
         layout: Optional[StorageLayout],
         preimage_lookup: Optional[dict[str, str]] = None,
+        storage_timelines: Optional[
+            dict[int, tuple[int | None, tuple[tuple[int, int], ...]]]
+        ] = None,
     ) -> list[StorageChange]:
         """Convert raw slot changes to decoded StorageChange objects."""
         decoded_changes = []
         preimage_lookup = preimage_lookup or {}
+        storage_timelines = storage_timelines or {}
         if layout:
             conflicting_bases = self._vyper_layout_evidence_conflicts(
                 layout,
@@ -581,7 +689,7 @@ class TransactionAnalysisService:
                     )
                     if match and match.get("encoding") == "mapping_to_array":
                         array_type = match.get("array_type")
-                        if not array_type or array_type.array_length is None:
+                        if not array_type:
                             continue
                         data_start = match.get("data_start_slot")
                         if data_start is not None:
@@ -594,6 +702,46 @@ class TransactionAnalysisService:
             [(root, False) for root in dynamic_array_index]
             + [(root, True) for root in mapping_to_array_index]
         ))
+
+        array_resolution_by_slot: dict[int, list[bool]] = {}
+        for slot_hex, old_value, new_value, _, exec_index in raw_changes:
+            slot_int = int(slot_hex, 16)
+            def length_at_step(length_slot: int, step: int = exec_index) -> int | None:
+                return self._storage_value_at_step(
+                    storage_timelines,
+                    length_slot,
+                    step,
+                )
+
+            match = (
+                self.slot_resolver.try_match_dynamic_array_slot(
+                    slot_int,
+                    layout,
+                    dynamic_array_index,
+                    length_at_step,
+                )
+                if layout and dynamic_array_index
+                else None
+            )
+            if match is None and layout and mapping_to_array_index:
+                match = self.slot_resolver.try_match_mapping_to_array_slot(
+                    slot_int,
+                    layout,
+                    mapping_to_array_index,
+                    mapping_to_array_roots,
+                    length_at_step,
+                )
+            resolved = self._array_match_covers_change(
+                match,
+                old_value,
+                new_value,
+            )
+            array_resolution_by_slot.setdefault(slot_int, []).append(resolved)
+        blocked_array_slots = {
+            slot
+            for slot, resolutions in array_resolution_by_slot.items()
+            if any(resolutions) and not all(resolutions)
+        }
 
         matched_slots: dict[int, dict] = {}
 
@@ -626,6 +774,13 @@ class TransactionAnalysisService:
                     slot_int = int(slot_hex, 16)
                 except Exception:
                     slot_int = 0
+
+                def length_at_step(length_slot: int) -> int | None:
+                    return self._storage_value_at_step(
+                        storage_timelines,
+                        length_slot,
+                        exec_index,
+                    )
 
                 legacy_match = legacy_vyper_index.get(slot_int)
                 if legacy_match:
@@ -669,19 +824,24 @@ class TransactionAnalysisService:
                     ))
                     continue
 
-                packed_array_changes = self._decode_packed_array_change(
-                    slot_int=slot_int,
-                    slot_hex=slot_hex,
-                    old_value=old_value,
-                    new_value=new_value,
-                    pc=pc,
-                    exec_index=exec_index,
-                    layout=layout,
-                    layout_index=layout_index,
-                    decoder=decoder,
-                    dynamic_array_index=dynamic_array_index,
-                    mapping_to_array_index=mapping_to_array_index,
-                    array_roots=array_roots,
+                packed_array_changes = (
+                    self._decode_packed_array_change(
+                        slot_int=slot_int,
+                        slot_hex=slot_hex,
+                        old_value=old_value,
+                        new_value=new_value,
+                        pc=pc,
+                        exec_index=exec_index,
+                        layout=layout,
+                        layout_index=layout_index,
+                        decoder=decoder,
+                        dynamic_array_index=dynamic_array_index,
+                        mapping_to_array_index=mapping_to_array_index,
+                        array_roots=array_roots,
+                        array_length=length_at_step,
+                    )
+                    if slot_int not in blocked_array_slots
+                    else None
                 )
                 if packed_array_changes is not None:
                     decoded_changes.extend(packed_array_changes)
@@ -841,11 +1001,16 @@ class TransactionAnalysisService:
                                     if encoding == "mapping_to_array":
                                         stats["mapping_to_array"] += 1
                                         resolution_path = "mapping_to_array"
-                                        array_match = self.slot_resolver.try_match_mapping_to_array_slot(
-                                            slot_int,
-                                            layout,
-                                            mapping_to_array_index,
-                                            mapping_to_array_roots,
+                                        array_match = (
+                                            self.slot_resolver.try_match_mapping_to_array_slot(
+                                                slot_int,
+                                                layout,
+                                                mapping_to_array_index,
+                                                mapping_to_array_roots,
+                                                length_at_step,
+                                            )
+                                            if slot_int not in blocked_array_slots
+                                            else None
                                         )
                                         if array_match:
                                             variable_path = array_match["path"]
@@ -857,10 +1022,15 @@ class TransactionAnalysisService:
                                             )
                                             decode_type = array_match.get("decode_type")
                                         else:
-                                            array_index = 0
-                                            element_type = preimage_match.get("element_type")
-                                            if element_type:
-                                                decode_type = element_type
+                                            variable = None
+                                            variable_path = None
+                                            mapping_base_slot = None
+                                            mapping_key = None
+                                            is_mapping = False
+                                            encoding = None
+                                            key_type = None
+                                            value_type = None
+                                            decode_type = None
 
                                     if decode_type:
                                         try:
@@ -893,8 +1063,17 @@ class TransactionAnalysisService:
                                             pass
 
                             # Try dynamic array
-                            if not variable and dynamic_array_index:
-                                array_match = self.slot_resolver.try_match_dynamic_array_slot(slot_int, layout, dynamic_array_index)
+                            if (
+                                not variable
+                                and dynamic_array_index
+                                and slot_int not in blocked_array_slots
+                            ):
+                                array_match = self.slot_resolver.try_match_dynamic_array_slot(
+                                    slot_int,
+                                    layout,
+                                    dynamic_array_index,
+                                    length_at_step,
+                                )
                                 if array_match:
                                     stats["dynamic_array"] += 1
                                     resolution_path = "dynamic_array"
@@ -929,12 +1108,17 @@ class TransactionAnalysisService:
                                             pass
 
                             # Try mapping-to-array
-                            if not variable and mapping_to_array_index:
+                            if (
+                                not variable
+                                and mapping_to_array_index
+                                and slot_int not in blocked_array_slots
+                            ):
                                 m2a_match = self.slot_resolver.try_match_mapping_to_array_slot(
                                     slot_int,
                                     layout,
                                     mapping_to_array_index,
                                     mapping_to_array_roots,
+                                    length_at_step,
                                 )
                                 if m2a_match:
                                     stats["mapping_to_array"] += 1
@@ -1121,6 +1305,8 @@ class TransactionAnalysisService:
         for i, change in enumerate(decoded_changes):
             if change.variable is None:
                 slot_int = int(change.slot, 16)
+                if slot_int in blocked_array_slots:
+                    continue
                 for base_slot_int, base_match in matched_slots.items():
                     offset = slot_int - base_slot_int
                     if offset <= 0:
@@ -1178,6 +1364,7 @@ class TransactionAnalysisService:
         dynamic_array_index: dict,
         mapping_to_array_index: dict[int, dict],
         array_roots: tuple[tuple[int, bool], ...],
+        array_length: Callable[[int], int | None],
     ) -> list[StorageChange] | None:
         """Expand a changed packed-array word into every changed element.
 
@@ -1231,10 +1418,22 @@ class TransactionAnalysisService:
                     candidate_type = entry.get("element_type")
                     candidate_variable = entry.get("variable")
                 else:
-                    candidate_variable, _, candidate_type = entry
+                    candidate_type = entry.get("element_type")
+                    candidate_variable = entry.get("variable")
 
                 packing = array_packing(candidate_type)
                 if not packing.is_packed:
+                    continue
+                proven_length = entry.get("array_length")
+                if proven_length is None:
+                    length_slot = entry.get("array_length_slot")
+                    if length_slot is not None:
+                        proven_length = array_length(
+                            int(length_slot, 16)
+                            if isinstance(length_slot, str)
+                            else length_slot
+                        )
+                if proven_length is None:
                     continue
 
                 variable = candidate_variable
@@ -1242,7 +1441,7 @@ class TransactionAnalysisService:
                 locations = packing.locations_in_slot(
                     data_start,
                     slot_int,
-                    length=(entry.get("array_length") if is_mapping_array else None),
+                    length=proven_length,
                 )
                 if is_mapping_array:
                     encoding = "mapping_to_array"

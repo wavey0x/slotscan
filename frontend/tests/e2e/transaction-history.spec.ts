@@ -18,6 +18,8 @@ function resolutionContract(overrides: Record<string, unknown>) {
     name: null,
     is_proxy: false,
     is_verified: false,
+    layout_provenance: null,
+    layout_source_address: null,
     implementation_addresses: [],
     code_addresses: ['0x1111111111111111111111111111111111111111'],
     first_write_step: 1,
@@ -506,6 +508,28 @@ test('unnamed contracts distinguish layout, source, and raw-slot states', async 
   const named = page.getByRole('heading', { name: 'NamedWithoutLayout' }).locator('xpath=ancestor::section');
   await expect(named.getByText('layout unavailable · raw slots', { exact: true })).toBeVisible();
   await expect(page.getByText('Unresolved contract', { exact: true })).toHaveCount(0);
+});
+
+test('transaction histories disclose proven equivalent layout sources', async ({ page }) => {
+  const layoutSource = '0x5555555555555555555555555555555555555555';
+  const contract = resolutionContract({
+    layout_available: true,
+    layout_provenance: 'bytecode_equivalent',
+    layout_source_address: layoutSource,
+  });
+  await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
+    await route.fulfill({ json: resolutionResponse([contract]) });
+  });
+
+  await page.goto(`/1/tx/${RESOLUTION_TX}`);
+  await page.getByTestId('contract-toggle').click();
+
+  await expect(
+    page.getByText(/Layout from verified bytecode-equivalent/),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Copy layout source address' }),
+  ).toBeVisible();
 });
 
 test('structured values show only changed fields without spilling', async ({ page }) => {

@@ -63,7 +63,14 @@ class CompilerArtifactTests(unittest.TestCase):
         self.assertEqual(selection[""], ["ast"])
         self.assertEqual(
             selection["*"],
-            ["storageLayout", "transientStorageLayout"],
+            [
+                "storageLayout",
+                "transientStorageLayout",
+                "metadata",
+                "evm.deployedBytecode.object",
+                "evm.deployedBytecode.immutableReferences",
+                "evm.deployedBytecode.linkReferences",
+            ],
         )
 
     def test_fingerprint_covers_exact_compiler_input(self):

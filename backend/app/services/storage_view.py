@@ -312,6 +312,12 @@ class StorageViewService:
             "is_verified": metadata.is_verified,
             "is_proxy": metadata.is_proxy,
             "proxy_type": metadata.proxy_type,
+            "layout_provenance": metadata.layout_provenance,
+            "layout_source_address": (
+                Web3.to_checksum_address(metadata.layout_source_address)
+                if metadata.layout_source_address
+                else None
+            ),
         }
         block_wire = {
             "number": hex(attempt.block_ref.number),

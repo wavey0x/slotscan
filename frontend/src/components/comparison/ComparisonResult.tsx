@@ -114,6 +114,17 @@ function Subject({
           </a>
         </span>
       </div>
+      {subject.layout_provenance === 'bytecode_equivalent'
+        && subject.layout_source_address && (
+        <div className="mt-1 text-[10px] text-gray-500">
+          Layout from verified bytecode-equivalent{' '}
+          {addressLink(
+            chain,
+            subject.layout_source_address,
+            `Copy ${side} layout source address`,
+          )}
+        </div>
+      )}
     </div>
   );
 }

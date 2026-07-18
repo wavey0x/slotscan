@@ -966,6 +966,12 @@ async def get_transaction_storage_history(
                 name=projection.display_name,
                 is_proxy=metadata.is_proxy if metadata else False,
                 is_verified=metadata.is_verified if metadata else False,
+                layout_provenance=(
+                    metadata.layout_provenance if metadata else None
+                ),
+                layout_source_address=(
+                    metadata.layout_source_address if metadata else None
+                ),
                 implementation_addresses=list(dict.fromkeys(implementations)),
                 code_addresses=list(projection.code_addresses),
                 first_write_step=min(steps) if steps else None,

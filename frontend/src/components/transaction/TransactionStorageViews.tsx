@@ -148,6 +148,28 @@ export function ContractSection({
               ))}
             </div>
           )}
+          {contract.layout_provenance === 'bytecode_equivalent'
+            && contract.layout_source_address && (
+            <div className="mb-1 text-[10px] text-gray-500">
+              Layout from verified bytecode-equivalent{' '}
+              <span className="inline-flex items-center gap-0.5">
+                <a
+                  href={getAddressExplorerUrl(chain, contract.layout_source_address)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:underline"
+                  title={contract.layout_source_address}
+                >
+                  {truncateAddress(contract.layout_source_address)}
+                </a>
+                <CopyButton
+                  value={contract.layout_source_address}
+                  label="Copy layout source address"
+                  className="-my-1"
+                />
+              </span>
+            </div>
+          )}
           {resolutionNotice && (
             <div className={cn(
               'mb-1 text-[10px]',

@@ -16,6 +16,8 @@ function subject({
   status = 'ok',
   block = '0x7b',
   hash = FROM_HASH,
+  provenance = 'verified_source',
+  layoutSource = input,
 }: {
   input: string;
   kind?: 'direct' | 'proxy' | 'eip7702';
@@ -24,6 +26,8 @@ function subject({
   status?: string;
   block?: string;
   hash?: string;
+  provenance?: 'verified_source' | 'bytecode_equivalent' | null;
+  layoutSource?: string | null;
 }) {
   return {
     input_address: input,
@@ -32,6 +36,8 @@ function subject({
     kind,
     block_ref: { number: block, hash },
     name,
+    layout_provenance: provenance,
+    layout_source_address: layoutSource,
     layout_status: status,
   };
 }
@@ -235,6 +241,24 @@ test('prefill focuses To, validates locally, and submits URL-owned intent with E
   expect(requests).toHaveLength(1);
   expect(requests[0].searchParams.get('from_address')).toBe(FROM);
   expect(requests[0].searchParams.get('to_address')).toBe(TO);
+});
+
+test('comparison subjects disclose bytecode-equivalent layout sources', async ({ page }) => {
+  await mockComparison(page, availableReport({
+    from_subject: subject({
+      input: FROM,
+      provenance: 'bytecode_equivalent',
+      layoutSource: THIRD,
+    }),
+  }));
+  await page.goto(`/1/compare?from=${FROM}&to=${TO}`);
+
+  await expect(
+    page.getByText(/Layout from verified bytecode-equivalent/),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Copy From layout source address' }),
+  ).toBeVisible();
 });
 
 test('malformed exact-link hashes fail inline without making an API request', async ({ page }) => {

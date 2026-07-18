@@ -164,6 +164,8 @@ class ResolvedLayoutSubject:
     name: str | None
     layout_status: str
     layout: Any | None
+    layout_provenance: str | None = None
+    layout_source_address: str | None = None
 
     def to_wire(self) -> dict[str, Any]:
         return {
@@ -176,6 +178,8 @@ class ResolvedLayoutSubject:
                 "hash": self.block_hash,
             },
             "name": self.name,
+            "layout_provenance": self.layout_provenance,
+            "layout_source_address": self.layout_source_address,
             "layout_status": self.layout_status,
         }
 

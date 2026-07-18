@@ -332,6 +332,8 @@ class ContractMetadata:
     compiler_settings: Optional[dict] = None
     storage_layout: Optional[StorageLayout] = None
     compiler_artifact_fingerprint: Optional[str] = None
+    layout_provenance: Optional[str] = None
+    layout_source_address: Optional[str] = None
 
 
 @dataclass

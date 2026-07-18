@@ -40,6 +40,28 @@ class ContractRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_verified_layout_candidates(
+        self,
+        chain_id: int,
+        code_hash: str,
+        *,
+        limit: int = 26,
+    ) -> list[Contract]:
+        """Return bounded exact-address candidates for equivalence proof."""
+        result = await self.session.execute(
+            select(Contract)
+            .where(
+                Contract.chain_id == chain_id,
+                Contract.code_hash == code_hash.lower(),
+                Contract.is_verified.is_(True),
+                Contract.is_proxy.is_(False),
+                Contract.storage_layout.is_not(None),
+            )
+            .order_by(Contract.address)
+            .limit(limit)
+        )
+        return list(result.scalars())
+
     async def save(self, metadata: ContractMetadata) -> Contract:
         """Save or update contract metadata using upsert."""
         storage_layout_dict = None
@@ -65,6 +87,12 @@ class ContractRepository:
             "verification_source": metadata.verification_source,
             "compiler_version": metadata.compiler_version,
             "compiler_artifact_fingerprint": metadata.compiler_artifact_fingerprint,
+            "layout_provenance": metadata.layout_provenance,
+            "layout_source_address": (
+                metadata.layout_source_address.lower()
+                if metadata.layout_source_address
+                else None
+            ),
             "storage_layout": storage_layout_dict,
             "verified_at": datetime.utcnow() if metadata.is_verified else None,
             "source_checked_at": datetime.utcnow(),
@@ -83,6 +111,8 @@ class ContractRepository:
                 "verification_source": values["verification_source"],
                 "compiler_version": values["compiler_version"],
                 "compiler_artifact_fingerprint": values["compiler_artifact_fingerprint"],
+                "layout_provenance": values["layout_provenance"],
+                "layout_source_address": values["layout_source_address"],
                 "storage_layout": values["storage_layout"],
                 "verified_at": values["verified_at"],
                 "source_checked_at": values["source_checked_at"],
@@ -122,6 +152,12 @@ class ContractRepository:
             "name": metadata.name,
             "compiler_version": metadata.compiler_version,
             "compiler_artifact_fingerprint": metadata.compiler_artifact_fingerprint,
+            "layout_provenance": metadata.layout_provenance,
+            "layout_source_address": (
+                metadata.layout_source_address.lower()
+                if metadata.layout_source_address
+                else None
+            ),
             "storage_layout": layout,
             "source_checked_at": datetime.utcnow(),
         }
@@ -153,4 +189,6 @@ class ContractRepository:
             compiler_version=contract.compiler_version,
             storage_layout=storage_layout,
             compiler_artifact_fingerprint=contract.compiler_artifact_fingerprint,
+            layout_provenance=contract.layout_provenance,
+            layout_source_address=contract.layout_source_address,
         )

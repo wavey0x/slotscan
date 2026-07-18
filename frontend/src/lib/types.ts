@@ -19,6 +19,8 @@ interface StorageViewContract {
   is_proxy: boolean;
   proxy_type: string | null;
   is_verified: boolean;
+  layout_provenance: 'verified_source' | 'bytecode_equivalent' | null;
+  layout_source_address: string | null;
 }
 
 interface StorageViewMember {
@@ -189,6 +191,8 @@ export interface ResolvedLayoutSubject {
     hash: string;
   };
   name: string | null;
+  layout_provenance: 'verified_source' | 'bytecode_equivalent' | null;
+  layout_source_address: string | null;
   layout_status:
     | 'ok'
     | 'unverified'
@@ -350,6 +354,8 @@ export interface ContractHistoryResponse {
   name: string | null;
   is_proxy: boolean;
   is_verified: boolean;
+  layout_provenance: 'verified_source' | 'bytecode_equivalent' | null;
+  layout_source_address: string | null;
   implementation_addresses: string[];
   code_addresses: string[];
   first_write_step: number | null;

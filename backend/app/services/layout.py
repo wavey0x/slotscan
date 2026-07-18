@@ -419,7 +419,14 @@ class LayoutParser:
         std_settings: dict = {
             "outputSelection": {
                 "*": {
-                    "*": ["storageLayout", "transientStorageLayout"],
+                    "*": [
+                        "storageLayout",
+                        "transientStorageLayout",
+                        "metadata",
+                        "evm.deployedBytecode.object",
+                        "evm.deployedBytecode.immutableReferences",
+                        "evm.deployedBytecode.linkReferences",
+                    ],
                     "": ["ast"],
                 }
             }

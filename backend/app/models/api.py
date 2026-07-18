@@ -37,6 +37,10 @@ class StorageViewContractResponse(BaseModel):
     is_verified: bool
     is_proxy: bool
     proxy_type: Optional[str] = None
+    layout_provenance: Optional[
+        Literal["verified_source", "bytecode_equivalent"]
+    ] = None
+    layout_source_address: Optional[str] = None
 
 
 class StorageRulesResponse(BaseModel):
@@ -181,6 +185,10 @@ class ResolvedLayoutSubjectResponse(BaseModel):
     kind: Literal["direct", "proxy", "eip7702"]
     block_ref: BlockRefResponse
     name: Optional[str] = None
+    layout_provenance: Optional[
+        Literal["verified_source", "bytecode_equivalent"]
+    ] = None
+    layout_source_address: Optional[str] = None
     layout_status: Literal[
         "ok",
         "unverified",
@@ -351,6 +359,10 @@ class ContractHistoryResponse(BaseModel):
     name: Optional[str] = None
     is_proxy: bool = False
     is_verified: bool = False
+    layout_provenance: Optional[
+        Literal["verified_source", "bytecode_equivalent"]
+    ] = None
+    layout_source_address: Optional[str] = None
     implementation_addresses: list[str] = Field(default_factory=list)
     code_addresses: list[str] = Field(default_factory=list)
     first_write_step: Optional[int] = None

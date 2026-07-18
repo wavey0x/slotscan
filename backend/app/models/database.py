@@ -41,6 +41,8 @@ class Contract(Base):
     verification_source = Column(String(50))
     compiler_version = Column(String(50))
     compiler_artifact_fingerprint = Column(String(64))
+    layout_provenance = Column(String(32))
+    layout_source_address = Column(String(100))
 
     # Storage layout (JSONB)
     storage_layout = Column(JSONB)
@@ -130,6 +132,8 @@ class HistoricalContractResolution(Base):
     name = Column(String(200))
     compiler_version = Column(String(50))
     compiler_artifact_fingerprint = Column(String(64))
+    layout_provenance = Column(String(32))
+    layout_source_address = Column(String(100))
     storage_layout = Column(JSONB)
     created_at = Column(DateTime, server_default=func.now())
     source_checked_at = Column(DateTime)

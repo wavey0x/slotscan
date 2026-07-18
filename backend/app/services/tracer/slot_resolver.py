@@ -1,6 +1,7 @@
 """Slot resolution - matching storage slots to layout variables."""
 
 from bisect import bisect_right
+from collections.abc import Callable
 import logging
 import re
 from typing import Optional
@@ -193,7 +194,7 @@ class SlotPathResolver:
                                 (value_type.element_type and "[]" in (value_type.label or ""))
                             )
                         )
-                        if is_value_array and value_type.array_length is not None:
+                        if is_value_array:
                             element_type = layout.get_type(value_type.element_type) if value_type and value_type.element_type else None
                             packing = array_packing(element_type)
 
@@ -503,9 +504,9 @@ class SlotPathResolver:
     def build_dynamic_array_index(
         self,
         layout: StorageLayout,
-    ) -> dict[int, tuple[StorageVariable, ArrayPacking, StorageType | None]]:
-        """Build index only for arrays with a compiler-declared bound."""
-        index: dict[int, tuple[StorageVariable, ArrayPacking, StorageType | None]] = {}
+    ) -> dict[int, dict]:
+        """Build dynamic-array descriptors; callers must supply runtime bounds."""
+        index: dict[int, dict] = {}
         for var in layout.variables:
             var_type = layout.get_type(var.type_id)
             if not var_type:
@@ -516,15 +517,19 @@ class SlotPathResolver:
             )
             if not is_dynamic_array:
                 continue
-            if var_type.array_length is None:
-                continue
 
             encoded_slot = abi_encode(["uint256"], [var.slot])
             data_start = int.from_bytes(Web3.keccak(encoded_slot), "big")
 
             element_type = layout.get_type(var_type.element_type) if var_type.element_type else None
             packing = array_packing(element_type)
-            index[data_start] = (var, packing, element_type)
+            index[data_start] = {
+                "variable": var,
+                "array_packing": packing,
+                "element_type": element_type,
+                "array_length": var_type.array_length,
+                "array_length_slot": var.slot,
+            }
             logger.debug(
                 "Dynamic array %s: data_start=%s, packing=%s",
                 var.name,
@@ -843,18 +848,24 @@ class SlotPathResolver:
         self,
         slot_int: int,
         layout: StorageLayout,
-        dynamic_array_index: dict[int, tuple[StorageVariable, ArrayPacking, StorageType | None]],
+        dynamic_array_index: dict[int, dict],
+        array_length: Callable[[int], int | None] | None = None,
     ) -> Optional[dict]:
         """Try to match a slot to a dynamic array element."""
-        for data_start, (var, packing, element_type) in dynamic_array_index.items():
+        for data_start, match_info in dynamic_array_index.items():
             if slot_int < data_start:
                 continue
 
             offset_from_start = slot_int - data_start
-            array_type = layout.get_type(var.type_id)
-            if not array_type or array_type.array_length is None:
+            var = match_info["variable"]
+            packing = match_info["array_packing"]
+            element_type = match_info.get("element_type")
+            proven_length = match_info.get("array_length")
+            if proven_length is None and array_length is not None:
+                proven_length = array_length(match_info["array_length_slot"])
+            if proven_length is None:
                 continue
-            if offset_from_start >= packing.slot_count(array_type.array_length):
+            if offset_from_start >= packing.slot_count(proven_length):
                 continue
 
             if packing.is_packed:
@@ -864,7 +875,11 @@ class SlotPathResolver:
                     "array_index": None,
                     "struct_slot_offset": 0,
                     "field_name": None,
-                    "element_locations": packing.locations_in_slot(data_start, slot_int),
+                    "element_locations": packing.locations_in_slot(
+                        data_start,
+                        slot_int,
+                        length=proven_length,
+                    ),
                     "path": f"{var.name} (packed word)",
                     "encoding": "dynamic_array",
                     "element_type": element_type,
@@ -945,6 +960,7 @@ class SlotPathResolver:
         layout: StorageLayout,
         mapping_to_array_index: dict[int, dict],
         mapping_to_array_roots: tuple[int, ...] | None = None,
+        array_length: Callable[[int], int | None] | None = None,
     ) -> Optional[dict]:
         """Try to match a slot to an element of a mapping-to-array."""
         roots = (
@@ -960,10 +976,14 @@ class SlotPathResolver:
             packing = match_info.get("array_packing") or array_packing(
                 match_info.get("element_type")
             )
-            array_length = match_info.get("array_length")
-            if array_length is None:
+            proven_length = match_info.get("array_length")
+            if proven_length is None and array_length is not None:
+                length_slot = match_info.get("array_length_slot")
+                if length_slot is not None:
+                    proven_length = array_length(int(length_slot, 16))
+            if proven_length is None:
                 continue
-            if offset_from_start >= packing.slot_count(array_length):
+            if offset_from_start >= packing.slot_count(proven_length):
                 continue
             element_type = match_info.get("element_type")
             variable = match_info.get("variable")
@@ -981,7 +1001,7 @@ class SlotPathResolver:
                     "mapping_key": mapping_key,
                     "field_name": None,
                     "element_locations": packing.locations_in_slot(
-                        data_start, slot_int, length=array_length
+                        data_start, slot_int, length=proven_length
                     ),
                     "path": f"{base_path} (packed word)",
                     "encoding": "mapping_to_array",

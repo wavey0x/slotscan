@@ -203,6 +203,8 @@ class LayoutComparisonService:
                 block_number=attempt.block_ref.number,
                 block_hash=attempt.block_ref.hash,
                 name=None,
+                layout_provenance=None,
+                layout_source_address=None,
                 layout_status="not_contract",
                 layout=None,
             )
@@ -244,6 +246,12 @@ class LayoutComparisonService:
             block_number=context.attempt.block_ref.number,
             block_hash=context.attempt.block_ref.hash,
             name=metadata.name,
+            layout_provenance=metadata.layout_provenance,
+            layout_source_address=(
+                Web3.to_checksum_address(metadata.layout_source_address)
+                if metadata.layout_source_address
+                else None
+            ),
             layout_status=layout_status,
             layout=context.layout,
         )

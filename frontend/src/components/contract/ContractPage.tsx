@@ -148,6 +148,17 @@ export function ContractPage({ chain, address }: ContractPageProps) {
               </a>
             </span>
             <span>{view.layout.variables.length} variables</span>
+            {contract!.layout_provenance === 'bytecode_equivalent'
+              && contract!.layout_source_address && (
+              <span>
+                Layout from verified bytecode-equivalent{' '}
+                {addressLink(
+                  chain,
+                  contract!.layout_source_address,
+                  'Copy layout source address',
+                )}
+              </span>
+            )}
             {isFetching && <span>Refreshing…</span>}
             {error && <span className="text-red">Refresh failed · showing last exact block</span>}
           </div>

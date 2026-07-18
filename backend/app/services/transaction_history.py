@@ -157,7 +157,13 @@ class TransactionHistoryService:
                         metadata=metadata,
                         status=(
                             "resolved"
-                            if metadata.is_verified
+                            if (
+                                metadata.is_verified
+                                or (
+                                    (resolved_layout := self._layout(metadata))
+                                    and resolved_layout.variables
+                                )
+                            )
                             else "no_verified_source"
                         ),
                     )

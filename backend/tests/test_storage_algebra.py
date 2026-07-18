@@ -460,7 +460,7 @@ def five():
 
         self.assertEqual(match["path"], f"configs[{outer_key}][{inner_key}]")
 
-    def test_unbounded_mapping_array_data_requires_step_time_length(self):
+    def test_nested_mapping_array_uses_step_time_length_evidence(self):
         address_type = StorageType(
             "t_address", "address", "value", "inplace", 20
         )
@@ -602,18 +602,42 @@ def five():
             raw_changes,
             layout,
             lookup,
+            {
+                int(length_slot, 16): (
+                    0,
+                    ((1, 1),),
+                )
+            },
         )
 
         base_path = f"incentives[{round_number}][{gauge}]"
         self.assertEqual(changes[0].variable_path, base_path)
-        self.assertIs(changes[0].variable, incentives)
-        self.assertTrue(all(change.variable is None for change in changes[1:]))
-        self.assertTrue(all(change.variable_path is None for change in changes[1:]))
-        self.assertTrue(all(change.array_index is None for change in changes[1:]))
+        self.assertEqual(
+            [change.variable_path for change in changes[1:8]],
+            [f"{base_path}[0].{name}" for name, _ in member_specs],
+        )
+        self.assertTrue(all(change.variable is incentives for change in changes[:8]))
+        self.assertTrue(all(change.array_index == 0 for change in changes[1:8]))
+        self.assertTrue(
+            all(change.encoding == "mapping_to_array" for change in changes[1:8])
+        )
+        self.assertIsNone(changes[8].variable)
+        self.assertIsNone(changes[8].variable_path)
 
         slot_responses = _group_changes_by_slot(changes, layout)
         self.assertEqual(slot_responses[0].variable_path, base_path)
-        self.assertTrue(all(slot.variable_name is None for slot in slot_responses[1:]))
+        self.assertEqual(
+            [slot.variable_path for slot in slot_responses[1:8]],
+            [f"{base_path}[0].{name}" for name, _ in member_specs],
+        )
+        self.assertTrue(
+            all(slot.variable_name == "incentives" for slot in slot_responses[:8])
+        )
+        self.assertEqual(
+            [slot.struct_field for slot in slot_responses[1:8]],
+            [name for name, _ in member_specs],
+        )
+        self.assertIsNone(slot_responses[8].variable_name)
 
     def test_nested_vyper_mapping_uses_hash_before_key(self):
         value_type = StorageType("uint256", "uint256", "value", "inplace", 32)
@@ -1043,7 +1067,7 @@ class PackedArrayLayoutTests(unittest.TestCase):
 
         self.assertEqual(match["path"], "values[1] (packed word)")
 
-    def test_unbounded_dynamic_array_slots_remain_unresolved_without_length(self):
+    def test_unbounded_dynamic_array_slots_require_proven_length(self):
         dynamic_array = StorageType(
             id="t_array(t_uint32)dyn_storage",
             label="uint32[]",
@@ -1083,7 +1107,79 @@ class PackedArrayLayoutTests(unittest.TestCase):
         self.assertIsNone(changes[0].variable)
         self.assertIsNone(changes[0].variable_path)
         self.assertIsNone(changes[0].array_index)
-        self.assertEqual(SlotPathResolver().build_dynamic_array_index(layout), {})
+        index = SlotPathResolver().build_dynamic_array_index(layout)
+        self.assertIn(data_start, index)
+        self.assertIsNone(
+            SlotPathResolver().try_match_dynamic_array_slot(
+                data_start,
+                layout,
+                index,
+            )
+        )
+
+        changes = tracer._decode_changes(
+            [
+                (
+                    f"0x{data_start:064x}",
+                    "0x" + "00" * 32,
+                    f"0x{7 << 32:064x}",
+                    10,
+                    20,
+                )
+            ],
+            layout,
+            storage_timelines={3: (2, ())},
+        )
+        self.assertEqual([change.variable_path for change in changes], ["values[1]"])
+
+    def test_mixed_step_time_array_bounds_leave_grouped_slot_raw(self):
+        dynamic_array = StorageType(
+            id="t_array(t_uint32)dyn_storage",
+            label="uint32[]",
+            kind="array",
+            encoding="dynamic_array",
+            num_bytes=32,
+            element_type=self.element.id,
+        )
+        variable = StorageVariable(
+            name="values",
+            slot=3,
+            offset=0,
+            size=32,
+            type_id=dynamic_array.id,
+            label=dynamic_array.label,
+        )
+        layout = StorageLayout(
+            contract_name="PackedDynamic",
+            variables=[variable],
+            types={self.element.id: self.element, dynamic_array.id: dynamic_array},
+        )
+        data_start = int.from_bytes(Web3.keccak(encode(["uint256"], [3])), "big")
+        tracer = TransactionAnalysisService(object(), Settings(), TypeDecoder())
+
+        changes = tracer._decode_changes(
+            [
+                (
+                    f"0x{data_start:064x}",
+                    "0x" + "00" * 32,
+                    f"0x{7 << 32:064x}",
+                    10,
+                    20,
+                ),
+                (
+                    f"0x{data_start:064x}",
+                    f"0x{7 << 32:064x}",
+                    f"0x{8 << 32:064x}",
+                    11,
+                    30,
+                ),
+            ],
+            layout,
+            storage_timelines={3: (2, ((25, 1),))},
+        )
+
+        self.assertTrue(all(change.variable is None for change in changes))
+        self.assertTrue(all(change.variable_path is None for change in changes))
 
 
 if __name__ == "__main__":

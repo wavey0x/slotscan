@@ -17,9 +17,14 @@ from app.services.namespace_storage import (
 )
 from app.services.resolver import (
     BEACON_IMPL_SELECTOR,
+    EIP1822_SLOT,
+    EIP1967_BEACON_SLOT,
+    EIP1967_IMPL_SLOT,
+    ERC897_PROXY_TYPE_SELECTOR,
     EIP1167_PREFIX,
     EIP1167_SUFFIX,
     GNOSIS_SAFE_MASTER_COPY_SELECTOR,
+    ZEPPELINOS_IMPL_SLOT,
     ContractResolver,
 )
 from app.services.tracer.slot_resolver import SlotPathResolver
@@ -598,45 +603,36 @@ class _Resolver(ContractResolver):
 
 
 class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_storage_slots_and_getters_do_not_substitute_implementations(self):
-        implementation = Web3.to_checksum_address("0x" + "22" * 20)
-
+    async def test_push_data_does_not_trigger_proxy_slot_reads(self):
         class Provider:
             def __init__(self):
                 self.storage_calls = []
-                self.call_count = 0
 
             async def get_storage_at(self, chain_id, address, slot, block):
                 self.storage_calls.append(slot)
-                return bytes(12) + bytes.fromhex(implementation[2:])
-
-            async def eth_call(self, chain_id, transaction, block):
-                self.call_count += 1
-                return bytes(12) + bytes.fromhex(implementation[2:])
 
         provider = Provider()
         detected = await _make_resolver(provider).detect_proxy(
             1,
             ADDRESS,
             block=123,
-            bytecode=(
-                b"\x63"
-                + bytes.fromhex(BEACON_IMPL_SELECTOR[2:])
-                + bytes.fromhex(GNOSIS_SAFE_MASTER_COPY_SELECTOR[2:])
-                + b"\xf4"
-            ),
+            bytecode=b"\x64\x00\xf4\x00\x00\x00",
         )
 
         self.assertIsNone(detected)
         self.assertEqual(provider.storage_calls, [])
-        self.assertEqual(provider.call_count, 0)
 
     async def test_eip1167_is_detected_without_slot_reads(self):
         implementation = Web3.to_checksum_address("0x" + "22" * 20)
+        test = self
 
         class Provider:
             async def get_storage_at(self, *args):
                 raise AssertionError("minimal proxy must not read proxy slots")
+
+            async def get_code(self, chain_id, address, block):
+                test.assertEqual(address, implementation)
+                return b"\x60\x00"
 
         bytecode = (
             EIP1167_PREFIX
@@ -657,8 +653,8 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
         implementation = Web3.to_checksum_address("0x" + "22" * 20)
 
         class Provider:
-            async def get_storage_at(self, *args):
-                raise AssertionError("inexact runtime must not read proxy slots")
+            async def get_storage_at(self, chain_id, address, slot, block):
+                return bytes(32)
 
         bytecode = (
             EIP1167_PREFIX
@@ -671,6 +667,207 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
             ADDRESS,
             block=123,
             bytecode=bytecode,
+        )
+
+        self.assertIsNone(detected)
+
+    async def test_eip1967_implementation_requires_code_at_the_same_block(self):
+        implementation = Web3.to_checksum_address("0x" + "22" * 20)
+        test = self
+
+        class Provider:
+            async def get_storage_at(self, chain_id, address, slot, block):
+                test.assertEqual(block, 123)
+                if slot == EIP1967_IMPL_SLOT:
+                    return bytes(12) + bytes.fromhex(implementation[2:])
+                return bytes(32)
+
+            async def get_code(self, chain_id, address, block):
+                test.assertEqual((address, block), (implementation, 123))
+                return b"\x60\x00"
+
+        detected = await _make_resolver(Provider()).detect_proxy(
+            1,
+            ADDRESS,
+            block=123,
+            bytecode=b"\x60\x00\xf4",
+        )
+
+        self.assertEqual(detected.proxy_type, "eip1967")
+        self.assertEqual(detected.implementation_address, implementation)
+
+    async def test_eip1967_rejects_dirty_address_words_and_empty_targets(self):
+        implementation = Web3.to_checksum_address("0x" + "22" * 20)
+
+        class Provider:
+            async def get_storage_at(self, chain_id, address, slot, block):
+                if slot == EIP1967_IMPL_SLOT:
+                    return b"\x01" + bytes(11) + bytes.fromhex(implementation[2:])
+                return bytes(32)
+
+            async def get_code(self, *args):
+                raise AssertionError("malformed address must not be probed")
+
+        detected = await _make_resolver(Provider()).detect_proxy(
+            1,
+            ADDRESS,
+            block=123,
+            bytecode=b"\xf4",
+        )
+
+        self.assertIsNone(detected)
+
+    async def test_eip1967_beacon_resolves_implementation(self):
+        beacon = Web3.to_checksum_address("0x" + "33" * 20)
+        implementation = Web3.to_checksum_address("0x" + "22" * 20)
+        test = self
+
+        class Provider:
+            async def get_storage_at(self, chain_id, address, slot, block):
+                if slot == EIP1967_BEACON_SLOT:
+                    return bytes(12) + bytes.fromhex(beacon[2:])
+                return bytes(32)
+
+            async def get_code(self, chain_id, address, block):
+                return b"\x60\x00" if address in {beacon, implementation} else b""
+
+            async def eth_call(self, chain_id, transaction, block):
+                test.assertEqual(
+                    transaction,
+                    {"to": beacon, "data": BEACON_IMPL_SELECTOR},
+                )
+                return bytes(12) + bytes.fromhex(implementation[2:])
+
+        detected = await _make_resolver(Provider()).detect_proxy(
+            1,
+            ADDRESS,
+            block=123,
+            bytecode=b"\xf4",
+        )
+
+        self.assertEqual(detected.proxy_type, "beacon")
+        self.assertEqual(detected.implementation_address, implementation)
+
+    async def test_legacy_standard_slots_resolve_only_deployed_targets(self):
+        implementation = Web3.to_checksum_address("0x" + "22" * 20)
+        cases = (
+            ("eip1822", EIP1822_SLOT),
+            ("zeppelinos", ZEPPELINOS_IMPL_SLOT),
+        )
+
+        for expected_type, implementation_slot in cases:
+            with self.subTest(expected_type=expected_type):
+                class Provider:
+                    async def get_storage_at(
+                        self,
+                        chain_id,
+                        address,
+                        slot,
+                        block,
+                    ):
+                        if slot == implementation_slot:
+                            return bytes(12) + bytes.fromhex(implementation[2:])
+                        return bytes(32)
+
+                    async def get_code(self, chain_id, address, block):
+                        return b"\x60\x00" if address == implementation else b""
+
+                detected = await _make_resolver(Provider()).detect_proxy(
+                    1,
+                    ADDRESS,
+                    block=123,
+                    bytecode=b"\xf4",
+                )
+
+                self.assertEqual(detected.proxy_type, expected_type)
+                self.assertEqual(
+                    detected.implementation_address,
+                    implementation,
+                )
+
+    async def test_safe_master_copy_dispatch_resolves_deployed_singleton(self):
+        implementation = Web3.to_checksum_address("0x" + "22" * 20)
+        test = self
+
+        class Provider:
+            async def get_storage_at(self, *args):
+                return bytes(32)
+
+            async def eth_call(self, chain_id, transaction, block):
+                test.assertEqual(
+                    transaction["data"],
+                    GNOSIS_SAFE_MASTER_COPY_SELECTOR,
+                )
+                return bytes(12) + bytes.fromhex(implementation[2:])
+
+            async def get_code(self, chain_id, address, block):
+                return b"\x60\x00" if address == implementation else b""
+
+        detected = await _make_resolver(Provider()).detect_proxy(
+            1,
+            ADDRESS,
+            block=123,
+            bytecode=(
+                b"\x63"
+                + bytes.fromhex(GNOSIS_SAFE_MASTER_COPY_SELECTOR[2:])
+                + b"\x50\xf4"
+            ),
+        )
+
+        self.assertEqual(detected.proxy_type, "gnosis_safe")
+        self.assertEqual(detected.implementation_address, implementation)
+
+    async def test_erc897_requires_proxy_type_and_implementation_getters(self):
+        implementation = Web3.to_checksum_address("0x" + "22" * 20)
+
+        class Provider:
+            async def get_storage_at(self, *args):
+                return bytes(32)
+
+            async def eth_call(self, chain_id, transaction, block):
+                if transaction["data"] == BEACON_IMPL_SELECTOR:
+                    return bytes(12) + bytes.fromhex(implementation[2:])
+                if transaction["data"] == ERC897_PROXY_TYPE_SELECTOR:
+                    return (2).to_bytes(32, "big")
+                raise AssertionError("unexpected getter")
+
+            async def get_code(self, chain_id, address, block):
+                return b"\x60\x00" if address == implementation else b""
+
+        bytecode = (
+            b"\x63"
+            + bytes.fromhex(BEACON_IMPL_SELECTOR[2:])
+            + b"\x50\x63"
+            + bytes.fromhex(ERC897_PROXY_TYPE_SELECTOR[2:])
+            + b"\x50\xf4"
+        )
+        detected = await _make_resolver(Provider()).detect_proxy(
+            1,
+            ADDRESS,
+            block=123,
+            bytecode=bytecode,
+        )
+
+        self.assertEqual(detected.proxy_type, "erc897")
+        self.assertEqual(detected.implementation_address, implementation)
+
+    async def test_implementation_getter_alone_is_not_proxy_proof(self):
+        class Provider:
+            async def get_storage_at(self, *args):
+                return bytes(32)
+
+            async def eth_call(self, *args):
+                raise AssertionError("generic getter must not be probed")
+
+        detected = await _make_resolver(Provider()).detect_proxy(
+            1,
+            ADDRESS,
+            block=123,
+            bytecode=(
+                b"\x63"
+                + bytes.fromhex(BEACON_IMPL_SELECTOR[2:])
+                + b"\x50\xf4"
+            ),
         )
 
         self.assertIsNone(detected)
