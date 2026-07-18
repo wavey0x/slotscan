@@ -686,6 +686,30 @@ class Eip7702TraceTests(IsolatedAsyncioTestCase):
         self.assertIn((CODE_A, False), service.delegation_calls)
 
 class PrestateRecoveryTests(TestCase):
+    def test_full_prestate_account_is_normalized_once(self):
+        class CountingStorage(dict):
+            def __init__(self, values):
+                super().__init__(values)
+                self.items_calls = 0
+
+            def items(self):
+                self.items_calls += 1
+                return super().items()
+
+        slot_two = "0x" + "00" * 31 + "02"
+        storage = CountingStorage({SLOT_1: FIVE, slot_two: SIX})
+        diff = {"pre": {}, "post": {}}
+
+        TransactionTraceExtractor._merge_observed_prestate(
+            diff,
+            {ADDRESS_A: {"storage": storage}},
+            {(ADDRESS_A, SLOT_1), (ADDRESS_A, slot_two)},
+        )
+
+        self.assertEqual(storage.items_calls, 1)
+        self.assertEqual(diff["pre"][ADDRESS_A]["storage"][SLOT_1], FIVE)
+        self.assertEqual(diff["pre"][ADDRESS_A]["storage"][slot_two], SIX)
+
     def test_post_only_net_change_is_not_overwritten_by_initial_value(self):
         diff = {
             "pre": {},

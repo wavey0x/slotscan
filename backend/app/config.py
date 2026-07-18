@@ -42,6 +42,10 @@ class Settings(BaseSettings):
         default=5 * 1024 * 1024,
         alias="MAX_TRACE_PREIMAGE_BYTES",
     )
+    max_constant_mapping_candidates: int = Field(
+        default=10_000,
+        alias="MAX_CONSTANT_MAPPING_CANDIDATES",
+    )
     max_prestate_accounts: int = Field(
         default=10_000,
         alias="MAX_PRESTATE_ACCOUNTS",

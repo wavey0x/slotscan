@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 class PreimageResolver:
     """Resolves SHA3 hashes to their preimages for mapping slot decoding."""
 
+    def __init__(self, max_constant_mapping_candidates: int = 10_000):
+        self.max_constant_mapping_candidates = max_constant_mapping_candidates
+
     def build_preimage_lookup(self, sha3_trace: list[dict]) -> dict[str, str]:
         """
         Build a lookup from hash -> preimage for SHA3 operations.
@@ -75,7 +78,7 @@ class PreimageResolver:
         if addresses:
             logger.info(f"Extracted {len(addresses)} constant addresses from sources")
 
-        return list(addresses)
+        return sorted(addresses)
 
     def build_constant_preimage_lookup(
         self,
@@ -111,6 +114,14 @@ class PreimageResolver:
                     mapping_slots.append((var.name, var.slot))
 
         if not mapping_slots:
+            return constant_lookup
+
+        candidate_count = len(constant_addresses) * len(mapping_slots)
+        if candidate_count > self.max_constant_mapping_candidates:
+            logger.warning(
+                "Skipping %s constant mapping candidates above configured limit",
+                candidate_count,
+            )
             return constant_lookup
 
         for addr in constant_addresses:

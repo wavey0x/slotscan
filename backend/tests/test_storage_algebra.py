@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from eth_abi import encode
 from web3 import Web3
@@ -17,6 +17,67 @@ from app.utils.slots import compute_mapping_slot, encode_mapping_key
 
 
 class MappingSlotTests(unittest.TestCase):
+    def test_constant_mapping_candidates_are_capped_before_hashing(self):
+        address_type = StorageType(
+            "t_address",
+            "address",
+            "value",
+            "inplace",
+            20,
+        )
+        value_type = StorageType(
+            "t_uint256",
+            "uint256",
+            "value",
+            "inplace",
+            32,
+        )
+        mapping_type = StorageType(
+            "t_mapping",
+            "mapping(address => uint256)",
+            "mapping",
+            "mapping",
+            32,
+            key_type=address_type.id,
+            value_type=value_type.id,
+        )
+        layout = StorageLayout(
+            "Constants",
+            [
+                StorageVariable("first", 0, 0, 32, mapping_type.id, mapping_type.label),
+                StorageVariable("second", 1, 0, 32, mapping_type.id, mapping_type.label),
+            ],
+            {
+                address_type.id: address_type,
+                value_type.id: value_type,
+                mapping_type.id: mapping_type,
+            },
+        )
+        sources = {
+            "Constants.sol": """
+                address constant FIRST = 0x1111111111111111111111111111111111111111;
+                address constant SECOND = 0x2222222222222222222222222222222222222222;
+            """
+        }
+
+        with patch(
+            "app.services.tracer.preimage_resolver.Web3.keccak"
+        ) as keccak:
+            lookup = PreimageResolver(
+                max_constant_mapping_candidates=3
+            ).build_constant_preimage_lookup(sources, layout)
+
+        self.assertEqual(lookup, {})
+        keccak.assert_not_called()
+        self.assertEqual(
+            len(
+                PreimageResolver(
+                    max_constant_mapping_candidates=4
+                ).build_constant_preimage_lookup(sources, layout)
+            ),
+            4,
+        )
+
     def test_vyper_024_bounded_string_resolves_hashed_length_and_data(self):
         layout = NamespaceStorageParser().parse_vyper_storage(
             {"Token.vy": "# @version 0.2.4\nname: public(String[64])\n"},
@@ -944,6 +1005,43 @@ class PackedArrayLayoutTests(unittest.TestCase):
         self.assertIsNone(
             resolver.try_match_dynamic_array_slot(data_start + 2, layout, index)
         )
+
+    def test_mapping_array_roots_are_reused_without_resorting(self):
+        class NoIterationIndex(dict):
+            def __iter__(self):
+                raise AssertionError("mapping roots must be precomputed")
+
+            def items(self):
+                raise AssertionError("mapping roots must be precomputed")
+
+        variable = StorageVariable(
+            "values",
+            0,
+            0,
+            32,
+            self.array.id,
+            self.array.label,
+        )
+        index = NoIterationIndex({
+            100: {
+                "array_length": 10,
+                "array_packing": array_packing(self.element),
+                "base_slot": 0,
+                "element_type": self.element,
+                "key": "1",
+                "path": "values[1]",
+                "variable": variable,
+            }
+        })
+
+        match = SlotPathResolver().try_match_mapping_to_array_slot(
+            100,
+            self.layout,
+            index,
+            (100,),
+        )
+
+        self.assertEqual(match["path"], "values[1] (packed word)")
 
     def test_unbounded_dynamic_array_slots_remain_unresolved_without_length(self):
         dynamic_array = StorageType(

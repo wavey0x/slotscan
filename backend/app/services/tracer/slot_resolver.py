@@ -1,5 +1,6 @@
 """Slot resolution - matching storage slots to layout variables."""
 
+from bisect import bisect_right
 import logging
 import re
 from typing import Optional
@@ -943,17 +944,19 @@ class SlotPathResolver:
         slot_int: int,
         layout: StorageLayout,
         mapping_to_array_index: dict[int, dict],
+        mapping_to_array_roots: tuple[int, ...] | None = None,
     ) -> Optional[dict]:
         """Try to match a slot to an element of a mapping-to-array."""
-        candidates = sorted(
-            (
-                (slot_int - data_start, data_start, match_info)
-                for data_start, match_info in mapping_to_array_index.items()
-                if data_start <= slot_int
-            ),
-            key=lambda candidate: candidate[0],
+        roots = (
+            mapping_to_array_roots
+            if mapping_to_array_roots is not None
+            else tuple(sorted(mapping_to_array_index))
         )
-        for offset_from_start, data_start, match_info in candidates:
+        end = bisect_right(roots, slot_int)
+        for root_index in range(end - 1, -1, -1):
+            data_start = roots[root_index]
+            offset_from_start = slot_int - data_start
+            match_info = mapping_to_array_index[data_start]
             packing = match_info.get("array_packing") or array_packing(
                 match_info.get("element_type")
             )

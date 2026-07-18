@@ -124,13 +124,20 @@ class TransactionTraceExtractor:
         accounts = {address.lower(): state for address, state in full_prestate.items()}
         pre = diff.setdefault("pre", {})
         post = diff.setdefault("post", {})
-        for address, slot in missing:
-            full_storage = accounts.get(address, {}).get("storage", {})
-            normalized_storage = {
+        normalized_storage_by_address = {
+            address: {
                 cls._word(raw_slot): cls._word(value)
-                for raw_slot, value in full_storage.items()
+                for raw_slot, value in accounts.get(address, {})
+                .get("storage", {})
+                .items()
             }
-            initial = normalized_storage.get(slot, ZERO_WORD)
+            for address in {address for address, _ in missing}
+        }
+        for address, slot in missing:
+            initial = normalized_storage_by_address.get(address, {}).get(
+                slot,
+                ZERO_WORD,
+            )
             pre.setdefault(address, {}).setdefault("storage", {})[slot] = initial
             # Only an omitted post value proves no durable change. A post-only
             # diff is the normal zero-to-nonzero net-change representation.

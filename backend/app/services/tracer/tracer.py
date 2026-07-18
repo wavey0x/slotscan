@@ -1,6 +1,7 @@
 """Transaction tracer for extracting storage changes from transactions."""
 
 import asyncio
+from bisect import bisect_right
 from contextlib import asynccontextmanager
 import logging
 from dataclasses import asdict, dataclass
@@ -86,7 +87,9 @@ class TransactionAnalysisService:
         # Composed services
         self.rpc_client = TraceRPCClient(web3_provider, settings)
         self.trace_extractor = TransactionTraceExtractor(self.rpc_client)
-        self.preimage_resolver = PreimageResolver()
+        self.preimage_resolver = PreimageResolver(
+            settings.max_constant_mapping_candidates
+        )
         self.slot_resolver = SlotPathResolver()
         self.journal_builder = StorageJournalBuilder()
 
@@ -586,6 +589,11 @@ class TransactionAnalysisService:
                             mapping_to_array_index[data_start] = match
             if mapping_to_array_index:
                 logger.info(f"Built mapping-to-array index with {len(mapping_to_array_index)} entries")
+        mapping_to_array_roots = tuple(sorted(mapping_to_array_index))
+        array_roots = tuple(sorted(
+            [(root, False) for root in dynamic_array_index]
+            + [(root, True) for root in mapping_to_array_index]
+        ))
 
         matched_slots: dict[int, dict] = {}
 
@@ -673,6 +681,7 @@ class TransactionAnalysisService:
                     decoder=decoder,
                     dynamic_array_index=dynamic_array_index,
                     mapping_to_array_index=mapping_to_array_index,
+                    array_roots=array_roots,
                 )
                 if packed_array_changes is not None:
                     decoded_changes.extend(packed_array_changes)
@@ -836,6 +845,7 @@ class TransactionAnalysisService:
                                             slot_int,
                                             layout,
                                             mapping_to_array_index,
+                                            mapping_to_array_roots,
                                         )
                                         if array_match:
                                             variable_path = array_match["path"]
@@ -920,7 +930,12 @@ class TransactionAnalysisService:
 
                             # Try mapping-to-array
                             if not variable and mapping_to_array_index:
-                                m2a_match = self.slot_resolver.try_match_mapping_to_array_slot(slot_int, layout, mapping_to_array_index)
+                                m2a_match = self.slot_resolver.try_match_mapping_to_array_slot(
+                                    slot_int,
+                                    layout,
+                                    mapping_to_array_index,
+                                    mapping_to_array_roots,
+                                )
                                 if m2a_match:
                                     stats["mapping_to_array"] += 1
                                     resolution_path = "mapping_to_array"
@@ -1162,6 +1177,7 @@ class TransactionAnalysisService:
         decoder: TypeDecoder,
         dynamic_array_index: dict,
         mapping_to_array_index: dict[int, dict],
+        array_roots: tuple[tuple[int, bool], ...],
     ) -> list[StorageChange] | None:
         """Expand a changed packed-array word into every changed element.
 
@@ -1203,15 +1219,14 @@ class TransactionAnalysisService:
             # Prefer the closest known data start. The existing trace-derived
             # indexes are exact starts; this avoids choosing an unrelated array
             # when several arrays precede the numeric slot value.
-            candidates = []
-            for data_start, entry in dynamic_array_index.items():
-                if data_start <= slot_int:
-                    candidates.append((data_start, entry, False))
-            for data_start, entry in mapping_to_array_index.items():
-                if data_start <= slot_int:
-                    candidates.append((data_start, entry, True))
-
-            for data_start, entry, is_mapping_array in sorted(candidates, reverse=True):
+            end = bisect_right(array_roots, (slot_int, True))
+            for root_index in range(end - 1, -1, -1):
+                data_start, is_mapping_array = array_roots[root_index]
+                entry = (
+                    mapping_to_array_index[data_start]
+                    if is_mapping_array
+                    else dynamic_array_index[data_start]
+                )
                 if is_mapping_array:
                     candidate_type = entry.get("element_type")
                     candidate_variable = entry.get("variable")
