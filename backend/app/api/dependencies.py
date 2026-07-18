@@ -20,6 +20,7 @@ from app.services.layout_compatibility.service import LayoutComparisonService
 from app.services.resolver import ContractResolver
 from app.services.storage_view import StorageViewService
 from app.services.tracer import TransactionAnalysisService
+from app.services.tracer.tracer import TraceSingleFlight
 from app.services.transaction_history import TransactionHistoryService
 from app.services.verification import VerificationService
 from app.services.web3_provider import Web3Provider
@@ -81,6 +82,11 @@ async def get_trace_cache_repository(
 ) -> TraceCacheRepository:
     """Get TraceCacheRepository with session."""
     return TraceCacheRepository(session)
+
+
+@lru_cache()
+def get_trace_single_flight() -> TraceSingleFlight:
+    return TraceSingleFlight()
 
 
 async def get_contract_resolver(
@@ -154,6 +160,7 @@ async def get_transaction_analysis_service(
     settings: Settings = Depends(get_settings),
     decoder: TypeDecoder = Depends(get_decoder),
     trace_cache_repo: TraceCacheRepository = Depends(get_trace_cache_repository),
+    single_flight: TraceSingleFlight = Depends(get_trace_single_flight),
 ) -> TransactionAnalysisService:
     """Get the transaction analysis service with dependencies."""
     return TransactionAnalysisService(
@@ -161,6 +168,7 @@ async def get_transaction_analysis_service(
         settings=settings,
         decoder=decoder,
         trace_cache_repo=trace_cache_repo,
+        single_flight=single_flight,
     )
 
 

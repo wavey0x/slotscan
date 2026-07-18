@@ -1,8 +1,10 @@
 """Transaction tracer for extracting storage changes from transactions."""
 
+import asyncio
+from contextlib import asynccontextmanager
 import logging
-from dataclasses import asdict
-from typing import Optional
+from dataclasses import asdict, dataclass
+from typing import AsyncIterator, Optional
 
 from web3 import Web3
 
@@ -35,6 +37,35 @@ from app.utils.vyper import LEGACY_HASHED_STORAGE
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class _TraceLockEntry:
+    lock: asyncio.Lock
+    users: int = 0
+
+
+class TraceSingleFlight:
+    """Application-scoped per-transaction lock registry."""
+
+    def __init__(self):
+        self._entries: dict[tuple[int, str], _TraceLockEntry] = {}
+
+    @asynccontextmanager
+    async def hold(self, chain_id: int, tx_hash: str) -> AsyncIterator[None]:
+        key = (chain_id, tx_hash.lower())
+        entry = self._entries.get(key)
+        if entry is None:
+            entry = _TraceLockEntry(asyncio.Lock())
+            self._entries[key] = entry
+        entry.users += 1
+        try:
+            async with entry.lock:
+                yield
+        finally:
+            entry.users -= 1
+            if entry.users == 0 and self._entries.get(key) is entry:
+                self._entries.pop(key, None)
+
+
 class TransactionAnalysisService:
     """Orchestrate transaction evidence, journaling, resolution, and decoding."""
 
@@ -44,11 +75,13 @@ class TransactionAnalysisService:
         settings: Settings,
         decoder: TypeDecoder,
         trace_cache_repo: Optional[TraceCacheRepository] = None,
+        single_flight: TraceSingleFlight | None = None,
     ):
         self.web3_provider = web3_provider
         self.settings = settings
         self.decoder = decoder
         self.trace_cache_repo = trace_cache_repo
+        self.single_flight = single_flight or TraceSingleFlight()
 
         # Composed services
         self.rpc_client = TraceRPCClient(web3_provider, settings)
@@ -68,6 +101,19 @@ class TransactionAnalysisService:
             if cached:
                 return cached
 
+            async with self.single_flight.hold(chain_id, tx_hash):
+                cached = await self.trace_cache_repo.get(chain_id, tx_hash)
+                if cached:
+                    return cached
+                return await self._extract_trace_artifact(chain_id, tx_hash)
+
+        return await self._extract_trace_artifact(chain_id, tx_hash)
+
+    async def _extract_trace_artifact(
+        self,
+        chain_id: int,
+        tx_hash: str,
+    ) -> TransactionTraceArtifactData:
         logger.info("Trace artifact MISS for %s - executing RPC calls", tx_hash[:10])
         evidence = await self.trace_extractor.extract(chain_id, tx_hash)
         self._enforce_trace_limits(evidence)

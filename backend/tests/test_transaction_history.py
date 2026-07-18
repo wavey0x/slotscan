@@ -22,7 +22,10 @@ from app.repositories.trace_cache import (
     TransactionTraceArtifactData,
 )
 from app.services.decoder import TypeDecoder
-from app.services.tracer.tracer import TransactionAnalysisService
+from app.services.tracer.tracer import (
+    TraceSingleFlight,
+    TransactionAnalysisService,
+)
 from app.services.tracer.extractor import (
     TransactionTraceEvidence,
     TransactionTraceExtractor,
@@ -147,6 +150,20 @@ class _CachedArtifactRepository:
     async def get(self, chain_id, tx_hash):
         self.get_count += 1
         return self.value
+
+
+class _SharedArtifactRepository:
+    def __init__(self):
+        self.value = None
+        self.save_count = 0
+
+    async def get(self, chain_id, tx_hash):
+        await asyncio.sleep(0)
+        return self.value
+
+    async def save(self, value):
+        self.save_count += 1
+        self.value = value
 
 
 class _FailingHistoryService:
@@ -681,6 +698,72 @@ class PrestateRecoveryTests(TestCase):
 
 
 class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
+    async def test_concurrent_cold_trace_requests_share_one_extraction(self):
+        repository = _SharedArtifactRepository()
+        single_flight = TraceSingleFlight()
+        extraction_count = 0
+
+        async def extract(chain_id, tx_hash):
+            nonlocal extraction_count
+            extraction_count += 1
+            await asyncio.sleep(0.01)
+            return TransactionTraceEvidence(
+                receipt={
+                    "blockNumber": artifact().block_number,
+                    "status": 1,
+                },
+                prestate_diff={"pre": {}, "post": {}},
+                writes=[],
+                sha3_operations=[],
+                evm_step_count=1,
+            )
+
+        services = []
+        for _ in range(12):
+            tracer = TransactionAnalysisService(
+                _NoopProvider(),
+                Settings(),
+                TypeDecoder(),
+                trace_cache_repo=repository,
+                single_flight=single_flight,
+            )
+            tracer.trace_extractor.extract = extract
+            services.append(tracer)
+
+        results = await asyncio.gather(
+            *(
+                service.load_trace_artifact(1, artifact().tx_hash)
+                for service in services
+            )
+        )
+
+        self.assertEqual(extraction_count, 1)
+        self.assertEqual(repository.save_count, 1)
+        self.assertTrue(all(result is repository.value for result in results))
+        self.assertEqual(single_flight._entries, {})
+
+    async def test_cancelled_trace_waiter_does_not_leak_its_lock_entry(self):
+        single_flight = TraceSingleFlight()
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def hold():
+            async with single_flight.hold(1, artifact().tx_hash):
+                entered.set()
+                await release.wait()
+
+        leader = asyncio.create_task(hold())
+        await entered.wait()
+        waiter = asyncio.create_task(hold())
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await waiter
+        release.set()
+        await leader
+
+        self.assertEqual(single_flight._entries, {})
+
     async def test_trace_limit_runs_before_journaling_or_preimage_hashing(self):
         repository = SimpleNamespace(
             get=AsyncMock(return_value=None),
