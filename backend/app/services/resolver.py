@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 import json
 import logging
+import re
 from typing import Optional
 
 from web3 import Web3
@@ -647,7 +648,7 @@ class ContractResolver:
             return None
         verification = VerificationResult.from_dict(source_row.result)
         if (
-            verification.language != "Solidity"
+            verification.language not in {"Solidity", "Vyper"}
             or verification.match_type not in {"full", "exact_match"}
             or not verification.sources
             or not verification.compiler_version
@@ -655,6 +656,7 @@ class ContractResolver:
             return None
 
         compilation_target = None
+        entry_source = None
         if verification.compilation_target:
             if len(verification.compilation_target) != 1:
                 return None
@@ -662,35 +664,51 @@ class ContractResolver:
                 iter(verification.compilation_target.items())
             )
             compilation_target = f"{target_path}:{target_name}"
+            entry_source = target_path
         contract_name = verification.name or candidate.name
         if not contract_name:
             return None
 
         try:
-            layout, artifact = await self.layout_parser.parse_with_artifact(
-                contract_name=contract_name,
-                sources=verification.sources,
-                compiler_version=verification.compiler_version,
-                compiler_settings=verification.compiler_settings,
-                metadata_settings=verification.compiler_settings,
-                contract_fqname=compilation_target,
-            )
-            if not self._artifact_matches_runtime(
-                artifact,
-                verification,
-                runtime_bytecode,
-            ):
-                return None
-            layout.language = "Solidity"
-            layout.compiler_version = verification.compiler_version
-            layout.storage_scheme = "solidity"
-            layout = self.namespace_parser.promote_exact_erc7201(
-                layout,
-                compiler_output=artifact.compiler_output,
-                sources=verification.sources,
-                compiler_version=verification.compiler_version,
-                max_slots=self.settings.max_slots_per_contract,
-            )
+            if verification.language == "Vyper":
+                layout, artifact = (
+                    await self.layout_parser.parse_vyper_with_artifact(
+                        contract_name=contract_name,
+                        sources=verification.sources,
+                        compiler_version=verification.compiler_version,
+                        entry_source=entry_source,
+                    )
+                )
+                if not self._vyper_artifact_matches_runtime(
+                    artifact,
+                    runtime_bytecode,
+                ):
+                    return None
+            else:
+                layout, artifact = await self.layout_parser.parse_with_artifact(
+                    contract_name=contract_name,
+                    sources=verification.sources,
+                    compiler_version=verification.compiler_version,
+                    compiler_settings=verification.compiler_settings,
+                    metadata_settings=verification.compiler_settings,
+                    contract_fqname=compilation_target,
+                )
+                if not self._artifact_matches_runtime(
+                    artifact,
+                    verification,
+                    runtime_bytecode,
+                ):
+                    return None
+                layout.language = "Solidity"
+                layout.compiler_version = verification.compiler_version
+                layout.storage_scheme = "solidity"
+                layout = self.namespace_parser.promote_exact_erc7201(
+                    layout,
+                    compiler_output=artifact.compiler_output,
+                    sources=verification.sources,
+                    compiler_version=verification.compiler_version,
+                    max_slots=self.settings.max_slots_per_contract,
+                )
             if not layout.variables or not self._layout_is_exact(layout):
                 return None
             if self.compiler_artifact_repo:
@@ -708,6 +726,21 @@ class ContractResolver:
             layout=layout,
             verification=verification,
             artifact=artifact,
+        )
+
+    @staticmethod
+    def _vyper_artifact_matches_runtime(
+        artifact: RawCompilerArtifact,
+        runtime_bytecode: bytes,
+    ) -> bool:
+        compiled = artifact.compiler_output.get("bytecodeRuntime")
+        if not isinstance(compiled, str):
+            return False
+        clean = compiled.removeprefix("0x")
+        return (
+            len(clean) % 2 == 0
+            and bool(re.fullmatch(r"[0-9a-fA-F]*", clean))
+            and bytes.fromhex(clean) == runtime_bytecode
         )
 
     @staticmethod
@@ -882,10 +915,14 @@ class ContractResolver:
 
         Returns the implementation address if detected, None otherwise.
         """
-        # Standard EIP-1167 pattern
-        if (len(bytecode) == 45 and
-            bytecode[:10] == EIP1167_PREFIX and
-            bytecode[-15:] == EIP1167_SUFFIX):
+        # The first 45 bytes prove the canonical EIP-1167 control flow.
+        # Trailing bytes are unreachable by that runtime and are commonly used
+        # for immutable clone arguments.
+        if (
+            len(bytecode) >= 45
+            and bytecode[:10] == EIP1167_PREFIX
+            and bytecode[30:45] == EIP1167_SUFFIX
+        ):
             impl_bytes = bytecode[10:30]
             try:
                 return Web3.to_checksum_address(impl_bytes)

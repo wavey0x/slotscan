@@ -146,6 +146,42 @@ class VyperTargetTests(unittest.IsolatedAsyncioTestCase):
                 entry_source="Missing.vy",
             )
 
+    async def test_vyper_artifact_retains_layout_and_runtime_from_one_compile(self):
+        parser = LayoutParser()
+        parser._compile_vyper_with_layout = AsyncMock(
+            return_value=(
+                {
+                    "value": {
+                        "type": "uint256",
+                        "slot": 0,
+                    }
+                },
+                "0x5f5ffd",
+            )
+        )
+
+        layout, artifact = await parser.parse_vyper_with_artifact(
+            "Vault",
+            {
+                "Vault.vy": (
+                    "# @version 0.3.10\nvalue: public(uint256)\n"
+                )
+            },
+            "0.3.10",
+            entry_source="Vault.vy",
+        )
+
+        self.assertEqual(layout.variables[0].name, "value")
+        self.assertEqual(layout.variables[0].slot, 0)
+        self.assertEqual(
+            artifact.compiler_output["bytecodeRuntime"],
+            "0x5f5ffd",
+        )
+        self.assertEqual(
+            artifact.standard_input["settings"]["outputSelection"],
+            ["layout", "bytecode_runtime"],
+        )
+
 
 class CompilerPolicyTests(unittest.IsolatedAsyncioTestCase):
     async def test_request_time_install_is_disabled_by_default(self):

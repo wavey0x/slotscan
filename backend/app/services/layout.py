@@ -384,7 +384,7 @@ class LayoutParser:
             total += len(chunk)
             if total > limit:
                 raise _CompilerOutputTooLarge(
-                    f"Solidity compiler {name} exceeded {limit} bytes"
+                    f"Compiler {name} exceeded {limit} bytes"
                 )
             chunks.append(chunk)
         return b"".join(chunks)
@@ -733,7 +733,7 @@ class LayoutParser:
         main_content = vy_files[main_file]
 
         # Compile with Vyper
-        raw_layout = await self._compile_vyper_with_layout(
+        raw_layout, runtime_bytecode = await self._compile_vyper_with_layout(
             source_content=main_content,
             filename=main_file,
             version=compiler_version,
@@ -797,14 +797,17 @@ class LayoutParser:
                 filename: {"content": content}
                 for filename, content in sources.items()
             },
-            "settings": {"outputSelection": ["layout"]},
+            "settings": {"outputSelection": ["layout", "bytecode_runtime"]},
         }
         artifact = self._make_artifact(
             language="Vyper",
             compiler_version=compiler_version,
             pipeline="vvm-layout",
             standard_input=standard_input,
-            compiler_output={"storageLayout": raw_layout},
+            compiler_output={
+                "storageLayout": raw_layout,
+                "bytecodeRuntime": runtime_bytecode,
+            },
             sources=sources,
         )
         return layout, artifact
@@ -814,7 +817,7 @@ class LayoutParser:
         source_content: str,
         filename: str,
         version: str,
-    ) -> dict:
+    ) -> tuple[dict, str]:
         """
         Compile Vyper source and get storage layout.
 
@@ -867,25 +870,15 @@ class LayoutParser:
 
             logger.info(f"Compiling Vyper {normalized_version} layout for {filename} using vvm")
             async with self._compilation_semaphore:
-                layout = await self._run_vyper_layout(
+                outputs = await self._run_vyper_outputs(
                     str(get_vyper_executable(normalized_version)),
                     source_content,
                 )
-            logger.info(f"vvm compilation returned type: {type(layout)}")
-
-            # vvm returns the layout as a JSON string or dict
-            if isinstance(layout, str):
-                layout = json.loads(layout)
-
-            # Handle both direct layout and wrapped format ({"storage_layout": {...}})
-            if isinstance(layout, dict):
-                if "storage_layout" in layout:
-                    logger.info(f"Returning storage_layout with {len(layout['storage_layout'])} vars")
-                    return layout["storage_layout"]
-                logger.info(f"Returning layout directly with {len(layout)} vars")
-                return layout
-
-            raise CompilationError(f"Unexpected Vyper layout format: {type(layout)}")
+            logger.info(
+                "Vyper compilation returned %s layout variables",
+                len(outputs[0]),
+            )
+            return outputs
 
         except ImportError as e:
             logger.warning(f"vvm import failed: {e}, falling back to system vyper")
@@ -933,13 +926,13 @@ class LayoutParser:
                 f"{normalized_version}, found {actual_label}"
             )
         async with self._compilation_semaphore:
-            return await self._run_vyper_layout(executable, source_content)
+            return await self._run_vyper_outputs(executable, source_content)
 
-    async def _run_vyper_layout(
+    async def _run_vyper_outputs(
         self,
         executable: str,
         source_content: str,
-    ) -> dict:
+    ) -> tuple[dict, str]:
         with tempfile.TemporaryDirectory() as tmpdir:
             source_path = Path(tmpdir) / "contract.vy"
             source_path.write_text(source_content)
@@ -947,7 +940,7 @@ class LayoutParser:
             process = await asyncio.create_subprocess_exec(
                 executable,
                 "-f",
-                "layout",
+                "layout,bytecode_runtime",
                 str(source_path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -956,18 +949,56 @@ class LayoutParser:
                     self.settings.compiler_timeout_seconds,
                 ),
             )
+            stdout_task = asyncio.create_task(
+                self._read_compiler_stream(
+                    process.stdout,
+                    self.settings.max_compiler_stdout_bytes,
+                    "stdout",
+                )
+            )
+            stderr_task = asyncio.create_task(
+                self._read_compiler_stream(
+                    process.stderr,
+                    self.settings.max_compiler_stderr_bytes,
+                    "stderr",
+                )
+            )
             try:
                 stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
+                    self._wait_for_compiler_output(
+                        process,
+                        stdout_task,
+                        stderr_task,
+                    ),
                     timeout=self.settings.compiler_timeout_seconds,
                 )
             except asyncio.TimeoutError as exc:
-                process.kill()
-                await process.wait()
+                await self._stop_compiler_process(
+                    process,
+                    stdout_task,
+                    stderr_task,
+                )
                 raise CompilationError("Vyper compilation timed out") from exc
             except asyncio.CancelledError:
-                process.kill()
-                await process.wait()
+                await self._stop_compiler_process(
+                    process,
+                    stdout_task,
+                    stderr_task,
+                )
+                raise
+            except _CompilerOutputTooLarge as exc:
+                await self._stop_compiler_process(
+                    process,
+                    stdout_task,
+                    stderr_task,
+                )
+                raise CompilationError(str(exc)) from exc
+            except Exception:
+                await self._stop_compiler_process(
+                    process,
+                    stdout_task,
+                    stderr_task,
+                )
                 raise
             if process.returncode != 0:
                 raise CompilationError(
@@ -975,12 +1006,34 @@ class LayoutParser:
                     + stderr.decode("utf-8", errors="replace")[:4000]
                 )
             try:
-                layout = json.loads(stdout)
-            except json.JSONDecodeError as exc:
-                raise CompilationError("Failed to parse Vyper layout output") from exc
+                output_lines = [
+                    line.strip()
+                    for line in stdout.decode("utf-8").splitlines()
+                    if line.strip()
+                ]
+                if len(output_lines) != 2:
+                    raise ValueError("expected layout and runtime bytecode")
+                layout = json.loads(output_lines[0])
+                runtime_bytecode = output_lines[1].lower()
+                if not re.fullmatch(r"0x[0-9a-f]*", runtime_bytecode):
+                    raise ValueError("invalid runtime bytecode")
+            except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+                raise CompilationError("Failed to parse Vyper compiler output") from exc
             if "storage_layout" in layout:
-                return layout["storage_layout"]
-            return layout
+                layout = layout["storage_layout"]
+            if not isinstance(layout, dict):
+                raise CompilationError("Unexpected Vyper layout format")
+            return layout, runtime_bytecode
+
+    @staticmethod
+    async def _wait_for_compiler_output(
+        process: asyncio.subprocess.Process,
+        stdout_task: asyncio.Task,
+        stderr_task: asyncio.Task,
+    ) -> tuple[bytes, bytes]:
+        stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
+        await process.wait()
+        return stdout, stderr
 
     def _normalize_vyper_version(self, version: str) -> str:
         """

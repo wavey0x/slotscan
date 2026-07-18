@@ -22,6 +22,7 @@ export function contractResolutionStatus(
 export function contractDisplayLabel(contract: ContractHistoryResponse): string {
   if (contract.name) return contract.name;
   const status = contractResolutionStatus(contract);
+  if (status === 'not_resolved') return 'Resolution not completed';
   if (status === 'timed_out') return 'Resolution timed out';
   if (status === 'failed') return 'Resolution failed';
   if (contract.layout_available) return 'Unnamed contract';
@@ -33,7 +34,7 @@ export function contractActivityStatus(
   contract: ContractHistoryResponse,
 ): string | null {
   const status = contractResolutionStatus(contract);
-  if (status === 'timed_out' || status === 'failed') {
+  if (status === 'timed_out' || status === 'failed' || status === 'not_resolved') {
     return contract.layout_available
       ? 'partial resolution'
       : 'partial resolution · raw slots';
@@ -51,6 +52,9 @@ export function contractResolutionNotice(
   contract: ContractHistoryResponse,
 ): string | null {
   const status = contractResolutionStatus(contract);
+  if (status === 'not_resolved') {
+    return 'Contract resolution was not completed within this request. Raw slots are shown.';
+  }
   if (status === 'timed_out') {
     return 'Contract resolution timed out. Retrying may recover names or variables.';
   }
@@ -74,6 +78,6 @@ export function hasRetryableContractResolution(
 ): boolean {
   return contracts.some((contract) => {
     const status = contractResolutionStatus(contract);
-    return status === 'timed_out' || status === 'failed';
+    return status === 'timed_out' || status === 'failed' || status === 'not_resolved';
   });
 }

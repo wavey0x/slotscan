@@ -17,6 +17,7 @@ class TransactionTraceEvidence:
     writes: list[dict]
     sha3_operations: list[dict]
     evm_step_count: int
+    degraded_reason: str | None = None
 
 
 class TransactionTraceExtractor:
@@ -34,7 +35,7 @@ class TransactionTraceExtractor:
             self.rpc_client.execute_prestate_trace(chain_id, tx_hash),
             self.rpc_client.get_receipt(chain_id, tx_hash),
         )
-        writes, sha3_operations, evm_step_count = (
+        writes, sha3_operations, evm_step_count, degraded_reason = (
             await self.rpc_client.execute_structlogs_trace(
                 chain_id,
                 tx_hash,
@@ -73,6 +74,7 @@ class TransactionTraceExtractor:
             writes=writes,
             sha3_operations=sha3_operations,
             evm_step_count=evm_step_count,
+            degraded_reason=degraded_reason,
         )
 
     @staticmethod

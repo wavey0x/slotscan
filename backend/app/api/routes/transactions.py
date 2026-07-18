@@ -842,6 +842,7 @@ def _empty_transaction_history(
     chain_id: int,
     tx_hash: str,
     receipt: dict,
+    degraded_reason: str = "tracer_unavailable",
 ) -> TransactionStorageHistoryResponse:
     status_value = receipt.get("status", 1)
     status_int = int(status_value, 16) if isinstance(status_value, str) else int(status_value)
@@ -885,6 +886,7 @@ def _empty_transaction_history(
         global_order=None,
         is_complete=False,
         trace_unavailable=True,
+        degraded_reason=degraded_reason,
     )
 
 
@@ -914,15 +916,24 @@ async def get_transaction_storage_history(
             status_code=404,
             detail={"error": "Transaction not found", "code": "TX_NOT_FOUND"},
         )
-    except TraceNotAvailableError:
+    except TraceNotAvailableError as exc:
         receipt = await history_service.tracer.rpc_client.get_receipt(
             chain_id,
             tx_hash,
+        )
+        degraded_reason = (
+            "trace_limit"
+            if any(
+                marker in exc.reason.lower()
+                for marker in ("limit", "exceed", "too large")
+            )
+            else "tracer_unavailable"
         )
         return _empty_transaction_history(
             chain_id=chain_id,
             tx_hash=tx_hash,
             receipt=receipt,
+            degraded_reason=degraded_reason,
         )
     except RPCError:
         raise HTTPException(
@@ -1073,4 +1084,5 @@ async def get_transaction_storage_history(
         global_order=global_order,
         is_complete=response_complete,
         trace_unavailable=False,
+        degraded_reason=capabilities.get("degraded_reason"),
     )

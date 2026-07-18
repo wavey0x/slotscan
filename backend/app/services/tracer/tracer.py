@@ -5,7 +5,7 @@ from bisect import bisect_right
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import AsyncIterator, Optional
 
 from web3 import Web3
@@ -124,7 +124,22 @@ class TransactionAnalysisService:
     ) -> TransactionTraceArtifactData:
         logger.info("Trace artifact MISS for %s - executing RPC calls", tx_hash[:10])
         evidence = await self.trace_extractor.extract(chain_id, tx_hash)
-        self._enforce_trace_limits(evidence)
+        try:
+            self._enforce_trace_limits(evidence)
+        except TraceNotAvailableError as exc:
+            logger.warning(
+                "Discarding oversized execution history while preserving net state "
+                "for %s: %s",
+                tx_hash,
+                exc.reason,
+            )
+            evidence = replace(
+                evidence,
+                writes=[],
+                sha3_operations=[],
+                evm_step_count=0,
+                degraded_reason="trace_limit",
+            )
         receipt = evidence.receipt
         root_succeeded = self._quantity(receipt.get("status", 1)) == 1
         journal = self.journal_builder.build(
@@ -153,6 +168,7 @@ class TransactionAnalysisService:
                     for write in persistent_writes
                 )
             ),
+            "degraded_reason": evidence.degraded_reason,
         }
         artifact = TransactionTraceArtifactData(
             chain_id=chain_id,

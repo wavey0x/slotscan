@@ -347,6 +347,60 @@ class ResolverSourceIdentityTests(unittest.IsolatedAsyncioTestCase):
         )
         return verification, layout, artifact
 
+    @staticmethod
+    def _vyper_equivalence_fixture(runtime):
+        verification = VerificationResult(
+            source="sourcify",
+            match_type="exact_match",
+            name="Equivalent",
+            compilation_target={"Equivalent.vy": "Equivalent"},
+            compiler_version="0.3.10",
+            compiler_settings={},
+            sources={
+                "Equivalent.vy": (
+                    "# @version 0.3.10\nvalue: public(uint256)\n"
+                )
+            },
+            language="Vyper",
+        )
+        value_type = StorageType(
+            "uint256",
+            "uint256",
+            "value",
+            "inplace",
+            32,
+        )
+        layout = StorageLayout(
+            "Equivalent",
+            [
+                StorageVariable(
+                    "value",
+                    0,
+                    0,
+                    32,
+                    value_type.id,
+                    value_type.label,
+                )
+            ],
+            {value_type.id: value_type},
+            language="Vyper",
+            compiler_version="0.3.10",
+            storage_scheme="sequential",
+        )
+        artifact = RawCompilerArtifact(
+            fingerprint="cd" * 32,
+            language="Vyper",
+            compiler_version="0.3.10",
+            pipeline="vvm-layout",
+            standard_input={},
+            compiler_output={
+                "storageLayout": layout.to_dict(),
+                "bytecodeRuntime": "0x" + runtime.hex(),
+            },
+            source_hashes={},
+        )
+        return verification, layout, artifact
+
     async def test_unverified_duplicate_reuses_only_compiler_proven_layout(self):
         source = Web3.to_checksum_address("0x" + "15" * 20)
         metadata = b"\xa1\x64ipfs\x41\x01"
@@ -428,6 +482,88 @@ class ResolverSourceIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result.storage_layout)
         self.assertIsNone(result.layout_provenance)
         self.assertIsNone(result.layout_source_address)
+
+    async def test_unverified_vyper_duplicate_requires_exact_compiled_runtime(self):
+        source = Web3.to_checksum_address("0x" + "15" * 20)
+        runtime = b"\x5f\x5f\xfd"
+        code_hash = Web3.keccak(runtime).hex()
+        verification, layout, artifact = self._vyper_equivalence_fixture(runtime)
+        cache = _MemorySourceCache()
+        await cache.save_verified(1, source, code_hash, verification)
+        bindings = _MemoryBindings()
+        bindings.rows[(1, source.lower())] = SimpleNamespace(
+            address=source.lower(),
+            code_hash=code_hash,
+            is_verified=True,
+            is_proxy=False,
+            storage_layout=layout.to_dict(),
+            name="Equivalent",
+        )
+        service = VerificationService(Settings(), http_client=object())
+        service._fetch_verification = AsyncMock(return_value=None)
+        parser = LayoutParser()
+        parser.parse_vyper_with_artifact = AsyncMock(
+            return_value=(layout, artifact)
+        )
+        resolver = ContractResolver(
+            web3_provider=_Provider(codes={DIRECT.lower(): runtime}),
+            settings=Settings(),
+            verification_service=service,
+            source_cache_repo=cache,
+            contract_repo=bindings,
+            layout_parser=parser,
+        )
+
+        result = await resolver.resolve(1, DIRECT)
+
+        self.assertFalse(result.is_verified)
+        self.assertEqual(result.layout_provenance, "bytecode_equivalent")
+        self.assertEqual(result.layout_source_address, source)
+        self.assertEqual(result.storage_layout.to_dict(), layout.to_dict())
+        parser.parse_vyper_with_artifact.assert_awaited_once_with(
+            contract_name="Equivalent",
+            sources=verification.sources,
+            compiler_version="0.3.10",
+            entry_source="Equivalent.vy",
+        )
+
+    async def test_vyper_duplicate_rejects_runtime_mismatch(self):
+        source = Web3.to_checksum_address("0x" + "15" * 20)
+        runtime = b"\x5f\x5f\xfd"
+        code_hash = Web3.keccak(runtime).hex()
+        verification, layout, artifact = self._vyper_equivalence_fixture(
+            b"\x60\x00\xfd"
+        )
+        cache = _MemorySourceCache()
+        await cache.save_verified(1, source, code_hash, verification)
+        bindings = _MemoryBindings()
+        bindings.rows[(1, source.lower())] = SimpleNamespace(
+            address=source.lower(),
+            code_hash=code_hash,
+            is_verified=True,
+            is_proxy=False,
+            storage_layout=layout.to_dict(),
+            name="Equivalent",
+        )
+        service = VerificationService(Settings(), http_client=object())
+        service._fetch_verification = AsyncMock(return_value=None)
+        parser = LayoutParser()
+        parser.parse_vyper_with_artifact = AsyncMock(
+            return_value=(layout, artifact)
+        )
+        resolver = ContractResolver(
+            web3_provider=_Provider(codes={DIRECT.lower(): runtime}),
+            settings=Settings(),
+            verification_service=service,
+            source_cache_repo=cache,
+            contract_repo=bindings,
+            layout_parser=parser,
+        )
+
+        result = await resolver.resolve(1, DIRECT)
+
+        self.assertIsNone(result.storage_layout)
+        self.assertIsNone(result.layout_provenance)
 
     async def test_identical_bytecode_does_not_share_layouts_across_addresses(self):
         provider = _Provider(
@@ -563,8 +699,9 @@ class ResolverSourceIdentityTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(provider.storage_calls, [])
 
-    async def test_only_exact_minimal_proxy_uses_implementation_identity(self):
+    async def test_canonical_minimal_proxy_allows_trailing_immutable_arguments(self):
         clone = Web3.to_checksum_address("0x" + "13" * 20)
+        clone_with_args = Web3.to_checksum_address("0x" + "16" * 20)
         clone_code = (
             EIP1167_PREFIX
             + bytes.fromhex(IMPLEMENTATION_A[2:])
@@ -574,6 +711,7 @@ class ResolverSourceIdentityTests(unittest.IsolatedAsyncioTestCase):
             codes={
                 PROXY_A.lower(): b"\x60\x01",
                 clone.lower(): clone_code,
+                clone_with_args.lower(): clone_code + b"immutable arguments",
                 IMPLEMENTATION_A.lower(): b"\x60\xaa",
             },
             beacons={PROXY_A.lower(): BEACON},
@@ -584,10 +722,16 @@ class ResolverSourceIdentityTests(unittest.IsolatedAsyncioTestCase):
 
         beacon_like = await resolver.resolve(1, PROXY_A, block_number=100)
         minimal = await resolver.resolve(1, clone, block_number=100)
+        with_args = await resolver.resolve(
+            1,
+            clone_with_args,
+            block_number=100,
+        )
 
         self.assertFalse(beacon_like.is_proxy)
         self.assertIsNone(beacon_like.implementation_address)
         self.assertEqual(minimal.implementation_address, IMPLEMENTATION_A)
+        self.assertEqual(with_args.implementation_address, IMPLEMENTATION_A)
         self.assertEqual(
             service._fetch_verification.await_args_list,
             [
@@ -596,6 +740,21 @@ class ResolverSourceIdentityTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertEqual(provider.storage_calls, [])
+
+    def test_minimal_proxy_rejects_changes_inside_the_executable_core(self):
+        resolver = _resolver(
+            _Provider(),
+            _service(),
+            _MemorySourceCache(),
+        )
+        mutated = (
+            EIP1167_PREFIX
+            + bytes.fromhex(IMPLEMENTATION_A[2:])
+            + b"\x00"
+            + EIP1167_SUFFIX
+        )
+
+        self.assertIsNone(resolver._detect_minimal_proxy(mutated))
 
     async def test_proxy_slot_signal_does_not_suppress_source_lookup(self):
         provider = _Provider(

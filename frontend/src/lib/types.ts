@@ -347,7 +347,8 @@ export type ContractResolutionStatus =
   | 'resolved'
   | 'no_verified_source'
   | 'timed_out'
-  | 'failed';
+  | 'failed'
+  | 'not_resolved';
 
 export interface ContractHistoryResponse {
   storage_address: string;
@@ -390,4 +391,5 @@ export interface TransactionStorageHistoryResponse {
   global_order: GlobalStorageEventReferenceResponse[] | null;
   is_complete: boolean;
   trace_unavailable: boolean;
+  degraded_reason: 'trace_limit' | 'tracer_unavailable' | null;
 }

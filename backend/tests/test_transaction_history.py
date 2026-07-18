@@ -2,7 +2,7 @@ import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, TestCase
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
@@ -486,6 +486,24 @@ class Eip7702TraceTests(IsolatedAsyncioTestCase):
                 "0x" + "ab" * 32,
             )
 
+    async def test_public_trace_degrades_when_compact_trace_reaches_a_limit(self):
+        client = TraceRPCClient(
+            _CompactTraceProvider(),
+            Settings(MAX_SSTORE_OPS=1),
+        )
+
+        writes, sha3s, step_count, degraded_reason = (
+            await client.execute_structlogs_trace(
+                1,
+                "0x" + "ab" * 32,
+            )
+        )
+
+        self.assertEqual(writes, [])
+        self.assertEqual(sha3s, [])
+        self.assertEqual(step_count, 0)
+        self.assertEqual(degraded_reason, "trace_limit")
+
     async def test_prestate_trace_rejects_oversized_storage_before_normalization(self):
         client = TraceRPCClient(
             _PrestateProvider(
@@ -751,7 +769,7 @@ class PrestateRecoveryTests(TestCase):
 
 
 class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
-    async def test_owner_limit_runs_before_metadata_resolution(self):
+    async def test_multiple_resolution_targets_are_not_rejected_by_count(self):
         one_owner = replace(
             artifact(),
             write_events=[
@@ -764,7 +782,7 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
             _NoopProvider(),
             Settings(
                 MAX_SSTORE_OPS=100,
-                MAX_STORAGE_OWNERS_PER_TRANSACTION=1,
+                MAX_PARALLEL_CONTRACT_RESOLUTIONS=1,
             ),
             TypeDecoder(),
             trace_cache_repo=_CachedArtifactRepository(one_owner),
@@ -778,9 +796,43 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
         )
         service.resolution_calls = []
 
-        with self.assertRaises(TraceNotAvailableError):
-            await service.analyze(1, one_owner.tx_hash)
+        result = await service.analyze(1, one_owner.tx_hash)
 
+        self.assertEqual(len(result.contracts), 1)
+        self.assertEqual(
+            service.resolution_calls,
+            [
+                (1, ADDRESS_A, one_owner.block_number, True),
+                (1, CODE_A, one_owner.block_number, False),
+            ],
+        )
+
+    async def test_expired_resolution_budget_keeps_raw_owners(self):
+        tracer = TransactionAnalysisService(
+            _NoopProvider(),
+            Settings(
+                MAX_SSTORE_OPS=100,
+                TRANSACTION_RESOLUTION_BUDGET_SECONDS=0,
+            ),
+            TypeDecoder(),
+            trace_cache_repo=_CachedArtifactRepository(artifact()),
+        )
+        service = _HistoryService(
+            tracer=tracer,
+            web3_provider=_NoopProvider(),
+            settings=tracer.settings,
+            layout_parser=None,
+            verification_service=object(),
+        )
+        service.resolution_calls = []
+
+        result = await service.analyze(1, artifact().tx_hash)
+
+        self.assertEqual(len(result.contracts), 2)
+        self.assertEqual(
+            [contract.resolution_status for contract in result.contracts],
+            ["not_resolved", "not_resolved"],
+        )
         self.assertEqual(service.resolution_calls, [])
 
     async def test_concurrent_cold_trace_requests_share_one_extraction(self):
@@ -849,7 +901,7 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
 
         self.assertEqual(single_flight._entries, {})
 
-    async def test_trace_limit_runs_before_journaling_or_preimage_hashing(self):
+    async def test_trace_limit_preserves_bounded_net_state(self):
         repository = SimpleNamespace(
             get=AsyncMock(return_value=None),
             save=AsyncMock(),
@@ -866,21 +918,88 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
                     "blockNumber": artifact().block_number,
                     "status": 1,
                 },
-                prestate_diff={"pre": {}, "post": {}},
+                prestate_diff={
+                    "pre": {
+                        ADDRESS_A: {
+                            "storage": {SLOT_1: ZERO},
+                        }
+                    },
+                    "post": {
+                        ADDRESS_A: {
+                            "storage": {SLOT_1: ONE},
+                        }
+                    },
+                },
                 writes=artifact().write_events[:2],
                 sha3_operations=[],
                 evm_step_count=10,
             )
         )
-        tracer.journal_builder.build = Mock()
-        tracer.preimage_resolver.build_preimage_lookup = Mock()
 
-        with self.assertRaises(TraceNotAvailableError):
-            await tracer.load_trace_artifact(1, artifact().tx_hash)
+        traced = await tracer.load_trace_artifact(1, artifact().tx_hash)
 
-        tracer.journal_builder.build.assert_not_called()
-        tracer.preimage_resolver.build_preimage_lookup.assert_not_called()
+        self.assertEqual(traced.write_events, [])
+        self.assertEqual(traced.prestate_diff["post"][ADDRESS_A]["storage"], {
+            SLOT_1: ONE,
+        })
+        self.assertEqual(traced.capabilities["degraded_reason"], "trace_limit")
+        self.assertFalse(traced.capabilities["write_history_complete"])
+        self.assertEqual(
+            tracer.persistent_storage_owners(traced),
+            (ADDRESS_A,),
+        )
         repository.save.assert_not_awaited()
+
+    async def test_transaction_api_discloses_degraded_net_state(self):
+        degraded = replace(
+            artifact(),
+            write_events=[],
+            prestate_diff={
+                "pre": {
+                    ADDRESS_A: {
+                        "storage": {SLOT_1: ZERO},
+                    }
+                },
+                "post": {
+                    ADDRESS_A: {
+                        "storage": {SLOT_1: ONE},
+                    }
+                },
+            },
+            capabilities={
+                "write_history_complete": False,
+                "address_attribution_complete": True,
+                "code_attribution_complete": False,
+                "degraded_reason": "trace_limit",
+            },
+            trace_step_count=None,
+        )
+        tracer = TransactionAnalysisService(
+            _NoopProvider(),
+            Settings(MAX_SSTORE_OPS=100),
+            TypeDecoder(),
+            trace_cache_repo=_CachedArtifactRepository(degraded),
+        )
+        service = _HistoryService(
+            tracer=tracer,
+            web3_provider=_NoopProvider(),
+            settings=tracer.settings,
+            layout_parser=None,
+            verification_service=object(),
+        )
+
+        response = await get_transaction_storage_history(
+            chain_id=1,
+            tx_hash=degraded.tx_hash,
+            history_service=service,
+        )
+
+        self.assertFalse(response.trace_unavailable)
+        self.assertEqual(response.degraded_reason, "trace_limit")
+        self.assertFalse(response.is_complete)
+        self.assertEqual(response.summary.storage_owners, 1)
+        self.assertEqual(response.summary.slots_written, 1)
+        self.assertEqual(response.contracts[0].slots[0].slot, SLOT_1)
 
     async def test_transaction_api_redacts_upstream_rpc_error_details(self):
         with self.assertRaises(HTTPException) as raised:

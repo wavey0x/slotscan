@@ -71,6 +71,10 @@ class TraceCapabilities:
 class StorageJournal:
     events: tuple[StorageWriteEvent, ...]
     histories: tuple[SlotHistory, ...]
+    histories_by_owner: dict[
+        tuple[str, StorageNamespace],
+        tuple[SlotHistory, ...],
+    ]
     capabilities: TraceCapabilities
     root_succeeded: bool
     evm_step_count: int | None = None
@@ -81,11 +85,7 @@ class StorageJournal:
         namespace: StorageNamespace = StorageNamespace.PERSISTENT,
     ) -> tuple[SlotHistory, ...]:
         normalized = address.lower()
-        return tuple(
-            history
-            for history in self.histories
-            if history.address == normalized and history.namespace == namespace
-        )
+        return self.histories_by_owner.get((normalized, namespace), ())
 
 
 class StorageJournalBuilder:
@@ -243,9 +243,23 @@ class StorageJournalBuilder:
                 len(mismatches),
             )
 
+        histories_by_owner: dict[
+            tuple[str, StorageNamespace],
+            list[SlotHistory],
+        ] = {}
+        for history in histories:
+            histories_by_owner.setdefault(
+                (history.address, history.namespace),
+                [],
+            ).append(history)
+
         return StorageJournal(
             events=tuple(events),
             histories=tuple(histories),
+            histories_by_owner={
+                key: tuple(owner_histories)
+                for key, owner_histories in histories_by_owner.items()
+            },
             capabilities=TraceCapabilities(
                 execution_order=bool(evm_step_count),
                 frame_outcomes=(

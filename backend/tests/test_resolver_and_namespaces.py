@@ -649,12 +649,12 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(detected.proxy_type, "eip1167")
         self.assertEqual(detected.implementation_address, implementation)
 
-    async def test_eip1167_with_appended_bytes_is_not_treated_as_exact(self):
+    async def test_eip1167_with_appended_data_preserves_exact_runtime_proof(self):
         implementation = Web3.to_checksum_address("0x" + "22" * 20)
 
         class Provider:
-            async def get_storage_at(self, chain_id, address, slot, block):
-                return bytes(32)
+            async def get_code(self, chain_id, address, block):
+                return b"\x60\x00"
 
         bytecode = (
             EIP1167_PREFIX
@@ -669,7 +669,8 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
             bytecode=bytecode,
         )
 
-        self.assertIsNone(detected)
+        self.assertEqual(detected.proxy_type, "eip1167")
+        self.assertEqual(detected.implementation_address, implementation)
 
     async def test_eip1967_implementation_requires_code_at_the_same_block(self):
         implementation = Web3.to_checksum_address("0x" + "22" * 20)

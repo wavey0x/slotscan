@@ -100,7 +100,7 @@ class TraceRPCClient:
         self,
         chain_id: int,
         tx_hash: str,
-    ) -> tuple[list[dict], list[dict], int]:
+    ) -> tuple[list[dict], list[dict], int, str | None]:
         """
         Parse structLogs to extract SSTORE and SHA3 operations.
 
@@ -117,16 +117,26 @@ class TraceRPCClient:
         - DELEGATECALL/CALLCODE: Code from target but storage stays with caller
         - CREATE/CREATE2: New contract created, constructor writes to new contract's storage
 
-        Returns (sstores, sha3s) where sha3s contains preimage data.
+        Returns writes, SHA3 preimages, step count, and an optional stable
+        degradation reason.
         """
-        compact = await self._execute_compact_storage_trace(chain_id, tx_hash)
+        try:
+            compact = await self._execute_compact_storage_trace(chain_id, tx_hash)
+        except TraceNotAvailableError as exc:
+            logger.warning(
+                "Compact storage trace reached a safety limit for %s: %s",
+                tx_hash,
+                exc.reason,
+            )
+            return [], [], 0, "trace_limit"
         if compact is not None:
-            return compact
+            writes, sha3s, step_count = compact
+            return writes, sha3s, step_count, None
         logger.warning(
             "Compact storage tracer unavailable for %s; raw structLogs are disabled",
             tx_hash,
         )
-        return [], [], 0
+        return [], [], 0, "tracer_unavailable"
 
     async def _execute_compact_storage_trace(
         self,

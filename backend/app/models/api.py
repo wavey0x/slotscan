@@ -373,6 +373,7 @@ class ContractHistoryResponse(BaseModel):
         "no_verified_source",
         "timed_out",
         "failed",
+        "not_resolved",
     ] = "resolved"
     resolution: ContractResolutionResponse
     counts: ContractHistoryCountsResponse
@@ -404,3 +405,6 @@ class TransactionStorageHistoryResponse(BaseModel):
     global_order: Optional[list[GlobalStorageEventReferenceResponse]] = None
     is_complete: bool
     trace_unavailable: bool = False
+    degraded_reason: Optional[
+        Literal["trace_limit", "tracer_unavailable"]
+    ] = None

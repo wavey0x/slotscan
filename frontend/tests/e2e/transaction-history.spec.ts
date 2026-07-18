@@ -78,6 +78,7 @@ function resolutionResponse(contracts: ReturnType<typeof resolutionContract>[]) 
     global_order: [] as GlobalStorageEventReferenceResponse[],
     is_complete: true,
     trace_unavailable: false,
+    degraded_reason: null as 'trace_limit' | 'tracer_unavailable' | null,
   };
 }
 
@@ -102,6 +103,36 @@ test('incomplete effective-code attribution explains the raw-slot fallback', asy
       'Effective code attribution is unavailable; raw slots are shown.',
       { exact: true },
     ),
+  ).toBeVisible();
+});
+
+test('trace limits preserve net changes and explain the degraded evidence', async ({ page }) => {
+  const response = resolutionResponse([
+    resolutionContract({
+      code_addresses: [],
+      resolution_status: 'not_resolved',
+    }),
+  ]);
+  response.degraded_reason = 'trace_limit';
+  response.capabilities.write_history_complete = false;
+  response.capabilities.execution_order_available = false;
+  response.capabilities.code_attribution_complete = false;
+  response.is_complete = false;
+  await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
+    await route.fulfill({ json: response });
+  });
+
+  await page.goto(`/1/tx/${RESOLUTION_TX}`);
+  await page.getByText(/Data quality/).click();
+
+  await expect(
+    page.getByText(
+      'Execution history exceeded a safety limit; proven net storage changes are shown.',
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Resolution not completed' }),
   ).toBeVisible();
 });
 

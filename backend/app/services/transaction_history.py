@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from app.config import Settings
 from app.db import async_session_factory
 from app.models.domain import ContractMetadata, StorageLayout, TransactionDiff
-from app.models.errors import NotAContractError, TraceNotAvailableError
+from app.models.errors import NotAContractError
 from app.repositories.compiler_artifacts import CompilerArtifactRepository
 from app.repositories.contracts import ContractRepository
 from app.repositories.source_cache import SourceCacheRepository
@@ -99,11 +99,6 @@ class TransactionHistoryService:
             for owner in owners
             for code_address in code_addresses_by_owner.get(owner, ())
         }
-        resolution_count = len(owners) + len(direct_targets)
-        if resolution_count > self.settings.max_storage_owners_per_transaction:
-            raise TraceNotAvailableError(
-                "Transaction exceeds the configured storage owner limit"
-            )
 
         semaphore = asyncio.Semaphore(
             max(1, self.settings.max_parallel_contract_resolutions)
@@ -184,10 +179,44 @@ class TransactionHistoryService:
                 ),
             )
 
-        owner_results = await asyncio.gather(*(
-            resolve_target(owner, follow_proxy=True) for owner in owners
-        ))
-        owner_resolutions = dict(zip(owners, owner_results))
+        async def resolve_targets(
+            targets: tuple[str, ...] | list[str],
+            *,
+            follow_proxy: bool,
+            follow_delegation: bool = True,
+        ) -> dict[str, MetadataResolution]:
+            """Resolve lazily so a large transaction cannot schedule unbounded work."""
+            ordered = tuple(dict.fromkeys(targets))
+            batch_size = max(1, self.settings.max_parallel_contract_resolutions)
+            resolved: dict[str, MetadataResolution] = {}
+            for start in range(0, len(ordered), batch_size):
+                if loop.time() >= deadline:
+                    break
+                batch = ordered[start : start + batch_size]
+                batch_results = await asyncio.gather(*(
+                    resolve_target(
+                        target,
+                        follow_proxy=follow_proxy,
+                        follow_delegation=follow_delegation,
+                    )
+                    for target in batch
+                ))
+                resolved.update(zip(batch, batch_results))
+
+            for target in ordered:
+                resolved.setdefault(
+                    target,
+                    MetadataResolution(
+                        metadata=None,
+                        status="not_resolved",
+                    ),
+                )
+            return resolved
+
+        owner_resolutions = await resolve_targets(
+            owners,
+            follow_proxy=True,
+        )
 
         direct_resolutions: dict[str, MetadataResolution] = {}
         pending_direct_targets: list[str] = []
@@ -208,15 +237,13 @@ class TransactionHistoryService:
                     pending_direct_targets.append(target)
 
         if pending_direct_targets:
-            direct_results = await asyncio.gather(*(
-                resolve_target(
-                    target,
+            direct_resolutions.update(
+                await resolve_targets(
+                    pending_direct_targets,
                     follow_proxy=False,
                     follow_delegation=False,
                 )
-                for target in pending_direct_targets
-            ))
-            direct_resolutions.update(zip(pending_direct_targets, direct_results))
+            )
 
         async def project(address: str) -> ContractHistoryProjection:
             owner_resolution = owner_resolutions[address]
@@ -301,6 +328,8 @@ class TransactionHistoryService:
                 resolution_status = "timed_out"
             elif "failed" in statuses:
                 resolution_status = "failed"
+            elif "not_resolved" in statuses:
+                resolution_status = "not_resolved"
             elif "resolved" in statuses:
                 resolution_status = "resolved"
             else:

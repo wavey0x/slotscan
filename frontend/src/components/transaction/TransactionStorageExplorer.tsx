@@ -165,6 +165,10 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
   }
 
   const warnings = [
+    data.degraded_reason === 'trace_limit'
+      && 'Execution history exceeded a safety limit; proven net storage changes are shown.',
+    data.degraded_reason === 'tracer_unavailable'
+      && 'Execution tracing is unavailable; proven net storage changes are shown.',
     !data.capabilities.write_history_complete && 'Write history is incomplete.',
     !data.capabilities.values_complete && 'Some event before-values are unknown.',
     !data.capabilities.rollback_classification_complete && 'Rollback classification is incomplete.',
