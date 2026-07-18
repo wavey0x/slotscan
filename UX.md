@@ -17,7 +17,7 @@ Do not add legacy redirects or a second contract-scoped transaction UI.
 
 ## Layout comparison
 
-- Add a quiet `Compare layout` action beside the contract page’s Storage layout
+- Add a quiet `Compare` action beside the contract page’s Storage layout
   heading. It prefills the inspected input address without replacing a proxy or
   EIP-7702 authority with its code address.
 - Keep drafts local and put only submitted addresses plus optional exact block

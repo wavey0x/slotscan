@@ -127,15 +127,16 @@ export function ContractPage({ chain, address }: ContractPageProps) {
 
       <section>
         <div className="mb-4">
-            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <h2 className="text-base font-medium text-gray-900">Storage layout</h2>
-              <Link
-                href={`/${chain}/compare?from=${encodeURIComponent(address)}`}
-                className="text-[10px] text-gray-500"
-              >
-                Compare layout →
-              </Link>
-            </div>
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <h2 className="text-base font-medium text-gray-900">Storage layout</h2>
+            <Link
+              href={`/${chain}/compare?from=${encodeURIComponent(address)}`}
+              aria-label="Compare storage layout"
+              className="text-[10px] text-gray-500 transition-colors hover:text-gray-900 focus-visible:text-gray-900"
+            >
+              Compare
+            </Link>
+          </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-5 gap-y-1 text-[10px] text-gray-500">
             <span>
               Block{' '}

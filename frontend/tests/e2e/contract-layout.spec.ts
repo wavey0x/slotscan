@@ -131,7 +131,7 @@ test('direct contracts render one coherent exact-block response', async ({ page 
   await expect(page.getByText('42', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Copy owner value' })).toHaveCount(0);
   await expect(page.getByRole('group', { name: 'Values' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Compare layout →' })).toHaveAttribute(
+  await expect(page.getByRole('link', { name: 'Compare storage layout' })).toHaveAttribute(
     'href',
     `/1/compare?from=${ADDRESS}`,
   );
