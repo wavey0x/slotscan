@@ -529,6 +529,11 @@ class TransactionAnalysisService:
                 layout = None
         layout_index = LayoutIndex(layout) if layout else None
         decoder = self.decoder.bound(layout.types) if layout else self.decoder.bound({})
+        struct_offsets = (
+            self.slot_resolver.get_struct_offsets(layout)
+            if layout
+            else ()
+        )
         is_legacy_vyper = bool(
             layout and layout.storage_scheme == LEGACY_HASHED_STORAGE
         )
@@ -564,7 +569,12 @@ class TransactionAnalysisService:
                 preimage_clean = preimage[2:] if preimage.startswith("0x") else preimage
                 if len(preimage_clean) == 64:
                     match = self.slot_resolver.try_match_slot_from_preimage(
-                        slot_hash, preimage, layout, preimage_lookup, depth=0
+                        slot_hash,
+                        preimage,
+                        layout,
+                        preimage_lookup,
+                        depth=0,
+                        struct_offsets=struct_offsets,
                     )
                     if match and match.get("encoding") == "mapping_to_array":
                         array_type = match.get("array_type")
@@ -772,7 +782,11 @@ class TransactionAnalysisService:
                             if slot_hex in preimage_lookup:
                                 preimage = preimage_lookup[slot_hex]
                                 preimage_match = self.slot_resolver.try_match_slot_from_preimage(
-                                    slot_hex, preimage, layout, preimage_lookup
+                                    slot_hex,
+                                    preimage,
+                                    layout,
+                                    preimage_lookup,
+                                    struct_offsets=struct_offsets,
                                 )
                                 if preimage_match:
                                     stats["preimage_lookup"] += 1
@@ -973,6 +987,7 @@ class TransactionAnalysisService:
                         slot_int,
                         layout,
                         preimage_lookup,
+                        struct_offsets=struct_offsets,
                     ):
                         base_var = base_match.get("variable")
                         if base_var:

@@ -22,6 +22,7 @@ from app.services.verification import VerificationService
 
 
 DIRECT = Web3.to_checksum_address("0x" + "10" * 20)
+DIRECT_B = Web3.to_checksum_address("0x" + "14" * 20)
 PROXY_A = Web3.to_checksum_address("0x" + "11" * 20)
 PROXY_B = Web3.to_checksum_address("0x" + "12" * 20)
 IMPLEMENTATION_A = Web3.to_checksum_address("0x" + "21" * 20)
@@ -46,6 +47,35 @@ def _verification(name):
         name=name,
         compiler_version="0.8.30",
         storage_layout={"storage": [], "types": {}},
+    )
+
+
+def _verification_with_layout(name, type_label):
+    type_id = f"t_{type_label}"
+    return VerificationResult(
+        source="sourcify",
+        match_type="full",
+        name=name,
+        compiler_version="0.8.30",
+        storage_layout={
+            "storage": [
+                {
+                    "astId": 1,
+                    "contract": name,
+                    "label": "value",
+                    "offset": 0,
+                    "slot": "0",
+                    "type": type_id,
+                }
+            ],
+            "types": {
+                type_id: {
+                    "encoding": "inplace",
+                    "label": type_label,
+                    "numberOfBytes": "32",
+                }
+            },
+        },
     )
 
 
@@ -88,15 +118,30 @@ class _NoBindings:
     async def get_at_block(self, chain_id, address, block_number):
         return None
 
-    async def get_layout_by_code_hash(self, code_hash):
-        return None
-
     async def save(self, metadata):
         return None
 
     async def save_at_block(self, metadata, block_number):
         return None
 
+
+class _MemoryBindings(_NoBindings):
+    def __init__(self):
+        self.rows = {}
+
+    async def get(self, chain_id, address):
+        return self.rows.get((chain_id, address.lower()))
+
+    async def save(self, metadata):
+        values = dict(metadata.__dict__)
+        values["storage_layout"] = (
+            metadata.storage_layout.to_dict()
+            if metadata.storage_layout
+            else None
+        )
+        row = SimpleNamespace(**values)
+        self.rows[(metadata.chain_id, metadata.address.lower())] = row
+        return row
 
 class _Provider:
     def __init__(
@@ -169,19 +214,68 @@ def _service():
     return service
 
 
-def _resolver(provider, service, cache, *, use_binding_cache=True):
+def _resolver(
+    provider,
+    service,
+    cache,
+    *,
+    bindings=None,
+    use_binding_cache=True,
+):
     return ContractResolver(
         web3_provider=provider,
         settings=Settings(),
         verification_service=service,
         source_cache_repo=cache,
-        contract_repo=_NoBindings(),
+        contract_repo=bindings or _NoBindings(),
         layout_parser=LayoutParser(),
         use_binding_cache=use_binding_cache,
     )
 
 
 class ResolverSourceIdentityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_identical_bytecode_does_not_share_layouts_across_addresses(self):
+        provider = _Provider(
+            codes={
+                DIRECT.lower(): b"\x60\x00",
+                DIRECT_B.lower(): b"\x60\x00",
+            }
+        )
+        service = VerificationService(Settings(), http_client=object())
+
+        async def fetch(chain_id, address):
+            type_label = "uint256" if address == DIRECT.lower() else "address"
+            return _verification_with_layout(address, type_label)
+
+        service._fetch_verification = AsyncMock(side_effect=fetch)
+        resolver = _resolver(
+            provider,
+            service,
+            _MemorySourceCache(),
+            bindings=_MemoryBindings(),
+        )
+
+        first = await resolver.resolve(1, DIRECT)
+        second = await resolver.resolve(1, DIRECT_B)
+
+        self.assertEqual(first.name, DIRECT.lower())
+        self.assertEqual(second.name, DIRECT_B.lower())
+        self.assertEqual(
+            first.storage_layout.get_type("t_uint256").label,
+            "uint256",
+        )
+        self.assertEqual(
+            second.storage_layout.get_type("t_address").label,
+            "address",
+        )
+        self.assertEqual(
+            service._fetch_verification.await_args_list,
+            [
+                call(1, DIRECT.lower()),
+                call(1, DIRECT_B.lower()),
+            ],
+        )
+
     async def test_direct_contract_is_reused_across_historical_blocks(self):
         provider = _Provider(codes={DIRECT.lower(): b"\x60\x00"})
         service = _service()

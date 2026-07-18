@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import Mock
 
 from eth_abi import encode
 from web3 import Web3
@@ -833,6 +834,9 @@ def five():
         self.assertIs(field_type, uint_type)
 
         tracer = TransactionAnalysisService(object(), Settings(), TypeDecoder())
+        tracer.slot_resolver.get_struct_offsets = Mock(
+            wraps=tracer.slot_resolver.get_struct_offsets
+        )
         decoded = tracer._decode_changes(
             [
                 (
@@ -853,6 +857,7 @@ def five():
         )
         self.assertEqual(decoded[0].value_type, uint_type.id)
         self.assertEqual(decoded[0].new_decoded.decoded, 1780454411)
+        tracer.slot_resolver.get_struct_offsets.assert_called_once_with(layout)
 
 
 class PackedArrayLayoutTests(unittest.TestCase):

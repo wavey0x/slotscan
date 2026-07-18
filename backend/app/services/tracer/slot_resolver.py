@@ -16,9 +16,6 @@ logger = logging.getLogger(__name__)
 class SlotPathResolver:
     """Resolves storage slots to layout variables."""
 
-    def __init__(self) -> None:
-        self._struct_offsets_by_layout: dict[int, tuple[int, ...]] = {}
-
     def get_final_mapping_value_type(
         self,
         var_type: StorageType,
@@ -115,6 +112,7 @@ class SlotPathResolver:
         preimage_lookup: dict[str, str],
         depth: int = 0,
         visited: set[str] | None = None,
+        struct_offsets: tuple[int, ...] | None = None,
     ) -> Optional[dict]:
         """
         Try to match a slot to a variable using the SHA3 preimage.
@@ -138,6 +136,9 @@ class SlotPathResolver:
         if not preimage or not layout:
             return None
 
+        if struct_offsets is None:
+            struct_offsets = self.get_struct_offsets(layout)
+
         # Some RPC clients/cache rows preserve a ``0x`` prefix on each memory
         # fragment before concatenating SHA3 input. Normalize those separators
         # back into one canonical byte string before interpreting word offsets.
@@ -156,7 +157,9 @@ class SlotPathResolver:
                 logger.debug(f"  Found inner preimage for array length slot: {inner_preimage[:40]}...")
                 mapping_match = self.try_match_slot_from_preimage(
                     inner_slot_normalized, inner_preimage, layout, preimage_lookup,
-                    depth=depth + 1, visited=visited
+                    depth=depth + 1,
+                    visited=visited,
+                    struct_offsets=struct_offsets,
                 )
                 if mapping_match:
                     variable = mapping_match.get("variable")
@@ -219,6 +222,7 @@ class SlotPathResolver:
             preimage_lookup,
             depth,
             visited,
+            struct_offsets,
         )
         if dynamic_match:
             return dynamic_match
@@ -315,7 +319,9 @@ class SlotPathResolver:
             outer_preimage = preimage_lookup[base_slot_normalized]
             outer_match = self.try_match_slot_from_preimage(
                 base_slot_normalized, outer_preimage, layout, preimage_lookup,
-                depth=depth + 1, visited=visited
+                depth=depth + 1,
+                visited=visited,
+                struct_offsets=struct_offsets,
             )
             if outer_match:
                 outer_key = outer_match.get("key", "?")
@@ -360,6 +366,7 @@ class SlotPathResolver:
                 preimage_lookup,
                 depth=depth,
                 visited=visited,
+                struct_offsets=struct_offsets,
             ):
                 base_variable = base_match.get("variable")
                 base_key = base_match.get("key", "?")
@@ -411,6 +418,7 @@ class SlotPathResolver:
             preimage_lookup,
             depth=depth,
             visited=visited,
+            struct_offsets=struct_offsets,
         ):
             base_variable = base_match.get("variable")
             base_key = base_match.get("key", "?")
@@ -439,6 +447,7 @@ class SlotPathResolver:
         *,
         depth: int = 0,
         visited: set[str] | None = None,
+        struct_offsets: tuple[int, ...] | None = None,
     ):
         """Yield only offsets proven by actual struct-member layout entries.
 
@@ -446,22 +455,10 @@ class SlotPathResolver:
         previous implementation recursively tested every observed SHA3 preimage,
         which became exponential on hash-heavy transactions.
         """
-        cache_key = id(layout)
-        offsets = self._struct_offsets_by_layout.get(cache_key)
-        if offsets is None:
-            offsets = tuple(
-                sorted(
-                    {
-                        member.slot
-                        for storage_type in layout.types.values()
-                        for member in (storage_type.members or ())
-                        if member.slot > 0
-                    }
-                )
-            )
-            self._struct_offsets_by_layout[cache_key] = offsets
+        if struct_offsets is None:
+            struct_offsets = self.get_struct_offsets(layout)
 
-        for offset in offsets:
+        for offset in struct_offsets:
             potential_base = target_slot - offset
             if potential_base < 0:
                 continue
@@ -476,6 +473,7 @@ class SlotPathResolver:
                 preimage_lookup,
                 depth=depth + 1,
                 visited=visited,
+                struct_offsets=struct_offsets,
             )
             base_variable = base_match.get("variable") if base_match else None
             if not base_variable:
@@ -487,6 +485,19 @@ class SlotPathResolver:
             )
             if field_name:
                 yield offset, base_match
+
+    @staticmethod
+    def get_struct_offsets(layout: StorageLayout) -> tuple[int, ...]:
+        return tuple(
+            sorted(
+                {
+                    member.slot
+                    for storage_type in layout.types.values()
+                    for member in (storage_type.members or ())
+                    if member.slot > 0
+                }
+            )
+        )
 
     def build_dynamic_array_index(
         self,
@@ -1054,6 +1065,7 @@ class SlotPathResolver:
         preimage_lookup: dict[str, str],
         depth: int,
         visited: set[str],
+        struct_offsets: tuple[int, ...],
     ) -> Optional[dict]:
         if len(preimage_clean) < 64:
             return None
@@ -1081,6 +1093,7 @@ class SlotPathResolver:
                     preimage_lookup,
                     depth=depth + 1,
                     visited=visited,
+                    struct_offsets=struct_offsets,
                 )
                 if not outer_match:
                     continue
