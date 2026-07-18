@@ -208,18 +208,18 @@ class VerificationService:
     ) -> VerificationResult | None:
         url = f"https://sourcify.dev/server/v2/contract/{chain_id}/{address}"
         try:
-            response = await self.http_client.get(
+            status_code, data = await self._get_json_bounded(
                 url,
                 params={"fields": "sources,storageLayout,compilation"},
+                provider="sourcify",
             )
-            if response.status_code == 404:
+            if status_code == 404:
                 return None
-            if response.status_code != 200:
+            if status_code != 200:
                 raise VerificationProviderError(
-                    [f"sourcify HTTP {response.status_code}"]
+                    [f"sourcify HTTP {status_code}"]
                 )
 
-            data = response.json()
             if not isinstance(data, dict):
                 raise ValueError("expected a JSON object")
             compilation = data.get("compilation") or {}
@@ -283,13 +283,16 @@ class VerificationService:
             "apikey": api_key,
         }
         try:
-            response = await self.http_client.get(base_url, params=params)
-            if response.status_code != 200:
+            status_code, data = await self._get_json_bounded(
+                base_url,
+                params=params,
+                provider="etherscan",
+            )
+            if status_code != 200:
                 raise VerificationProviderError(
-                    [f"etherscan HTTP {response.status_code}"]
+                    [f"etherscan HTTP {status_code}"]
                 )
 
-            data = response.json()
             if not isinstance(data, dict):
                 raise ValueError("expected a JSON object")
             if data.get("status") != "1":
@@ -316,6 +319,37 @@ class VerificationService:
         except (TypeError, ValueError, KeyError) as exc:
             logger.warning("Invalid Etherscan response for %s: %s", address, exc)
             raise VerificationProviderError(["etherscan invalid response"]) from exc
+
+    async def _get_json_bounded(
+        self,
+        url: str,
+        *,
+        params: dict,
+        provider: str,
+    ) -> tuple[int, object]:
+        limit = self.settings.max_verification_response_bytes
+        async with self.http_client.stream("GET", url, params=params) as response:
+            content_length = response.headers.get("content-length")
+            if content_length is not None:
+                try:
+                    if int(content_length) > limit:
+                        raise VerificationProviderError(
+                            [f"{provider} response too large"]
+                        )
+                except ValueError:
+                    pass
+
+            body = bytearray()
+            async for chunk in response.aiter_bytes():
+                if len(body) + len(chunk) > limit:
+                    raise VerificationProviderError(
+                        [f"{provider} response too large"]
+                    )
+                body.extend(chunk)
+
+            if response.status_code != 200:
+                return response.status_code, None
+            return response.status_code, json.loads(body)
 
     @staticmethod
     def _parse_etherscan_response(result: dict) -> VerificationResult:

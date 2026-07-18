@@ -38,6 +38,10 @@ MIN_VYPER_VERSION_FOR_LAYOUT = (0, 2, 16)
 logger = logging.getLogger(__name__)
 
 
+class _CompilerOutputTooLarge(Exception):
+    pass
+
+
 def _limit_compiler_process(memory_limit_bytes: int, cpu_limit_seconds: int) -> None:
     """Apply hard resource limits in the compiler child process."""
     try:
@@ -312,20 +316,50 @@ class LayoutParser:
                 self.settings.compiler_timeout_seconds,
             ),
         )
+        stdout_task = asyncio.create_task(
+            self._read_compiler_stream(
+                process.stdout,
+                self.settings.max_compiler_stdout_bytes,
+                "stdout",
+            )
+        )
+        stderr_task = asyncio.create_task(
+            self._read_compiler_stream(
+                process.stderr,
+                self.settings.max_compiler_stderr_bytes,
+                "stderr",
+            )
+        )
+
+        async def run_compiler() -> tuple[bytes, bytes]:
+            payload = json.dumps(
+                standard_input,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            process.stdin.write(payload)
+            await process.stdin.drain()
+            process.stdin.close()
+            await process.stdin.wait_closed()
+            stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
+            await process.wait()
+            return stdout, stderr
+
         try:
             stdout, stderr = await asyncio.wait_for(
-                process.communicate(
-                    json.dumps(standard_input, separators=(",", ":")).encode("utf-8")
-                ),
+                run_compiler(),
                 timeout=self.settings.compiler_timeout_seconds,
             )
         except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
+            await self._stop_compiler_process(process, stdout_task, stderr_task)
             raise
         except asyncio.CancelledError:
-            process.kill()
-            await process.wait()
+            await self._stop_compiler_process(process, stdout_task, stderr_task)
+            raise
+        except _CompilerOutputTooLarge as exc:
+            await self._stop_compiler_process(process, stdout_task, stderr_task)
+            raise CompilationError(str(exc)) from exc
+        except Exception:
+            await self._stop_compiler_process(process, stdout_task, stderr_task)
             raise
         if process.returncode != 0:
             raise CompilationError(
@@ -337,6 +371,36 @@ class LayoutParser:
             return json.loads(stdout[output_start:])
         except (ValueError, json.JSONDecodeError) as exc:
             raise CompilationError("Solidity compiler returned invalid JSON") from exc
+
+    @staticmethod
+    async def _read_compiler_stream(
+        stream: asyncio.StreamReader,
+        limit: int,
+        name: str,
+    ) -> bytes:
+        chunks = []
+        total = 0
+        while chunk := await stream.read(64 * 1024):
+            total += len(chunk)
+            if total > limit:
+                raise _CompilerOutputTooLarge(
+                    f"Solidity compiler {name} exceeded {limit} bytes"
+                )
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+    @staticmethod
+    async def _stop_compiler_process(
+        process: asyncio.subprocess.Process,
+        *reader_tasks: asyncio.Task,
+    ) -> None:
+        if process.returncode is None:
+            process.kill()
+        for task in reader_tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*reader_tasks, return_exceptions=True)
+        await process.wait()
 
     def build_solidity_standard_input(
         self,

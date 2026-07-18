@@ -79,6 +79,10 @@ class Settings(BaseSettings):
         default=4,
         alias="MAX_PARALLEL_VERIFICATION_REQUESTS",
     )
+    max_verification_response_bytes: int = Field(
+        default=20 * 1024 * 1024,
+        alias="MAX_VERIFICATION_RESPONSE_BYTES",
+    )
     # Compiler isolation
     allow_compiler_install: bool = Field(default=False, alias="ALLOW_COMPILER_INSTALL")
     max_installed_compilers: int = Field(default=64, alias="MAX_INSTALLED_COMPILERS")
@@ -88,6 +92,14 @@ class Settings(BaseSettings):
     max_compilation_input_bytes: int = Field(
         default=5 * 1024 * 1024,
         alias="MAX_COMPILATION_INPUT_BYTES",
+    )
+    max_compiler_stdout_bytes: int = Field(
+        default=50 * 1024 * 1024,
+        alias="MAX_COMPILER_STDOUT_BYTES",
+    )
+    max_compiler_stderr_bytes: int = Field(
+        default=1024 * 1024,
+        alias="MAX_COMPILER_STDERR_BYTES",
     )
     comparison_max_depth: int = Field(
         default=64,

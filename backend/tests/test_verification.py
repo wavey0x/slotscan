@@ -1,8 +1,9 @@
 import asyncio
+import json
 import unittest
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 from app.config import Settings
 from app.models.domain import VerificationResult
@@ -13,6 +14,33 @@ from app.services.verification import VerificationService
 ADDRESS = "0x" + "11" * 20
 HASH_A = "0x" + "aa" * 32
 HASH_B = "0x" + "bb" * 32
+
+
+class _StreamResponse:
+    def __init__(self, body: bytes, *, status_code=200, headers=None):
+        self.body = body
+        self.status_code = status_code
+        self.headers = headers or {}
+
+    async def aiter_bytes(self):
+        yield self.body
+
+
+class _StreamContext:
+    def __init__(self, response):
+        self.response = response
+
+    async def __aenter__(self):
+        return self.response
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+
+def _stream_client(response):
+    return SimpleNamespace(
+        stream=Mock(return_value=_StreamContext(response)),
+    )
 
 
 def _verified(name="Verified"):
@@ -296,9 +324,8 @@ class VerificationServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(peak, 2)
 
     async def test_sourcify_v2_payload_is_normalized(self):
-        response = SimpleNamespace(
-            status_code=200,
-            json=lambda: {
+        body = json.dumps(
+            {
                 "match": "match",
                 "storageLayout": {
                     "storage": [{"label": "owner"}],
@@ -312,9 +339,9 @@ class VerificationServiceTests(unittest.IsolatedAsyncioTestCase):
                     "fullyQualifiedName": "src/C.sol:C",
                 },
                 "sources": {"src/C.sol": {"content": "contract C {}"}},
-            },
-        )
-        client = SimpleNamespace(get=AsyncMock(return_value=response))
+            }
+        ).encode()
+        client = _stream_client(_StreamResponse(body))
         service = VerificationService(Settings(), client)
 
         result = await service._try_sourcify(1, ADDRESS)
@@ -323,6 +350,34 @@ class VerificationServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.compilation_target, {"src/C.sol": "C"})
         self.assertEqual(result.storage_layout["storage"][0]["label"], "owner")
         self.assertEqual(result.sources, {"src/C.sol": "contract C {}"})
+
+    async def test_verification_response_limit_counts_decoded_bytes(self):
+        body = json.dumps(
+            {
+                "match": "match",
+                "compilation": {},
+                "sources": {},
+            }
+        ).encode()
+        response = _StreamResponse(
+            body,
+            headers={"content-length": "1"},
+        )
+        admitted = VerificationService(
+            Settings(MAX_VERIFICATION_RESPONSE_BYTES=len(body)),
+            _stream_client(response),
+        )
+        rejected = VerificationService(
+            Settings(MAX_VERIFICATION_RESPONSE_BYTES=len(body) - 1),
+            _stream_client(response),
+        )
+
+        self.assertIsNotNone(await admitted._try_sourcify(1, ADDRESS))
+        with self.assertRaisesRegex(
+            VerificationProviderError,
+            "response too large",
+        ):
+            await rejected._try_sourcify(1, ADDRESS)
 
 
 if __name__ == "__main__":
