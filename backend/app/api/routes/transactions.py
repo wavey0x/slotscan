@@ -924,10 +924,10 @@ async def get_transaction_storage_history(
             tx_hash=tx_hash,
             receipt=receipt,
         )
-    except RPCError as exc:
+    except RPCError:
         raise HTTPException(
             status_code=502,
-            detail={"error": str(exc), "code": "RPC_ERROR"},
+            detail={"error": "Upstream RPC request failed", "code": "RPC_ERROR"},
         )
 
     artifact = analysis.artifact

@@ -4,6 +4,8 @@ from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
+
 from app.api.routes.transactions import (
     _group_changes_by_slot,
     get_transaction_storage_history,
@@ -15,6 +17,7 @@ from app.models.domain import (
     StorageType,
     StorageVariable,
 )
+from app.models.errors import RPCError
 from app.repositories.trace_cache import (
     TransactionTraceArtifactData,
 )
@@ -144,6 +147,14 @@ class _CachedArtifactRepository:
     async def get(self, chain_id, tx_hash):
         self.get_count += 1
         return self.value
+
+
+class _FailingHistoryService:
+    async def analyze(self, chain_id, tx_hash):
+        raise RPCError(
+            "debug_traceTransaction",
+            "https://user:secret@rpc.example/key?token=abc",
+        )
 
 
 class _CompactTraceProvider:
@@ -619,6 +630,25 @@ class PrestateRecoveryTests(TestCase):
 
 
 class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
+    async def test_transaction_api_redacts_upstream_rpc_error_details(self):
+        with self.assertRaises(HTTPException) as raised:
+            await get_transaction_storage_history(
+                chain_id=1,
+                tx_hash=artifact().tx_hash,
+                history_service=_FailingHistoryService(),
+            )
+
+        self.assertEqual(raised.exception.status_code, 502)
+        self.assertEqual(
+            raised.exception.detail,
+            {
+                "error": "Upstream RPC request failed",
+                "code": "RPC_ERROR",
+            },
+        )
+        self.assertNotIn("secret", str(raised.exception.detail))
+        self.assertNotIn("token", str(raised.exception.detail))
+
     async def test_proxy_self_code_includes_implementation_layout(self):
         value_type = StorageType(
             "t_uint256",
