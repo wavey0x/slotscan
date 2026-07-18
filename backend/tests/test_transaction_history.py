@@ -182,36 +182,77 @@ class _CompactTraceProvider:
         self.params = params
         return {
             "result": {
+                "fatal": None,
+                "executable": True,
+                "hookEnters": 1,
+                "hookExits": 1,
+                "frameStack": [0],
                 "writes": [
                     {
-                        "address": ADDRESS_A,
-                        "code_address": CODE_A,
-                        "code_attribution": "exact",
                         "slot": "0x1",
                         "value": "0x1",
                         "old_value": None,
                         "opcode": "SSTORE",
                         "namespace": "persistent",
+                        "pc": 1,
                         "depth": 1,
                         "index": 5,
                         "frame_id": 0,
                     },
                     {
-                        "address": ADDRESS_B,
-                        "code_address": CODE_B,
-                        "code_attribution": "exact",
                         "slot": "0x2",
                         "value": "0x2",
                         "old_value": None,
                         "opcode": "SSTORE",
                         "namespace": "persistent",
+                        "pc": 2,
                         "depth": 2,
                         "index": 8,
                         "frame_id": 1,
                     }
                 ],
                 "sha3s": [],
+                "frames": [
+                    {
+                        "id": 0,
+                        "parent_id": None,
+                        "type": "ROOT",
+                        "depth": 1,
+                        "storage_address": ADDRESS_A,
+                        "requested_code_address": ADDRESS_A,
+                        "code_address": CODE_A,
+                        "code_attribution": "exact",
+                        "code_source": "eip7702",
+                        "code_designator": "0xef0100" + "aa" * 20,
+                        "target_confirmed": True,
+                        "faulted": False,
+                        "exit_error": None,
+                        "outcome": "succeeded",
+                        "completion_validated": True,
+                        "completion_word": None,
+                    },
+                    {
+                        "id": 1,
+                        "parent_id": 0,
+                        "type": "CALL",
+                        "depth": 2,
+                        "storage_address": ADDRESS_B,
+                        "requested_code_address": ADDRESS_B,
+                        "code_address": CODE_B,
+                        "code_attribution": "exact",
+                        "code_source": "eip7702",
+                        "code_designator": "0xef0100" + "bb" * 20,
+                        "target_confirmed": True,
+                        "faulted": False,
+                        "exit_error": None,
+                        "outcome": "succeeded",
+                        "completion_validated": True,
+                        "completion_word": ONE,
+                    },
+                ],
                 "stepCount": 10,
+                "lastOp": "STOP",
+                "lastDepth": 1,
             }
         }
 
@@ -462,14 +503,15 @@ class Eip7702TraceTests(IsolatedAsyncioTestCase):
         self.assertEqual(writes[1]["code_address"], CODE_B)
         self.assertEqual(writes[1]["code_attribution"], "exact")
         tracer_source = provider.params[1]["tracer"]
-        self.assertIn("db.getCode(requested)", tracer_source)
+        self.assertIn("db.getCode(requestedHex)", tracer_source)
         self.assertIn("rawCode.length === 48", tracer_source)
         self.assertIn("rawCode.slice(0, 8) === '0xef0100'", tracer_source)
-        self.assertIn("toAddress(log.stack.peek(1))", tracer_source)
-        self.assertEqual(
-            tracer_source.count("this.effectiveCode(requested, db)"),
-            2,
-        )
+        self.assertNotIn("pendingCalls", tracer_source)
+        self.assertNotIn("toAddress(log.stack.peek(1))", tracer_source)
+        self.assertIn("enter: function(call)", tracer_source)
+        self.assertIn("exit: function(result)", tracer_source)
+        self.assertIn("pendingCompletions", tracer_source)
+        self.assertIn("if (this.fatal === null)", tracer_source)
         self.assertIn("this.steps >= 10", tracer_source)
         self.assertIn("this.writes.length >= 2", tracer_source)
         self.assertIn("this.sha3s.length >= 1", tracer_source)
@@ -524,27 +566,6 @@ class Eip7702TraceTests(IsolatedAsyncioTestCase):
 
         with self.assertRaises(TraceNotAvailableError):
             await client.execute_prestate_trace(1, artifact().tx_hash)
-
-    def test_raw_structlogs_mark_code_attribution_inferred(self):
-        client = TraceRPCClient(_NoopProvider())
-
-        writes, _ = client._parse_structlogs(
-            [
-                {
-                    "op": "SSTORE",
-                    "depth": 1,
-                    "pc": 7,
-                    "stack": [ONE, SLOT_1],
-                    "memory": [],
-                }
-            ],
-            ADDRESS_A,
-            include_memory=False,
-        )
-
-        self.assertEqual(writes[0]["address"], ADDRESS_A)
-        self.assertEqual(writes[0]["code_address"], ADDRESS_A)
-        self.assertEqual(writes[0]["code_attribution"], "inferred")
 
     def test_incomplete_code_attribution_keeps_raw_writes_without_layout(self):
         tracer = TransactionAnalysisService(

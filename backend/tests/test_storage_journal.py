@@ -6,7 +6,6 @@ from app.services.tracer.journal import (
     WriteEffect,
     ZERO_WORD,
 )
-from app.services.tracer.rpc_client import TraceRPCClient
 from app.config import Settings
 from app.repositories.trace_cache import TransactionTraceArtifactData
 from app.services.decoder import TypeDecoder
@@ -186,44 +185,6 @@ class StorageJournalTests(unittest.TestCase):
 
         self.assertEqual(journal.events[0].address, canonical_yfi)
         self.assertEqual(journal.events[0].code_address, canonical_yfi)
-
-
-class FrameOutcomeTests(unittest.TestCase):
-    def test_rpc_trace_normalizes_segmented_preimages_and_memory_words(self):
-        client = TraceRPCClient(object())
-
-        self.assertEqual(
-            client._normalize_preimage("0x1122" + "0x3344"),
-            "0x11223344",
-        )
-        self.assertEqual(
-            client._extract_memory_slice(
-                ["0x" + "11" * 32, "0x" + "22" * 32],
-                31,
-                2,
-            ),
-            "0x1122",
-        )
-        self.assertEqual(
-            client._extract_memory_slice(
-                ["0x" + "11" * 32],
-                10**9,
-                2,
-            ),
-            "0x0000",
-        )
-
-    def test_parent_revert_marks_descendant_writes_reverted(self):
-        logs = [
-            {"depth": 1, "op": "CALL"},
-            {"depth": 2, "op": "SSTORE"},
-            {"depth": 2, "op": "RETURN"},
-            {"depth": 1, "op": "REVERT"},
-        ]
-        writes = [{"index": 1}]
-        TraceRPCClient(object())._annotate_frame_outcomes(logs, writes)
-        self.assertEqual(writes[0]["frame_id"], 1)
-        self.assertTrue(writes[0]["frame_reverted"])
 
 
 class _ArtifactRepository:

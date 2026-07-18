@@ -2,13 +2,13 @@
 
 import logging
 import re
+from typing import Any
 
 from web3 import Web3
 
 from app.config import Settings
 from app.models.errors import RPCError, TraceNotAvailableError, TransactionNotFoundError
 from app.services.web3_provider import Web3Provider
-from app.utils.addresses import normalize_evm_address
 
 logger = logging.getLogger(__name__)
 
@@ -101,21 +101,11 @@ class TraceRPCClient:
         chain_id: int,
         tx_hash: str,
     ) -> tuple[list[dict], list[dict], int, str | None]:
-        """
-        Parse structLogs to extract SSTORE and SHA3 operations.
+        """Extract compact write and SHA3 evidence with the Reth JS tracer.
 
-        Uses the standard structLogs format with memory/stack access. Works on all
-        nodes with debug_traceTransaction support.
-
-        For SHA3/KECCAK256:
-        - When the opcode executes, stack has [offset, size]
-        - Memory contains the preimage at memory[offset:offset+size]
-        - The hash result appears on the stack in the NEXT step
-
-        Address tracking handles:
-        - CALL/STATICCALL: New context with target's storage
-        - DELEGATECALL/CALLCODE: Code from target but storage stays with caller
-        - CREATE/CREATE2: New contract created, constructor writes to new contract's storage
+        Internal frame identity comes exclusively from ``enter``/``exit``
+        hooks. Malformed or partial evidence fails closed; raw struct-log
+        reconstruction is deliberately unsupported.
 
         Returns writes, SHA3 preimages, step count, and an optional stable
         degradation reason.
@@ -150,148 +140,7 @@ class TraceRPCClient:
         code attribution and frame outcomes. Pre-write values are recovered by
         the extractor's full-prestate replay.
         """
-        tracer = r"""
-        {
-          writes: [], sha3s: [], steps: 0, lastOp: null, lastDepth: null,
-          sha3Bytes: 0,
-          frames: {}, frameStack: [], pendingCalls: {}, nextFrameId: 1,
-          effectiveCode: function(requested, db) {
-            var requestedHex = toHex(requested).toLowerCase();
-            var rawCode = toHex(db.getCode(requested)).toLowerCase();
-            if (rawCode.length === 48 && rawCode.slice(0, 8) === '0xef0100') {
-              return '0x' + rawCode.slice(8);
-            }
-            return requestedHex;
-          },
-          ensureRoot: function(log, db) {
-            if (this.frameStack.length === 0) {
-              var requested = log.contract.getAddress();
-              var address = toHex(requested);
-              this.frames[0] = {id: 0, parent: null, depth: log.getDepth(), storage: address, code: this.effectiveCode(requested, db), failed: false};
-              this.frameStack.push(0);
-            }
-          },
-          syncFrame: function(log, db) {
-            var depth = log.getDepth();
-            while (this.frameStack.length > 1 && this.currentFrame().depth > depth) {
-              this.frameStack.pop();
-            }
-            while (this.currentFrame().depth < depth) {
-              var parent = this.currentFrame();
-              var pending = this.pendingCalls[depth];
-              var address = toHex(log.contract.getAddress());
-              var requested = pending && pending.code ? pending.code : log.contract.getAddress();
-              var frameId = this.nextFrameId++;
-              this.frames[frameId] = {
-                id: frameId,
-                parent: parent.id,
-                depth: parent.depth + 1,
-                storage: address,
-                code: this.effectiveCode(requested, db),
-                failed: false
-              };
-              this.frameStack.push(frameId);
-              delete this.pendingCalls[depth];
-            }
-            if (this.currentFrame().depth === depth) {
-              delete this.pendingCalls[depth + 1];
-            }
-          },
-          currentFrame: function() {
-            return this.frames[this.frameStack[this.frameStack.length - 1]];
-          },
-          step: function(log, db) {
-            if (this.steps >= __MAX_STEPS__) {
-              throw new Error('slotscan trace limit exceeded: steps');
-            }
-            this.lastOp = log.op.toString();
-            this.lastDepth = log.getDepth();
-            this.ensureRoot(log, db);
-            this.syncFrame(log, db);
-            var frame = this.currentFrame();
-            var op = log.op.toString();
-
-            if (op === 'SSTORE' || op === 'TSTORE') {
-              if (this.writes.length >= __MAX_WRITES__) {
-                throw new Error('slotscan trace limit exceeded: writes');
-              }
-              var slotValue = log.stack.peek(0);
-              var value = log.stack.peek(1);
-              var oldValue = null;
-              this.writes.push({
-                address: frame.storage,
-                code_address: frame.code,
-                code_attribution: 'exact',
-                pc: log.getPC(),
-                slot: '0x' + slotValue.toString(16),
-                value: '0x' + value.toString(16),
-                old_value: oldValue,
-                opcode: op,
-                namespace: op === 'SSTORE' ? 'persistent' : 'transient',
-                depth: log.getDepth(),
-                index: this.steps,
-                frame_id: frame.id
-              });
-            } else if (op === 'SHA3' || op === 'KECCAK256') {
-              var offset = parseInt(log.stack.peek(0).toString());
-              var size = parseInt(log.stack.peek(1).toString());
-              if (size >= 32 && size <= 256) {
-                if (this.sha3s.length >= __MAX_SHA3S__ ||
-                    this.sha3Bytes + size > __MAX_SHA3_BYTES__) {
-                  throw new Error('slotscan trace limit exceeded: sha3');
-                }
-                this.sha3s.push({
-                  address: frame.storage,
-                  preimage: toHex(log.memory.slice(offset, offset + size)),
-                  size: size,
-                  depth: log.getDepth()
-                });
-                this.sha3Bytes += size;
-              }
-            }
-            if (op === 'CALL' || op === 'STATICCALL' || op === 'DELEGATECALL' || op === 'CALLCODE') {
-              this.pendingCalls[log.getDepth() + 1] = {
-                type: op,
-                code: toAddress(log.stack.peek(1))
-              };
-            } else if (op === 'CREATE' || op === 'CREATE2') {
-              this.pendingCalls[log.getDepth() + 1] = {type: op, code: null};
-            }
-            if (log.getError()) frame.failed = true;
-            this.steps += 1;
-          },
-          fault: function(log, db) {
-            this.ensureRoot(log, db);
-            this.currentFrame().failed = true;
-          },
-          result: function(ctx, db) {
-            if (ctx.error && this.frames[0]) this.frames[0].failed = true;
-            for (var i = 0; i < this.writes.length; i++) {
-              var write = this.writes[i];
-              var current = write.frame_id;
-              var failed = [];
-              while (current !== null && current !== undefined) {
-                var frame = this.frames[current];
-                if (frame.failed) failed.push(current);
-                current = frame.parent;
-              }
-              var ownFrame = this.frames[write.frame_id];
-              write.frame_parent_id = ownFrame.parent;
-              write.frame_failed = ownFrame.failed;
-              write.frame_reverted = failed.length > 0;
-              write.rollback_frame_id = failed.length > 0 ? failed[0] : null;
-              write.rollback_parent_id = failed.length > 1 ? failed[1] : null;
-            }
-            return {writes: this.writes, sha3s: this.sha3s, stepCount: this.steps, lastOp: this.lastOp, lastDepth: this.lastDepth};
-          }
-        }
-        """
-        tracer = (
-            tracer.replace("__MAX_STEPS__", str(self.max_steps))
-            .replace("__MAX_WRITES__", str(self.max_writes))
-            .replace("__MAX_SHA3S__", str(self.max_sha3_ops))
-            .replace("__MAX_SHA3_BYTES__", str(self.max_preimage_bytes))
-        )
+        tracer = self._compact_storage_tracer_source()
         try:
             response = await self.web3_provider.make_request(
                 chain_id,
@@ -299,6 +148,8 @@ class TraceRPCClient:
                 [tx_hash, {"tracer": tracer}],
             )
         except Exception as exc:
+            if "slotscan trace limit exceeded" in str(exc).lower():
+                raise TraceNotAvailableError("Trace exceeds configured limits")
             logger.info("Compact storage tracer unavailable: %s", exc)
             return None
 
@@ -311,31 +162,484 @@ class TraceRPCClient:
             )
             return None
         result = response.get("result")
-        if not isinstance(result, dict) or "writes" not in result:
+        try:
+            return self._decode_compact_trace_result(result)
+        except TraceNotAvailableError:
+            raise
+        except (TypeError, ValueError) as exc:
+            logger.info("Compact storage tracer returned malformed evidence: %s", exc)
             return None
 
-        writes = result.get("writes") or []
-        for write in writes:
-            write["slot"] = self._normalize_slot(write.get("slot", "0x0"))
-            write["value"] = self._normalize_value(write.get("value", "0x0"))
-            if write.get("old_value") is not None:
-                write["old_value"] = self._normalize_value(write["old_value"])
-            write["address"] = normalize_evm_address(write.get("address"))
-            write["code_address"] = normalize_evm_address(write.get("code_address"))
+    def _compact_storage_tracer_source(self) -> str:
+        tracer = r"""
+        {
+          writes: [], sha3s: [], frames: {}, frameStack: [],
+          pendingCompletions: {}, nextFrameId: 1,
+          steps: 0, hookEnters: 0, hookExits: 0,
+          lastOp: null, lastDepth: null, sha3Bytes: 0, fatal: null,
+          isCall: function(type) {
+            return type === 'CALL' || type === 'STATICCALL' ||
+              type === 'DELEGATECALL' || type === 'CALLCODE';
+          },
+          isCreate: function(type) {
+            return type === 'CREATE' || type === 'CREATE2';
+          },
+          wordHex: function(word) {
+            var hex = word.toString(16);
+            while (hex.length < 64) hex = '0' + hex;
+            return '0x' + hex;
+          },
+          wordAddress: function(word) {
+            var hex = word.toString(16);
+            while (hex.length < 40) hex = '0' + hex;
+            return '0x' + hex.slice(-40).toLowerCase();
+          },
+          resolveCode: function(requested, db) {
+            var requestedHex = (
+              typeof requested === 'string' ? requested : toHex(requested)
+            ).toLowerCase();
+            var rawCode = toHex(db.getCode(requestedHex)).toLowerCase();
+            if (rawCode.slice(0, 8) === '0xef0100') {
+              if (rawCode.length === 48) {
+                return {
+                  code: '0x' + rawCode.slice(8),
+                  attribution: 'exact',
+                  source: 'eip7702',
+                  designator: rawCode
+                };
+              }
+              return {
+                code: null,
+                attribution: 'unknown',
+                source: 'unknown',
+                designator: null
+              };
+            }
+            return {
+              code: requestedHex,
+              attribution: 'exact',
+              source: 'direct',
+              designator: null
+            };
+          },
+          applyCodeResolution: function(frame, resolution) {
+            frame.code_address = resolution.code;
+            frame.code_attribution = resolution.attribution;
+            frame.code_source = resolution.source;
+            frame.code_designator = resolution.designator;
+          },
+          currentFrame: function() {
+            if (this.frameStack.length === 0) {
+              throw new Error('slotscan frame stack is empty');
+            }
+            return this.frames[this.frameStack[this.frameStack.length - 1]];
+          },
+          ensureRoot: function(log, db) {
+            if (this.frameStack.length !== 0) return;
+            var requested = toHex(log.contract.getAddress()).toLowerCase();
+            var frame = {
+              id: 0,
+              parent_id: null,
+              type: 'ROOT',
+              depth: log.getDepth(),
+              storage_address: requested,
+              requested_code_address: requested,
+              code_address: null,
+              code_attribution: 'unknown',
+              code_source: 'unknown',
+              code_designator: null,
+              target_confirmed: true,
+              faulted: false,
+              exit_error: null,
+              outcome: 'open',
+              completion_validated: true,
+              completion_word: null,
+              has_writes: false
+            };
+            this.applyCodeResolution(frame, this.resolveCode(requested, db));
+            this.frames[0] = frame;
+            this.frameStack.push(0);
+          },
+          confirmCurrentFrame: function(log, db) {
+            var frame = this.currentFrame();
+            if (frame.target_confirmed) return;
+            var actualStorage = toHex(log.contract.getAddress()).toLowerCase();
+            if (actualStorage !== frame.storage_address ||
+                log.getDepth() !== frame.depth) {
+              throw new Error('slotscan hook/step context mismatch');
+            }
+            this.applyCodeResolution(
+              frame,
+              this.resolveCode(frame.requested_code_address, db)
+            );
+            frame.target_confirmed = true;
+          },
+          consumeCompletion: function(log) {
+            var parent = this.currentFrame();
+            var completion = this.pendingCompletions[parent.id];
+            if (!completion) return;
+            if (log.stack.length() < 1) {
+              throw new Error('slotscan child return word is missing');
+            }
+            var child = this.frames[completion.frame_id];
+            var word = this.wordHex(log.stack.peek(0));
+            var failed = false;
+            if (this.isCall(child.type)) {
+              if (word !== '0x' + '0'.repeat(64) &&
+                  word !== '0x' + '0'.repeat(63) + '1') {
+                throw new Error('slotscan call return word is malformed');
+              }
+              failed = word === '0x' + '0'.repeat(64);
+              var exitFailed = child.faulted || child.exit_error !== null;
+              if (failed !== exitFailed) {
+                throw new Error('slotscan call completion contradicts exit');
+              }
+            } else if (this.isCreate(child.type)) {
+              failed = word === '0x' + '0'.repeat(64);
+              if (!failed &&
+                  this.wordAddress(log.stack.peek(0)) !==
+                    child.requested_code_address) {
+                throw new Error('slotscan creation return address mismatch');
+              }
+              if (!failed && (child.faulted || child.exit_error !== null)) {
+                throw new Error('slotscan creation success contradicts exit');
+              }
+            } else {
+              throw new Error('slotscan completion has unsupported frame type');
+            }
+            child.outcome = failed ? 'failed' : 'succeeded';
+            child.completion_validated = true;
+            child.completion_word = word;
+            delete this.pendingCompletions[parent.id];
+          },
+          reachLimit: function(marker) {
+            this.fatal = marker;
+            throw new Error('slotscan trace limit exceeded: ' + marker);
+          },
+          rethrow: function(error) {
+            if (this.fatal === null) this.fatal = 'tracer:exception';
+            throw error;
+          },
+          onStep: function(log, db) {
+            if (this.steps >= __MAX_STEPS__) this.reachLimit('limit:steps');
+            this.ensureRoot(log, db);
+            this.consumeCompletion(log);
+            this.confirmCurrentFrame(log, db);
+            var frame = this.currentFrame();
+            var op = log.op.toString();
+            this.lastOp = op;
+            this.lastDepth = log.getDepth();
+            if (op === 'SSTORE' || op === 'TSTORE') {
+              if (this.writes.length >= __MAX_WRITES__) {
+                this.reachLimit('limit:writes');
+              }
+              frame.has_writes = true;
+              this.writes.push({
+                pc: log.getPC(),
+                slot: this.wordHex(log.stack.peek(0)),
+                value: this.wordHex(log.stack.peek(1)),
+                old_value: null,
+                opcode: op,
+                namespace: op === 'SSTORE' ? 'persistent' : 'transient',
+                depth: log.getDepth(),
+                index: this.steps,
+                frame_id: frame.id
+              });
+            } else if (op === 'SHA3' || op === 'KECCAK256') {
+              var offset = parseInt(log.stack.peek(0).toString());
+              var size = parseInt(log.stack.peek(1).toString());
+              if (size >= 32 && size <= 256) {
+                if (this.sha3s.length >= __MAX_SHA3S__) {
+                  this.reachLimit('limit:sha3');
+                }
+                if (this.sha3Bytes + size > __MAX_SHA3_BYTES__) {
+                  this.reachLimit('limit:preimage_bytes');
+                }
+                this.sha3s.push({
+                  address: frame.storage_address,
+                  preimage: toHex(log.memory.slice(offset, offset + size)),
+                  size: size,
+                  depth: log.getDepth()
+                });
+                this.sha3Bytes += size;
+              }
+            }
+            this.steps += 1;
+          },
+          onFault: function(log, db) {
+            if (this.steps >= __MAX_STEPS__) this.reachLimit('limit:steps');
+            this.ensureRoot(log, db);
+            this.consumeCompletion(log);
+            this.confirmCurrentFrame(log, db);
+            var frame = this.currentFrame();
+            frame.faulted = true;
+            this.lastOp = log.op.toString();
+            this.lastDepth = log.getDepth();
+            this.steps += 1;
+          },
+          onEnter: function(call) {
+            var parent = this.currentFrame();
+            var type = call.getType().toString();
+            if (!this.isCall(type) && !this.isCreate(type)) {
+              throw new Error('slotscan unsupported hook frame type');
+            }
+            var target = toHex(call.getTo()).toLowerCase();
+            var storage = (
+              type === 'DELEGATECALL' || type === 'CALLCODE'
+            ) ? parent.storage_address : target;
+            var id = this.nextFrameId++;
+            this.frames[id] = {
+              id: id,
+              parent_id: parent.id,
+              type: type,
+              depth: parent.depth + 1,
+              storage_address: storage,
+              requested_code_address: target,
+              code_address: null,
+              code_attribution: 'unknown',
+              code_source: 'unknown',
+              code_designator: null,
+              target_confirmed: false,
+              faulted: false,
+              exit_error: null,
+              outcome: 'open',
+              completion_validated: false,
+              completion_word: null,
+              has_writes: false
+            };
+            this.frameStack.push(id);
+            this.hookEnters += 1;
+          },
+          onExit: function(result) {
+            if (this.frameStack.length <= 1) {
+              throw new Error('slotscan unmatched exit hook');
+            }
+            var child = this.currentFrame();
+            var rawError = result.getError();
+            child.exit_error = (
+              typeof rawError === 'undefined' ? null : String(rawError)
+            );
+            child.outcome = (
+              child.faulted || child.exit_error !== null
+            ) ? 'failed' : 'succeeded';
+            this.frameStack.pop();
+            this.hookExits += 1;
+            if (!child.has_writes) return;
+            var parent = this.currentFrame();
+            parent.has_writes = true;
+            if (this.pendingCompletions[parent.id]) {
+              throw new Error('slotscan parent has two pending completions');
+            }
+            this.pendingCompletions[parent.id] = {frame_id: child.id};
+          },
+          step: function(log, db) {
+            try {
+              this.onStep(log, db);
+            } catch (error) {
+              this.rethrow(error);
+            }
+          },
+          fault: function(log, db) {
+            try {
+              this.onFault(log, db);
+            } catch (error) {
+              this.rethrow(error);
+            }
+          },
+          enter: function(call) {
+            try {
+              this.onEnter(call);
+            } catch (error) {
+              this.rethrow(error);
+            }
+          },
+          exit: function(result) {
+            try {
+              this.onExit(result);
+            } catch (error) {
+              this.rethrow(error);
+            }
+          },
+          fatalResult: function() {
+            return {
+              fatal: this.fatal,
+              stepCount: this.steps,
+              hookEnters: this.hookEnters,
+              hookExits: this.hookExits
+            };
+          },
+          result: function(ctx, db) {
+            if (this.fatal !== null) return this.fatalResult();
+            var executable = this.frames[0] !== undefined;
+            if (!executable) {
+              if (this.steps !== 0 || this.hookEnters !== 0 ||
+                  this.hookExits !== 0 || this.writes.length !== 0 ||
+                  this.sha3s.length !== 0 || this.frameStack.length !== 0) {
+                this.fatal = 'tracer:exception';
+                return this.fatalResult();
+              }
+              return {
+                fatal: null,
+                executable: false,
+                stepCount: 0,
+                hookEnters: 0,
+                hookExits: 0,
+                frameStack: [],
+                writes: [],
+                sha3s: [],
+                frames: [],
+                lastOp: null,
+                lastDepth: null
+              };
+            }
+            if (this.hookEnters !== this.hookExits ||
+                this.frameStack.length !== 1 ||
+                this.frameStack[0] !== 0) {
+              this.fatal = 'tracer:exception';
+              return this.fatalResult();
+            }
+            for (var pendingParent in this.pendingCompletions) {
+              this.fatal = 'tracer:exception';
+              return this.fatalResult();
+            }
+            var root = this.frames[0];
+            root.exit_error = ctx.error ? String(ctx.error) : null;
+            root.outcome = (
+              root.faulted || root.exit_error !== null
+            ) ? 'failed' : 'succeeded';
+            var needed = {};
+            for (var i = 0; i < this.writes.length; i++) {
+              var current = this.writes[i].frame_id;
+              while (current !== null && current !== undefined) {
+                var evidenceFrame = this.frames[current];
+                if (!evidenceFrame) {
+                  this.fatal = 'tracer:exception';
+                  return this.fatalResult();
+                }
+                needed[current] = true;
+                current = evidenceFrame.parent_id;
+              }
+            }
+            var outputFrames = [];
+            for (var frameId in needed) {
+              var frame = this.frames[frameId];
+              if (!frame.target_confirmed || frame.outcome === 'open' ||
+                  (frame.id !== 0 && !frame.completion_validated)) {
+                this.fatal = 'tracer:exception';
+                return this.fatalResult();
+              }
+              outputFrames.push({
+                id: frame.id,
+                parent_id: frame.parent_id,
+                type: frame.type,
+                depth: frame.depth,
+                storage_address: frame.storage_address,
+                requested_code_address: frame.requested_code_address,
+                code_address: frame.code_address,
+                code_attribution: frame.code_attribution,
+                code_source: frame.code_source,
+                code_designator: frame.code_designator,
+                target_confirmed: frame.target_confirmed,
+                faulted: frame.faulted,
+                exit_error: frame.exit_error,
+                outcome: frame.outcome,
+                completion_validated: frame.completion_validated,
+                completion_word: frame.completion_word
+              });
+            }
+            return {
+              fatal: null,
+              executable: true,
+              stepCount: this.steps,
+              hookEnters: this.hookEnters,
+              hookExits: this.hookExits,
+              frameStack: this.frameStack,
+              writes: this.writes,
+              sha3s: this.sha3s,
+              frames: outputFrames,
+              lastOp: this.lastOp,
+              lastDepth: this.lastDepth
+            };
+          }
+        }
+        """
+        return (
+            tracer.replace("__MAX_STEPS__", str(self.max_steps))
+            .replace("__MAX_WRITES__", str(self.max_writes))
+            .replace("__MAX_SHA3S__", str(self.max_sha3_ops))
+            .replace("__MAX_SHA3_BYTES__", str(self.max_preimage_bytes))
+        )
 
-        step_count = int(result.get("stepCount") or 0)
-        sha3s = result.get("sha3s") or []
-        self._validate_compact_limits(writes, sha3s, step_count)
-        for operation in sha3s:
-            preimage = self._normalize_preimage(operation.get("preimage"))
-            if not preimage:
-                operation["preimage"] = None
-                operation["hash"] = None
-                continue
-            operation["preimage"] = preimage
-            operation["hash"] = Web3.keccak(
-                bytes.fromhex(preimage.removeprefix("0x"))
-            ).hex()
+    def _decode_compact_trace_result(
+        self,
+        result: Any,
+    ) -> tuple[list[dict], list[dict], int]:
+        if not isinstance(result, dict) or "fatal" not in result:
+            raise ValueError("missing compact trace envelope")
+
+        fatal = result["fatal"]
+        if fatal is not None:
+            if fatal in {
+                "limit:steps",
+                "limit:writes",
+                "limit:sha3",
+                "limit:preimage_bytes",
+            }:
+                raise TraceNotAvailableError("Trace exceeds configured limits")
+            if fatal == "tracer:exception":
+                raise ValueError("tracer callback failed")
+            raise ValueError("unknown tracer fatal marker")
+
+        executable = result.get("executable")
+        if not isinstance(executable, bool):
+            raise ValueError("invalid executable marker")
+        step_count = self._strict_int(result.get("stepCount"), "stepCount")
+        hook_enters = self._strict_int(result.get("hookEnters"), "hookEnters")
+        hook_exits = self._strict_int(result.get("hookExits"), "hookExits")
+        if step_count > self.max_steps:
+            raise TraceNotAvailableError("Trace exceeds the configured step limit")
+        if hook_enters != hook_exits:
+            raise ValueError("unbalanced call hooks")
+
+        frame_stack = result.get("frameStack")
+        writes_value = result.get("writes")
+        sha3s_value = result.get("sha3s")
+        frames_value = result.get("frames")
+        if not all(
+            isinstance(value, list)
+            for value in (frame_stack, writes_value, sha3s_value, frames_value)
+        ):
+            raise ValueError("compact trace collections must be arrays")
+
+        if not executable:
+            if (
+                step_count != 0
+                or hook_enters != 0
+                or frame_stack
+                or writes_value
+                or sha3s_value
+                or frames_value
+            ):
+                raise ValueError("no-op trace contains executable evidence")
+            return [], [], 0
+        if frame_stack != [0]:
+            raise ValueError("final frame stack is not root-only")
+        if step_count == 0:
+            raise ValueError("executable trace has no execution steps")
+        last_op = result.get("lastOp")
+        if not isinstance(last_op, str) or not last_op or len(last_op) > 64:
+            raise ValueError("invalid final opcode")
+        self._strict_int(result.get("lastDepth"), "lastDepth")
+
+        frames = self._validate_compact_frames(frames_value)
+        writes = self._validate_and_flatten_writes(
+            writes_value,
+            frames,
+            step_count,
+        )
+        sha3s = self._validate_compact_sha3s(sha3s_value)
+        self._validate_reduced_frame_graph(frames, writes)
+
         logger.info(
             "Compact storage trace: steps=%s, writes=%s, sha3s=%s, last=%s@%s",
             step_count,
@@ -346,28 +650,350 @@ class TraceRPCClient:
         )
         return writes, sha3s, step_count
 
-    def _validate_compact_limits(
+    def _validate_compact_frames(
         self,
-        writes: list[dict],
-        sha3s: list[dict],
-        step_count: int,
-    ) -> None:
-        if len(writes) > self.max_writes:
-            raise TraceNotAvailableError("Trace exceeds the configured write limit")
-        if step_count > self.max_steps:
-            raise TraceNotAvailableError("Trace exceeds the configured step limit")
-        if len(sha3s) > self.max_sha3_ops:
-            raise TraceNotAvailableError("Trace exceeds the configured SHA3 limit")
+        frames_value: list[Any],
+    ) -> dict[int, dict]:
+        frames: dict[int, dict] = {}
+        allowed_types = {
+            "ROOT",
+            "CALL",
+            "STATICCALL",
+            "DELEGATECALL",
+            "CALLCODE",
+            "CREATE",
+            "CREATE2",
+        }
+        for raw in frames_value:
+            if not isinstance(raw, dict):
+                raise ValueError("frame must be an object")
+            frame_id = self._strict_int(raw.get("id"), "frame.id")
+            if frame_id in frames:
+                raise ValueError("duplicate frame id")
+            parent_id = raw.get("parent_id")
+            if parent_id is not None:
+                parent_id = self._strict_int(parent_id, "frame.parent_id")
+            frame_type = raw.get("type")
+            if frame_type not in allowed_types:
+                raise ValueError("unsupported frame type")
+            depth = self._strict_int(raw.get("depth"), "frame.depth")
+            storage = self._strict_address(
+                raw.get("storage_address"),
+                "frame.storage_address",
+            )
+            requested = self._strict_address(
+                raw.get("requested_code_address"),
+                "frame.requested_code_address",
+            )
+            target_confirmed = raw.get("target_confirmed")
+            faulted = raw.get("faulted")
+            completion_validated = raw.get("completion_validated")
+            if not all(
+                isinstance(value, bool)
+                for value in (target_confirmed, faulted, completion_validated)
+            ):
+                raise ValueError("frame evidence flags must be booleans")
+            if not target_confirmed:
+                raise ValueError("returned frame target was not confirmed")
+            outcome = raw.get("outcome")
+            if outcome not in {"succeeded", "failed"}:
+                raise ValueError("frame outcome is not terminal")
+            exit_error = raw.get("exit_error")
+            if exit_error is not None and (
+                not isinstance(exit_error, str) or len(exit_error) > 4096
+            ):
+                raise ValueError("invalid frame exit error")
 
+            attribution = raw.get("code_attribution")
+            source = raw.get("code_source")
+            designator = raw.get("code_designator")
+            code_address = raw.get("code_address")
+            if attribution == "exact":
+                code_address = self._strict_address(
+                    code_address,
+                    "frame.code_address",
+                )
+                if source == "direct":
+                    if code_address != requested or designator is not None:
+                        raise ValueError("invalid direct code resolution")
+                elif source == "eip7702":
+                    if (
+                        not isinstance(designator, str)
+                        or not re.fullmatch(r"0xef0100[0-9a-fA-F]{40}", designator)
+                        or code_address != "0x" + designator[8:].lower()
+                    ):
+                        raise ValueError("invalid EIP-7702 code resolution")
+                    designator = designator.lower()
+                else:
+                    raise ValueError("invalid exact code source")
+            elif attribution == "unknown":
+                if (
+                    code_address is not None
+                    or source != "unknown"
+                    or designator is not None
+                ):
+                    raise ValueError("invalid unknown code resolution")
+            else:
+                raise ValueError("invalid code attribution")
+
+            completion_word = raw.get("completion_word")
+            if frame_type == "ROOT":
+                if (
+                    frame_id != 0
+                    or parent_id is not None
+                    or not completion_validated
+                    or completion_word is not None
+                ):
+                    raise ValueError("invalid root frame")
+            else:
+                if parent_id is None or not completion_validated:
+                    raise ValueError("child completion was not validated")
+                completion_word = self._strict_word(
+                    completion_word,
+                    "frame.completion_word",
+                )
+                failed = outcome == "failed"
+                if frame_type in {
+                    "CALL",
+                    "STATICCALL",
+                    "DELEGATECALL",
+                    "CALLCODE",
+                }:
+                    if completion_word not in {
+                        "0x" + "0" * 64,
+                        "0x" + "0" * 63 + "1",
+                    }:
+                        raise ValueError("invalid call completion word")
+                    if failed != (int(completion_word, 16) == 0):
+                        raise ValueError("call outcome contradicts completion")
+                    if failed != (faulted or exit_error is not None):
+                        raise ValueError("call outcome contradicts exit evidence")
+                else:
+                    if int(completion_word, 16) == 0:
+                        if not failed:
+                            raise ValueError("creation failure marked successful")
+                    else:
+                        if (
+                            failed
+                            or self._word_address(completion_word) != requested
+                            or faulted
+                            or exit_error is not None
+                        ):
+                            raise ValueError(
+                                "creation success contradicts completion"
+                            )
+
+            frames[frame_id] = {
+                "id": frame_id,
+                "parent_id": parent_id,
+                "type": frame_type,
+                "depth": depth,
+                "storage_address": storage,
+                "requested_code_address": requested,
+                "code_address": code_address,
+                "code_attribution": attribution,
+                "code_source": source,
+                "code_designator": designator,
+                "faulted": faulted,
+                "exit_error": exit_error,
+                "outcome": outcome,
+                "completion_word": completion_word,
+            }
+
+        if frames and 0 not in frames:
+            raise ValueError("write frame graph has no root")
+        for frame in frames.values():
+            parent_id = frame["parent_id"]
+            if parent_id is None:
+                continue
+            parent = frames.get(parent_id)
+            if parent is None:
+                raise ValueError("frame parent is missing")
+            if frame["depth"] != parent["depth"] + 1:
+                raise ValueError("frame depth does not follow its parent")
+            if frame["type"] in {"DELEGATECALL", "CALLCODE"}:
+                if frame["storage_address"] != parent["storage_address"]:
+                    raise ValueError("delegate frame changed storage context")
+            elif frame["storage_address"] != frame["requested_code_address"]:
+                raise ValueError("call/create frame storage target mismatch")
+        if frames:
+            root = frames[0]
+            if (
+                root["type"] != "ROOT"
+                or root["storage_address"] != root["requested_code_address"]
+                or (root["outcome"] == "failed")
+                != (root["faulted"] or root["exit_error"] is not None)
+            ):
+                raise ValueError("invalid root storage context")
+        self._validate_acyclic_frames(frames)
+        return frames
+
+    def _validate_and_flatten_writes(
+        self,
+        writes_value: list[Any],
+        frames: dict[int, dict],
+        step_count: int,
+    ) -> list[dict]:
+        if len(writes_value) > self.max_writes:
+            raise TraceNotAvailableError("Trace exceeds the configured write limit")
+        writes = []
+        previous_index = -1
+        for raw in writes_value:
+            if not isinstance(raw, dict):
+                raise ValueError("write must be an object")
+            frame_id = self._strict_int(raw.get("frame_id"), "write.frame_id")
+            frame = frames.get(frame_id)
+            if frame is None:
+                raise ValueError("write references an unknown frame")
+            index = self._strict_int(raw.get("index"), "write.index")
+            if index <= previous_index or index >= step_count:
+                raise ValueError("write index is outside execution order")
+            previous_index = index
+            pc = self._strict_int(raw.get("pc"), "write.pc")
+            depth = self._strict_int(raw.get("depth"), "write.depth")
+            if depth != frame["depth"]:
+                raise ValueError("write depth contradicts its frame")
+            opcode = raw.get("opcode")
+            namespace = raw.get("namespace")
+            if (opcode, namespace) not in {
+                ("SSTORE", "persistent"),
+                ("TSTORE", "transient"),
+            }:
+                raise ValueError("invalid storage-write opcode/namespace")
+            if raw.get("old_value") is not None:
+                raise ValueError("compact tracer must not guess old values")
+
+            failed_ancestors = []
+            current: int | None = frame_id
+            while current is not None:
+                current_frame = frames[current]
+                if current_frame["outcome"] == "failed":
+                    failed_ancestors.append(current)
+                current = current_frame["parent_id"]
+            writes.append(
+                {
+                    "address": frame["storage_address"],
+                    "code_address": frame["code_address"],
+                    "code_attribution": frame["code_attribution"],
+                    "pc": pc,
+                    "slot": self._strict_word(raw.get("slot"), "write.slot"),
+                    "value": self._strict_word(raw.get("value"), "write.value"),
+                    "old_value": None,
+                    "opcode": opcode,
+                    "namespace": namespace,
+                    "depth": depth,
+                    "index": index,
+                    "frame_id": frame_id,
+                    "frame_parent_id": frame["parent_id"],
+                    "frame_failed": frame["outcome"] == "failed",
+                    "frame_reverted": bool(failed_ancestors),
+                    "rollback_frame_id": (
+                        failed_ancestors[0] if failed_ancestors else None
+                    ),
+                    "rollback_parent_id": (
+                        failed_ancestors[1]
+                        if len(failed_ancestors) > 1
+                        else None
+                    ),
+                }
+            )
+        return writes
+
+    def _validate_compact_sha3s(
+        self,
+        sha3s_value: list[Any],
+    ) -> list[dict]:
+        if len(sha3s_value) > self.max_sha3_ops:
+            raise TraceNotAvailableError("Trace exceeds the configured SHA3 limit")
+        sha3s = []
         preimage_bytes = 0
-        for operation in sha3s:
-            preimage = operation.get("preimage")
-            if isinstance(preimage, str):
-                preimage_bytes += (len(preimage.removeprefix("0x")) + 1) // 2
+        for raw in sha3s_value:
+            if not isinstance(raw, dict):
+                raise ValueError("SHA3 evidence must be an object")
+            size = self._strict_int(raw.get("size"), "sha3.size")
+            if not 32 <= size <= 256:
+                raise ValueError("SHA3 evidence size is outside capture range")
+            preimage = raw.get("preimage")
+            if (
+                not isinstance(preimage, str)
+                or not re.fullmatch(r"0x(?:[0-9a-fA-F]{2})+", preimage)
+                or (len(preimage) - 2) // 2 != size
+            ):
+                raise ValueError("invalid SHA3 preimage")
+            preimage = preimage.lower()
+            preimage_bytes += size
             if preimage_bytes > self.max_preimage_bytes:
                 raise TraceNotAvailableError(
                     "Trace exceeds the configured preimage limit"
                 )
+            sha3s.append(
+                {
+                    "address": self._strict_address(
+                        raw.get("address"),
+                        "sha3.address",
+                    ),
+                    "preimage": preimage,
+                    "hash": Web3.keccak(
+                        bytes.fromhex(preimage.removeprefix("0x"))
+                    ).hex(),
+                    "size": size,
+                    "depth": self._strict_int(raw.get("depth"), "sha3.depth"),
+                }
+            )
+        return sha3s
+
+    @staticmethod
+    def _validate_acyclic_frames(frames: dict[int, dict]) -> None:
+        for frame_id in frames:
+            seen = set()
+            current: int | None = frame_id
+            while current is not None:
+                if current in seen:
+                    raise ValueError("frame graph contains a cycle")
+                seen.add(current)
+                current = frames[current]["parent_id"]
+
+    @staticmethod
+    def _validate_reduced_frame_graph(
+        frames: dict[int, dict],
+        writes: list[dict],
+    ) -> None:
+        needed = set()
+        for write in writes:
+            current: int | None = write["frame_id"]
+            while current is not None:
+                needed.add(current)
+                current = frames[current]["parent_id"]
+        if needed != set(frames):
+            raise ValueError("frame response is not reduced to write ancestors")
+
+    @staticmethod
+    def _strict_int(value: Any, field: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{field} must be a nonnegative integer")
+        return value
+
+    @staticmethod
+    def _strict_address(value: Any, field: str) -> str:
+        if not isinstance(value, str) or not re.fullmatch(
+            r"0x[0-9a-fA-F]{40}",
+            value,
+        ):
+            raise ValueError(f"{field} must be exactly 20 bytes")
+        return value.lower()
+
+    @staticmethod
+    def _strict_word(value: Any, field: str) -> str:
+        if not isinstance(value, str) or not re.fullmatch(
+            r"0x[0-9a-fA-F]{1,64}",
+            value,
+        ):
+            raise ValueError(f"{field} must be a 256-bit word")
+        return "0x" + value[2:].lower().zfill(64)
+
+    @staticmethod
+    def _word_address(word: str) -> str:
+        return "0x" + word[-40:]
 
     def _validate_prestate_size(self, trace: dict) -> None:
         if not isinstance(trace, dict):
@@ -398,284 +1024,3 @@ class TraceRPCClient:
                     raise TraceNotAvailableError(
                         "Prestate trace exceeds the configured storage limit"
                     )
-
-    def _parse_structlogs(
-        self,
-        struct_logs: list[dict],
-        tx_to_address: str | None,
-        include_memory: bool,
-    ) -> tuple[list[dict], list[dict]]:
-        """Parse structLogs to extract SSTORE and SHA3 operations."""
-        if len(struct_logs) > self.max_steps:
-            raise TraceNotAvailableError("Trace exceeds the configured step limit")
-
-        # PASS 1: Find all CREATE/CREATE2 and their resulting addresses
-        create_info: dict[int, dict] = {}
-        MAX_CONSTRUCTOR_STEPS = 100_000
-
-        for i, log in enumerate(struct_logs):
-            op = log.get("op", "")
-            if op in ("CREATE", "CREATE2"):
-                depth = log.get("depth", 1)
-                search_end = min(i + 1 + MAX_CONSTRUCTOR_STEPS, len(struct_logs))
-                for j in range(i + 1, search_end):
-                    if struct_logs[j].get("depth", 1) == depth:
-                        stack = struct_logs[j].get("stack", [])
-                        if stack:
-                            created_addr = normalize_evm_address(stack[-1])
-                            if created_addr and created_addr != "0x" + "0" * 40:
-                                create_info[i] = {
-                                    "start_step": i,
-                                    "end_step": j,
-                                    "created_address": created_addr,
-                                    "constructor_depth": depth + 1,
-                                }
-                        break
-
-        logger.info(f"Found {len(create_info)} CREATE/CREATE2 operations")
-
-        # PASS 2: Parse SSTOREs and SHA3s with proper address tracking
-        sstores = []
-        sha3s = []
-        sha3_bytes = 0
-        pending_sha3 = None
-
-        call_stack: list[tuple[str, str]] = []
-        if tx_to_address:
-            normalized_to = normalize_evm_address(tx_to_address)
-            if normalized_to:
-                call_stack.append((normalized_to, normalized_to))
-
-        active_creates: list[dict] = []
-
-        for i, log in enumerate(struct_logs):
-            op = log.get("op", "")
-            depth = log.get("depth", 1)
-            pc = log.get("pc", 0)
-            stack = log.get("stack", [])
-            memory = log.get("memory", [])
-
-            while len(call_stack) > depth:
-                call_stack.pop()
-
-            while active_creates and i >= active_creates[-1]["end_step"]:
-                active_creates.pop()
-
-            if i in create_info:
-                info = create_info[i]
-                active_creates.append(info)
-                call_stack.append((info["created_address"], info["created_address"]))
-
-            if pending_sha3 is not None:
-                if stack:
-                    hash_result = stack[-1] if stack else None
-                    if hash_result:
-                        preimage = pending_sha3.get("preimage")
-                        pending_bytes = (
-                            (len(preimage.removeprefix("0x")) + 1) // 2
-                            if isinstance(preimage, str)
-                            else 0
-                        )
-                        if (
-                            len(sha3s) >= self.max_sha3_ops
-                            or sha3_bytes + pending_bytes
-                            > self.max_preimage_bytes
-                        ):
-                            raise TraceNotAvailableError(
-                                "Trace exceeds the configured SHA3 limit"
-                            )
-                        pending_sha3["hash"] = self._normalize_slot(hash_result)
-                        sha3s.append(pending_sha3)
-                        sha3_bytes += pending_bytes
-                pending_sha3 = None
-
-            if op in ("CALL", "STATICCALL"):
-                if len(stack) >= 2:
-                    addr_hex = stack[-2]
-                    if addr_hex:
-                        try:
-                            addr_clean = normalize_evm_address(addr_hex)
-                            if addr_clean:
-                                call_stack.append((addr_clean, addr_clean))
-                        except Exception:
-                            pass
-
-            elif op in ("DELEGATECALL", "CALLCODE"):
-                if len(stack) >= 2:
-                    addr_hex = stack[-2]
-                    if addr_hex:
-                        try:
-                            code_addr = normalize_evm_address(addr_hex)
-                            current_storage = call_stack[-1][0] if call_stack else ""
-                            if code_addr:
-                                call_stack.append((current_storage, code_addr))
-                        except Exception:
-                            pass
-
-            current_storage_address = call_stack[-1][0] if call_stack else ""
-            current_code_address = call_stack[-1][1] if call_stack else ""
-
-            if op in ("SSTORE", "TSTORE"):
-                if len(stack) >= 2:
-                    if len(sstores) >= self.max_writes:
-                        raise TraceNotAvailableError(
-                            "Trace exceeds the configured write limit"
-                        )
-                    slot = stack[-1]
-                    value = stack[-2]
-                    normalized_slot = self._normalize_slot(slot)
-                    sstores.append({
-                        "address": current_storage_address,
-                        "code_address": current_code_address,
-                        "code_attribution": "inferred",
-                        "pc": pc,
-                        "slot": normalized_slot,
-                        "value": self._normalize_value(value),
-                        # Geth/Reth storage snapshots on the SSTORE structLog
-                        # can represent post-op state. Initial values are
-                        # recovered from prestateTracer and then replayed.
-                        "old_value": None,
-                        "opcode": op,
-                        "namespace": "persistent" if op == "SSTORE" else "transient",
-                        "depth": depth,
-                        "index": i,
-                    })
-
-            elif op in ("SHA3", "KECCAK256"):
-                if len(stack) >= 2:
-                    try:
-                        offset = int(stack[-1], 16) if isinstance(stack[-1], str) else stack[-1]
-                        size = int(stack[-2], 16) if isinstance(stack[-2], str) else stack[-2]
-                    except (ValueError, TypeError):
-                        continue
-
-                    if 32 <= size <= 256 and include_memory:
-                        preimage = self._extract_memory_slice(memory, offset, size)
-                        pending_sha3 = {
-                            "address": current_storage_address,
-                            "preimage": preimage,
-                            "size": size,
-                            "depth": depth,
-                        }
-
-        self._annotate_frame_outcomes(struct_logs, sstores)
-        return sstores, sha3s
-
-    def _annotate_frame_outcomes(
-        self, struct_logs: list[dict], writes: list[dict]
-    ) -> None:
-        """Attach stable frame ids and rollback outcomes to captured writes."""
-        if not struct_logs:
-            return
-
-        root_depth = struct_logs[0].get("depth", 1)
-        frames: dict[int, dict] = {
-            0: {"parent": None, "failed": False, "depth": root_depth}
-        }
-        frame_stack: list[tuple[int, int]] = [(root_depth, 0)]
-        step_frames: dict[int, int] = {}
-        next_frame_id = 1
-
-        for index, log in enumerate(struct_logs):
-            depth = log.get("depth", root_depth)
-            while frame_stack and frame_stack[-1][0] > depth:
-                frame_stack.pop()
-
-            if not frame_stack:
-                frame_stack.append((root_depth, 0))
-
-            while frame_stack[-1][0] < depth:
-                parent_id = frame_stack[-1][1]
-                frame_id = next_frame_id
-                next_frame_id += 1
-                child_depth = frame_stack[-1][0] + 1
-                frames[frame_id] = {
-                    "parent": parent_id,
-                    "failed": False,
-                    "depth": child_depth,
-                }
-                frame_stack.append((child_depth, frame_id))
-
-            frame_id = frame_stack[-1][1]
-            step_frames[index] = frame_id
-            op = log.get("op", "")
-            if op in {"REVERT", "INVALID"} or log.get("error"):
-                frames[frame_id]["failed"] = True
-
-        def frame_reverted(frame_id: int) -> bool:
-            current: int | None = frame_id
-            while current is not None:
-                frame = frames[current]
-                if frame["failed"]:
-                    return True
-                current = frame["parent"]
-            return False
-
-        def rollback_context(frame_id: int) -> tuple[int | None, int | None]:
-            failed_ancestors = []
-            current: int | None = frame_id
-            while current is not None:
-                frame = frames[current]
-                if frame["failed"]:
-                    failed_ancestors.append(current)
-                current = frame["parent"]
-            rollback_id = failed_ancestors[0] if failed_ancestors else None
-            rollback_parent = (
-                failed_ancestors[1] if len(failed_ancestors) > 1 else None
-            )
-            return rollback_id, rollback_parent
-
-        for write in writes:
-            frame_id = step_frames.get(write.get("index", -1), 0)
-            rollback_id, rollback_parent = rollback_context(frame_id)
-            write["frame_id"] = frame_id
-            write["frame_parent_id"] = frames[frame_id]["parent"]
-            write["frame_failed"] = frames[frame_id]["failed"]
-            write["frame_reverted"] = frame_reverted(frame_id)
-            write["rollback_frame_id"] = rollback_id
-            write["rollback_parent_id"] = rollback_parent
-
-    def _extract_memory_slice(self, memory: list[str], offset: int, size: int) -> str | None:
-        """Extract a slice from EVM memory."""
-        if not memory:
-            return None
-
-        try:
-            full_memory = "".join(
-                word.removeprefix("0x").removeprefix("0X")
-                for word in memory
-            )
-            if not re.fullmatch(r"[0-9a-fA-F]*", full_memory):
-                return None
-            start_nibble = offset * 2
-            requested_nibbles = size * 2
-            slice_hex = full_memory[
-                start_nibble : start_nibble + requested_nibbles
-            ].ljust(requested_nibbles, "0")
-            return "0x" + slice_hex if requested_nibbles else None
-        except Exception as e:
-            logger.debug(f"Failed to extract memory slice: {e}")
-            return None
-
-    @staticmethod
-    def _normalize_preimage(preimage: str | None) -> str | None:
-        if not preimage:
-            return None
-        clean = re.sub(r"0x", "", preimage, flags=re.IGNORECASE)
-        if len(clean) % 2 or not re.fullmatch(r"[0-9a-fA-F]+", clean):
-            return None
-        return "0x" + clean.lower()
-
-    def _normalize_slot(self, slot: str) -> str:
-        """Normalize slot to 66-char hex (0x + 64 chars)."""
-        if isinstance(slot, int):
-            return f"0x{slot:064x}"
-        slot_clean = slot[2:] if slot.startswith("0x") else slot
-        return f"0x{slot_clean.lower().zfill(64)}"
-
-    def _normalize_value(self, value: str) -> str:
-        """Normalize value to 66-char hex."""
-        if isinstance(value, int):
-            return f"0x{value:064x}"
-        value_clean = value[2:] if value.startswith("0x") else value
-        return f"0x{value_clean.lower().zfill(64)}"

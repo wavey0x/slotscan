@@ -1,0 +1,80 @@
+{
+  "transaction_hash": "0xa1fc48efe579dde86c1b46ced4d5a2cb589c95609be976539eb4d5b3513e2f56",
+  "block_number": 25278134,
+  "step_count": 167759,
+  "hook_enters": 511,
+  "hook_exits": 511,
+  "write_count": 99,
+  "sha3_count": 275,
+  "storage_address": "0xe478de485ad2fe566d49342cbd03e49ed7db3356",
+  "implementation_address": "0xa4d1a2693589840babb7f3a44d14fdf41b3bf1fe",
+  "slot": "0x0251ce03e055d3e1e4d121004047584dfce20cb4c02d76b24d1e17f2b0181cdf",
+  "value_before": "0x000000000000000713e24c43730000000000000180e7d9000000006a1df7c700",
+  "value_after": "0x000000000000000713e24c43730000000000000180e7d9000000006a1df7c701",
+  "write": {
+    "pc": 18914,
+    "slot": "0x0251ce03e055d3e1e4d121004047584dfce20cb4c02d76b24d1e17f2b0181cdf",
+    "value": "0x000000000000000713e24c43730000000000000180e7d9000000006a1df7c701",
+    "old_value": null,
+    "opcode": "SSTORE",
+    "namespace": "persistent",
+    "depth": 2,
+    "index": 1282,
+    "frame_id": 3
+  },
+  "frames": [
+    {
+      "id": 0,
+      "parent_id": null,
+      "type": "ROOT",
+      "depth": 1,
+      "storage_address": "0xe478de485ad2fe566d49342cbd03e49ed7db3356",
+      "requested_code_address": "0xe478de485ad2fe566d49342cbd03e49ed7db3356",
+      "code_address": "0xe478de485ad2fe566d49342cbd03e49ed7db3356",
+      "code_attribution": "exact",
+      "code_source": "direct",
+      "code_designator": null,
+      "target_confirmed": true,
+      "faulted": false,
+      "exit_error": null,
+      "outcome": "succeeded",
+      "completion_validated": true,
+      "completion_word": null
+    },
+    {
+      "id": 3,
+      "parent_id": 0,
+      "type": "DELEGATECALL",
+      "depth": 2,
+      "storage_address": "0xe478de485ad2fe566d49342cbd03e49ed7db3356",
+      "requested_code_address": "0xa4d1a2693589840babb7f3a44d14fdf41b3bf1fe",
+      "code_address": "0xa4d1a2693589840babb7f3a44d14fdf41b3bf1fe",
+      "code_attribution": "exact",
+      "code_source": "direct",
+      "code_designator": null,
+      "target_confirmed": true,
+      "faulted": false,
+      "exit_error": null,
+      "outcome": "succeeded",
+      "completion_validated": true,
+      "completion_word": "0x0000000000000000000000000000000000000000000000000000000000000001"
+    }
+  ],
+  "sha3": {
+    "address": "0xe478de485ad2fe566d49342cbd03e49ed7db3356",
+    "preimage": "0x000000000000000000000000000000000000000000000000000000000000058e0000000000000000000000000000000000000000000000000000000000000009",
+    "size": 64,
+    "depth": 2
+  },
+  "mapping_base_slot": 9,
+  "mapping_key": 1422,
+  "variable_path": "votes[1422]",
+  "packed_member": {
+    "name": "executed",
+    "slot_offset": 0,
+    "byte_offset": 0,
+    "byte_size": 1,
+    "before": false,
+    "after": true
+  }
+}
