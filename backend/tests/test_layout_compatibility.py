@@ -807,6 +807,7 @@ class ExactNamespaceTests(unittest.TestCase):
             compiler_output=fixture["compiler_output"],
             sources=fixture["annotated_sources"],
             compiler_version=fixture["provenance"]["compiler_version"],
+            max_slots=10_000,
         )
 
         root = compute_erc7201_root(
@@ -896,6 +897,7 @@ class ExactNamespaceTests(unittest.TestCase):
             compiler_output=compiler_output,
             sources={"Example.sol": source},
             compiler_version="0.8.30",
+            max_slots=10_000,
         )
 
         namespace = next(
@@ -912,6 +914,102 @@ class ExactNamespaceTests(unittest.TestCase):
         )
         self.assertTrue(
             all(item.confidence == "exact" for item in promoted.variables)
+        )
+
+    def test_erc7201_promotion_rejects_footprints_above_slot_budget(self):
+        identifier = "slotscan.bounded"
+        root = compute_erc7201_root(identifier)
+        uint = scalar()
+        fixed_array = StorageType(
+            "t_array(t_uint256)3_storage",
+            "uint256[3]",
+            "array",
+            "inplace",
+            96,
+            element_type=uint.id,
+            array_length=3,
+        )
+        struct = StorageType(
+            "t_struct(Layout)1_storage",
+            "struct Example.Layout",
+            "struct",
+            "inplace",
+            96,
+            members=[
+                variable(
+                    "values",
+                    0,
+                    fixed_array.id,
+                    fixed_array.label,
+                    size=96,
+                )
+            ],
+        )
+        source = f"""
+            /// @custom:storage-location erc7201:{identifier}
+            struct Layout {{ uint256[3] values; }}
+            library Example {{
+                bytes32 private constant SLOT = 0x{root:064x};
+                function load() internal pure returns (Example.Layout storage $) {{
+                    assembly {{ $.slot := SLOT }}
+                }}
+            }}
+        """
+        compiler_output = {
+            "sources": {
+                "Example.sol": {
+                    "ast": {
+                        "nodeType": "SourceUnit",
+                        "nodes": [
+                            {
+                                "nodeType": "StructDefinition",
+                                "name": "Layout",
+                                "canonicalName": "Example.Layout",
+                                "documentation": {
+                                    "text": (
+                                        "@custom:storage-location "
+                                        f"erc7201:{identifier}"
+                                    )
+                                },
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+        base_layout = layout(
+            [],
+            {
+                struct.id: struct,
+                fixed_array.id: fixed_array,
+                uint.id: uint,
+            },
+        )
+        parser = NamespaceStorageParser()
+
+        rejected = parser.promote_exact_erc7201(
+            base_layout,
+            compiler_output=compiler_output,
+            sources={"Example.sol": source},
+            compiler_version="0.8.30",
+            max_slots=2,
+        )
+        accepted = parser.promote_exact_erc7201(
+            base_layout,
+            compiler_output=compiler_output,
+            sources={"Example.sol": source},
+            compiler_version="0.8.30",
+            max_slots=3,
+        )
+
+        self.assertFalse(any(scope.kind == "erc7201" for scope in rejected.scopes))
+        self.assertEqual(
+            [
+                (item.name, item.slot, item.size)
+                for item in accepted.variables
+                if item.scope_id == f"erc7201:{identifier}"
+            ],
+            [("values", root, 96)],
         )
 
     def test_missing_pointer_proof_does_not_promote_annotation(self):
@@ -936,6 +1034,7 @@ class ExactNamespaceTests(unittest.TestCase):
             },
             sources={"Example.sol": "struct Layout { uint256 owner; }"},
             compiler_version="0.8.30",
+            max_slots=10_000,
         )
 
         self.assertEqual(

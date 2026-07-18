@@ -454,6 +454,7 @@ class ContractResolver:
                     ),
                     sources=verification.sources,
                     compiler_version=verification.compiler_version,
+                    max_slots=self.settings.max_slots_per_contract,
                 )
         # Build result - use bytecode cache metadata if verification was skipped
         if cached_by_bytecode and parsed_layout and not verification:

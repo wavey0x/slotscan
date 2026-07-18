@@ -372,8 +372,11 @@ class NamespaceStorageParser:
         compiler_output: dict,
         sources: dict[str, str],
         compiler_version: Optional[str],
+        max_slots: int,
     ) -> StorageLayout:
         """Promote namespaces only when AST, root, pointer, and type graph agree."""
+        if max_slots <= 0:
+            return layout
         if not self._compiler_version_at_least_0820(compiler_version):
             return layout
         ast_roots = [
@@ -440,6 +443,13 @@ class NamespaceStorageParser:
                         valid = False
                         break
                     slot_count, first_word_size = self._type_occupancy(member_type)
+                    if (
+                        member.slot < 0
+                        or slot_count > max_slots
+                        or member.slot + slot_count > max_slots
+                    ):
+                        valid = False
+                        break
                     absolute_slot = root + member.slot
                     if absolute_slot >= 1 << 256 or absolute_slot + slot_count > 1 << 256:
                         valid = False
