@@ -16,14 +16,10 @@ from app.services.namespace_storage import (
     compute_erc7201_root,
 )
 from app.services.resolver import (
+    BEACON_IMPL_SELECTOR,
     EIP1167_PREFIX,
     EIP1167_SUFFIX,
-    EIP1822_SLOT,
-    EIP1967_ADMIN_SLOT,
-    EIP1967_BEACON_SLOT,
-    EIP1967_IMPL_SLOT,
-    ZEPPELINOS_ADMIN_SLOT,
-    ZEPPELINOS_IMPL_SLOT,
+    GNOSIS_SAFE_MASTER_COPY_SELECTOR,
     ContractResolver,
 )
 from app.services.tracer.slot_resolver import SlotPathResolver
@@ -602,53 +598,38 @@ class _Resolver(ContractResolver):
 
 
 class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_slot_and_beacon_proxy_families_are_preserved_without_admin_reads(self):
+    async def test_storage_slots_and_getters_do_not_substitute_implementations(self):
         implementation = Web3.to_checksum_address("0x" + "22" * 20)
-        beacon = Web3.to_checksum_address("0x" + "33" * 20)
 
         class Provider:
-            def __init__(self, slots, beacon_result=None):
-                self.slots = slots
-                self.beacon_result = beacon_result
+            def __init__(self):
                 self.storage_calls = []
+                self.call_count = 0
 
             async def get_storage_at(self, chain_id, address, slot, block):
                 self.storage_calls.append(slot)
-                target = self.slots.get(slot)
-                if not target:
-                    return bytes(32)
-                return bytes(12) + bytes.fromhex(target[2:])
+                return bytes(12) + bytes.fromhex(implementation[2:])
 
             async def eth_call(self, chain_id, transaction, block):
-                return bytes(12) + bytes.fromhex(self.beacon_result[2:])
+                self.call_count += 1
+                return bytes(12) + bytes.fromhex(implementation[2:])
 
-        cases = (
-            ("eip1967", {EIP1967_IMPL_SLOT: implementation}, None),
-            ("eip1822", {EIP1822_SLOT: implementation}, None),
-            ("zeppelinos", {ZEPPELINOS_IMPL_SLOT: implementation}, None),
-            (
-                "beacon",
-                {EIP1967_BEACON_SLOT: beacon},
-                implementation,
+        provider = Provider()
+        detected = await _make_resolver(provider).detect_proxy(
+            1,
+            ADDRESS,
+            block=123,
+            bytecode=(
+                b"\x63"
+                + bytes.fromhex(BEACON_IMPL_SELECTOR[2:])
+                + bytes.fromhex(GNOSIS_SAFE_MASTER_COPY_SELECTOR[2:])
+                + b"\xf4"
             ),
         )
-        for expected_type, slots, beacon_result in cases:
-            with self.subTest(expected_type=expected_type):
-                provider = Provider(slots, beacon_result)
-                detected = await _make_resolver(provider).detect_proxy(
-                    1,
-                    ADDRESS,
-                    block=123,
-                    bytecode=b"\x60\x00",
-                )
 
-                self.assertEqual(detected.proxy_type, expected_type)
-                self.assertEqual(
-                    detected.implementation_address,
-                    implementation,
-                )
-                self.assertNotIn(EIP1967_ADMIN_SLOT, provider.storage_calls)
-                self.assertNotIn(ZEPPELINOS_ADMIN_SLOT, provider.storage_calls)
+        self.assertIsNone(detected)
+        self.assertEqual(provider.storage_calls, [])
+        self.assertEqual(provider.call_count, 0)
 
     async def test_eip1167_is_detected_without_slot_reads(self):
         implementation = Web3.to_checksum_address("0x" + "22" * 20)
@@ -672,62 +653,27 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(detected.proxy_type, "eip1167")
         self.assertEqual(detected.implementation_address, implementation)
 
-    async def test_proxy_slot_failure_is_propagated(self):
-        class Provider:
-            async def get_storage_at(self, *args):
-                raise RuntimeError("slot unavailable")
-
-        resolver = _make_resolver(Provider())
-        with self.assertRaisesRegex(RuntimeError, "slot unavailable"):
-            await resolver.detect_proxy(
-                1,
-                ADDRESS,
-                block=123,
-                bytecode=b"\x60\x00",
-            )
-
-    async def _detect_callable_proxy(self, selector: str):
+    async def test_eip1167_with_appended_bytes_is_not_treated_as_exact(self):
         implementation = Web3.to_checksum_address("0x" + "22" * 20)
 
         class Provider:
-            async def get_storage_at(self, chain_id, address, slot, block):
-                return b"\x00" * 32
+            async def get_storage_at(self, *args):
+                raise AssertionError("inexact runtime must not read proxy slots")
 
-            async def eth_call(self, chain_id, transaction, block):
-                self.selector = transaction["data"]
-                return b"\x00" * 12 + bytes.fromhex(implementation[2:])
-
-            async def get_code(self, chain_id, address, block):
-                return b"\x60\x00"
-
-        provider = Provider()
-        resolver = _make_resolver(provider)
-        bytecode = b"\x63" + bytes.fromhex(selector[2:]) + b"\xf4"
-        detected = await resolver.detect_proxy(
+        bytecode = (
+            EIP1167_PREFIX
+            + bytes.fromhex(implementation[2:])
+            + EIP1167_SUFFIX
+            + b"\x00"
+        )
+        detected = await _make_resolver(Provider()).detect_proxy(
             1,
-            Web3.to_checksum_address(ADDRESS),
+            ADDRESS,
             block=123,
             bytecode=bytecode,
         )
-        return provider, detected, implementation
 
-    async def test_aragon_implementation_getter_is_detected(self):
-        provider, detected, implementation = await self._detect_callable_proxy(
-            "0x5c60da1b"
-        )
-
-        self.assertEqual(provider.selector, "0x5c60da1b")
-        self.assertEqual(detected.proxy_type, "aragon")
-        self.assertEqual(detected.implementation_address, implementation)
-
-    async def test_gnosis_safe_master_copy_getter_is_detected(self):
-        provider, detected, implementation = await self._detect_callable_proxy(
-            "0xa619486e"
-        )
-
-        self.assertEqual(provider.selector, "0xa619486e")
-        self.assertEqual(detected.proxy_type, "gnosis_safe")
-        self.assertEqual(detected.implementation_address, implementation)
+        self.assertIsNone(detected)
 
 
 class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):

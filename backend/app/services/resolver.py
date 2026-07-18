@@ -1,6 +1,5 @@
 """Contract resolver for fetching metadata, proxy detection, and verification lookup."""
 
-import asyncio
 import logging
 from typing import Optional
 
@@ -623,17 +622,6 @@ class ContractResolver:
             except Exception:
                 pass
 
-        # Also check for slight variations (some compilers add metadata)
-        if bytecode.startswith(EIP1167_PREFIX):
-            # Find the suffix
-            suffix_pos = bytecode.find(EIP1167_SUFFIX)
-            if suffix_pos > 10:
-                impl_bytes = bytecode[10:30]
-                try:
-                    return Web3.to_checksum_address(impl_bytes)
-                except Exception:
-                    pass
-
         return None
 
     async def detect_proxy(
@@ -643,118 +631,14 @@ class ContractResolver:
         block: Optional[int] = None,
         bytecode: Optional[bytes] = None,
     ) -> Optional[ProxyInfo]:
-        """
-        Detect proxy pattern and resolve implementation.
-
-        Detection order:
-        1. EIP-1167 minimal proxy (bytecode pattern)
-        2. EIP-1967 implementation slot
-        3. EIP-1822 UUPS slot
-        4. ZeppelinOS and beacon slots
-        5. Bytecode-advertised implementation getters
-        """
-        block_id = block if block is not None else "latest"
+        """Resolve only a proxy relationship proven by exact runtime bytecode."""
+        del chain_id, address, block
 
         if bytecode:
             implementation = self._detect_minimal_proxy(bytecode)
             if implementation and implementation != ZERO_ADDRESS:
                 return ProxyInfo(
                     proxy_type="eip1167",
-                    implementation_address=implementation,
-                    admin_address=None,
-                )
-
-        impl_value, uups_value, zos_value, beacon_value = await asyncio.gather(
-            self.web3_provider.get_storage_at(
-                chain_id,
-                address,
-                EIP1967_IMPL_SLOT,
-                block_id,
-            ),
-            self.web3_provider.get_storage_at(
-                chain_id,
-                address,
-                EIP1822_SLOT,
-                block_id,
-            ),
-            self.web3_provider.get_storage_at(
-                chain_id,
-                address,
-                ZEPPELINOS_IMPL_SLOT,
-                block_id,
-            ),
-            self.web3_provider.get_storage_at(
-                chain_id,
-                address,
-                EIP1967_BEACON_SLOT,
-                block_id,
-            ),
-        )
-
-        implementation = self._extract_address(bytes(impl_value))
-        if implementation and implementation != ZERO_ADDRESS:
-            return ProxyInfo(
-                proxy_type="eip1967",
-                implementation_address=implementation,
-                admin_address=None,
-            )
-
-        implementation = self._extract_address(bytes(uups_value))
-        if implementation and implementation != ZERO_ADDRESS:
-            return ProxyInfo(
-                proxy_type="eip1822",
-                implementation_address=implementation,
-                admin_address=None,
-            )
-
-        implementation = self._extract_address(bytes(zos_value))
-        if implementation and implementation != ZERO_ADDRESS:
-            return ProxyInfo(
-                proxy_type="zeppelinos",
-                implementation_address=implementation,
-                admin_address=None,
-            )
-
-        beacon_address = self._extract_address(bytes(beacon_value))
-        if beacon_address and beacon_address != ZERO_ADDRESS:
-            result = await self.web3_provider.eth_call(
-                chain_id,
-                {"to": beacon_address, "data": BEACON_IMPL_SELECTOR},
-                block_id,
-            )
-            implementation = self._extract_address(bytes(result))
-            if not implementation or implementation == ZERO_ADDRESS:
-                raise RPCError(
-                    "eth_call",
-                    f"Beacon {beacon_address} returned no implementation",
-                )
-            return ProxyInfo(
-                proxy_type="beacon",
-                implementation_address=implementation,
-                admin_address=None,
-            )
-
-        if bytecode and b"\xf4" in bytecode:
-            callable_proxies = (
-                ("aragon", BEACON_IMPL_SELECTOR),
-                ("gnosis_safe", GNOSIS_SAFE_MASTER_COPY_SELECTOR),
-            )
-            for proxy_type, selector in callable_proxies:
-                if bytes.fromhex(selector[2:]) not in bytecode:
-                    continue
-                result = await self.web3_provider.eth_call(
-                    chain_id,
-                    {"to": address, "data": selector},
-                    block_id,
-                )
-                implementation = self._extract_address(bytes(result))
-                if not implementation or implementation == ZERO_ADDRESS:
-                    raise RPCError(
-                        "eth_call",
-                        f"{proxy_type} getter returned no implementation",
-                    )
-                return ProxyInfo(
-                    proxy_type=proxy_type,
                     implementation_address=implementation,
                     admin_address=None,
                 )

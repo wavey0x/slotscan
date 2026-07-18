@@ -239,7 +239,7 @@ class ResolverSourceIdentityTests(unittest.IsolatedAsyncioTestCase):
 
         service._fetch_verification.assert_awaited_once_with(1, DIRECT.lower())
 
-    async def test_proxies_share_implementation_and_upgrade_by_block(self):
+    async def test_proxy_slot_values_do_not_cross_source_identities(self):
         provider = _Provider(
             codes={
                 PROXY_A.lower(): b"\x60\x01",
@@ -259,21 +259,22 @@ class ResolverSourceIdentityTests(unittest.IsolatedAsyncioTestCase):
         resolver = _resolver(provider, service, _MemorySourceCache())
 
         first = await resolver.resolve(1, PROXY_A, block_number=100)
-        shared = await resolver.resolve(1, PROXY_B, block_number=100)
-        upgraded = await resolver.resolve(1, PROXY_A, block_number=200)
+        second = await resolver.resolve(1, PROXY_B, block_number=100)
+        unchanged = await resolver.resolve(1, PROXY_A, block_number=200)
 
-        self.assertEqual(first.implementation_address, IMPLEMENTATION_A)
-        self.assertEqual(shared.name, first.name)
-        self.assertEqual(upgraded.implementation_address, IMPLEMENTATION_B)
+        self.assertFalse(first.is_proxy)
+        self.assertFalse(second.is_proxy)
+        self.assertIsNone(unchanged.implementation_address)
         self.assertEqual(
             service._fetch_verification.await_args_list,
             [
-                call(1, IMPLEMENTATION_A.lower()),
-                call(1, IMPLEMENTATION_B.lower()),
+                call(1, PROXY_A.lower()),
+                call(1, PROXY_B.lower()),
             ],
         )
+        self.assertEqual(provider.storage_calls, [])
 
-    async def test_beacon_and_minimal_proxy_use_final_implementation_identity(self):
+    async def test_only_exact_minimal_proxy_uses_implementation_identity(self):
         clone = Web3.to_checksum_address("0x" + "13" * 20)
         clone_code = (
             EIP1167_PREFIX
@@ -292,17 +293,22 @@ class ResolverSourceIdentityTests(unittest.IsolatedAsyncioTestCase):
         service = _service()
         resolver = _resolver(provider, service, _MemorySourceCache())
 
-        beacon = await resolver.resolve(1, PROXY_A, block_number=100)
+        beacon_like = await resolver.resolve(1, PROXY_A, block_number=100)
         minimal = await resolver.resolve(1, clone, block_number=100)
 
-        self.assertEqual(beacon.implementation_address, IMPLEMENTATION_A)
+        self.assertFalse(beacon_like.is_proxy)
+        self.assertIsNone(beacon_like.implementation_address)
         self.assertEqual(minimal.implementation_address, IMPLEMENTATION_A)
-        service._fetch_verification.assert_awaited_once_with(
-            1,
-            IMPLEMENTATION_A.lower(),
+        self.assertEqual(
+            service._fetch_verification.await_args_list,
+            [
+                call(1, PROXY_A.lower()),
+                call(1, IMPLEMENTATION_A.lower()),
+            ],
         )
+        self.assertEqual(provider.storage_calls, [])
 
-    async def test_empty_proxy_implementation_skips_source_providers(self):
+    async def test_proxy_slot_signal_does_not_suppress_source_lookup(self):
         provider = _Provider(
             codes={PROXY_A.lower(): b"\x60\x01"},
             implementations={PROXY_A.lower(): IMPLEMENTATION_A},
@@ -312,10 +318,11 @@ class ResolverSourceIdentityTests(unittest.IsolatedAsyncioTestCase):
 
         result = await resolver.resolve(1, PROXY_A, block_number=100)
 
-        self.assertTrue(result.is_proxy)
-        self.assertEqual(result.implementation_address, IMPLEMENTATION_A)
-        self.assertFalse(result.is_verified)
-        service._fetch_verification.assert_not_awaited()
+        self.assertFalse(result.is_proxy)
+        self.assertIsNone(result.implementation_address)
+        self.assertTrue(result.is_verified)
+        service._fetch_verification.assert_awaited_once_with(1, PROXY_A.lower())
+        self.assertEqual(provider.storage_calls, [])
 
     async def test_authorities_share_delegate_and_changes_select_new_identity(self):
         provider = _Provider(
