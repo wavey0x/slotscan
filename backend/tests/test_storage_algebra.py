@@ -398,7 +398,7 @@ def five():
 
         self.assertEqual(match["path"], f"configs[{outer_key}][{inner_key}]")
 
-    def test_nested_mapping_to_struct_array_decodes_votium_incentive_fields(self):
+    def test_unbounded_mapping_array_data_requires_step_time_length(self):
         address_type = StorageType(
             "t_address", "address", "value", "inplace", 20
         )
@@ -544,30 +544,14 @@ def five():
 
         base_path = f"incentives[{round_number}][{gauge}]"
         self.assertEqual(changes[0].variable_path, base_path)
-        self.assertEqual(
-            [change.variable_path for change in changes[1:8]],
-            [f"{base_path}[0].{name}" for name, _ in member_specs],
-        )
-        self.assertTrue(all(change.variable is incentives for change in changes[:8]))
-        self.assertTrue(all(change.array_index == 0 for change in changes[1:8]))
-        self.assertTrue(
-            all(change.encoding == "mapping_to_array" for change in changes[1:8])
-        )
-        self.assertIsNone(changes[8].variable)
-        self.assertIsNone(changes[8].variable_path)
+        self.assertIs(changes[0].variable, incentives)
+        self.assertTrue(all(change.variable is None for change in changes[1:]))
+        self.assertTrue(all(change.variable_path is None for change in changes[1:]))
+        self.assertTrue(all(change.array_index is None for change in changes[1:]))
 
         slot_responses = _group_changes_by_slot(changes, layout)
-        self.assertEqual(
-            [slot.variable_path for slot in slot_responses[1:8]],
-            [f"{base_path}[0].{name}" for name, _ in member_specs],
-        )
-        self.assertTrue(
-            all(slot.variable_name == "incentives" for slot in slot_responses[:8])
-        )
-        self.assertEqual(
-            [slot.struct_field for slot in slot_responses[1:8]],
-            [name for name, _ in member_specs],
-        )
+        self.assertEqual(slot_responses[0].variable_path, base_path)
+        self.assertTrue(all(slot.variable_name is None for slot in slot_responses[1:]))
 
     def test_nested_vyper_mapping_uses_hash_before_key(self):
         value_type = StorageType("uint256", "uint256", "value", "inplace", 32)
@@ -956,7 +940,7 @@ class PackedArrayLayoutTests(unittest.TestCase):
             resolver.try_match_dynamic_array_slot(data_start + 2, layout, index)
         )
 
-    def test_dynamic_array_diff_resolves_changed_packed_element(self):
+    def test_unbounded_dynamic_array_slots_remain_unresolved_without_length(self):
         dynamic_array = StorageType(
             id="t_array(t_uint32)dyn_storage",
             label="uint32[]",
@@ -993,10 +977,10 @@ class PackedArrayLayoutTests(unittest.TestCase):
             layout,
         )
         self.assertEqual(len(changes), 1)
-        self.assertEqual(changes[0].variable_path, "values[1]")
-        self.assertEqual(changes[0].array_index, 1)
-        self.assertEqual(changes[0].old_decoded.decoded, 0)
-        self.assertEqual(changes[0].new_decoded.decoded, 7)
+        self.assertIsNone(changes[0].variable)
+        self.assertIsNone(changes[0].variable_path)
+        self.assertIsNone(changes[0].array_index)
+        self.assertEqual(SlotPathResolver().build_dynamic_array_index(layout), {})
 
 
 if __name__ == "__main__":

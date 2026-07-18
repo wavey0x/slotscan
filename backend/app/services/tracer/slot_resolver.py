@@ -189,7 +189,7 @@ class SlotPathResolver:
                                 (value_type.element_type and "[]" in (value_type.label or ""))
                             )
                         )
-                        if is_value_array:
+                        if is_value_array and value_type.array_length is not None:
                             element_type = layout.get_type(value_type.element_type) if value_type and value_type.element_type else None
                             packing = array_packing(element_type)
 
@@ -201,6 +201,7 @@ class SlotPathResolver:
                                 "encoding": "mapping_to_array",
                                 "key_type": var_type.key_type if var_type else None,
                                 "value_type": var_type.value_type if var_type else None,
+                                "array_type": value_type,
                                 "element_type": element_type,
                                 "element_slots": packing.slots_per_element,
                                 "array_packing": packing,
@@ -491,7 +492,7 @@ class SlotPathResolver:
         self,
         layout: StorageLayout,
     ) -> dict[int, tuple[StorageVariable, ArrayPacking, StorageType | None]]:
-        """Build index of dynamic array data start slots."""
+        """Build index only for arrays with a compiler-declared bound."""
         index: dict[int, tuple[StorageVariable, ArrayPacking, StorageType | None]] = {}
         for var in layout.variables:
             var_type = layout.get_type(var.type_id)
@@ -502,6 +503,8 @@ class SlotPathResolver:
                 or (var_type.element_type and "[]" in (var_type.label or ""))
             )
             if not is_dynamic_array:
+                continue
+            if var_type.array_length is None:
                 continue
 
             encoded_slot = abi_encode(["uint256"], [var.slot])
@@ -837,15 +840,9 @@ class SlotPathResolver:
 
             offset_from_start = slot_int - data_start
             array_type = layout.get_type(var.type_id)
-            # Vyper DynArray declarations carry a compile-time maximum. Respect
-            # that bound so an unrelated high hashed slot cannot be presented
-            # as a fantastically large array index. Solidity dynamic arrays do
-            # not expose a bound and retain the existing unbounded behavior.
-            if (
-                array_type
-                and array_type.array_length is not None
-                and offset_from_start >= packing.slot_count(array_type.array_length)
-            ):
+            if not array_type or array_type.array_length is None:
+                continue
+            if offset_from_start >= packing.slot_count(array_type.array_length):
                 continue
 
             if packing.is_packed:
@@ -950,10 +947,9 @@ class SlotPathResolver:
                 match_info.get("element_type")
             )
             array_length = match_info.get("array_length")
-            if (
-                array_length is not None
-                and offset_from_start >= packing.slot_count(array_length)
-            ):
+            if array_length is None:
+                continue
+            if offset_from_start >= packing.slot_count(array_length):
                 continue
             element_type = match_info.get("element_type")
             variable = match_info.get("variable")

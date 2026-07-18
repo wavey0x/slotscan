@@ -567,18 +567,12 @@ class TransactionAnalysisService:
                         slot_hash, preimage, layout, preimage_lookup, depth=0
                     )
                     if match and match.get("encoding") == "mapping_to_array":
+                        array_type = match.get("array_type")
+                        if not array_type or array_type.array_length is None:
+                            continue
                         data_start = match.get("data_start_slot")
                         if data_start is not None:
-                            length_slot = match.get("array_length_slot")
-                            observed_lengths = [
-                                int(value, 16)
-                                for raw_slot, old_value, new_value, _, _ in raw_changes
-                                if self._normalize_slot(raw_slot) == length_slot
-                                for value in (old_value, new_value)
-                                if value is not None
-                            ]
-                            if observed_lengths:
-                                match["array_length"] = max(observed_lengths)
+                            match["array_length"] = array_type.array_length
                             mapping_to_array_index[data_start] = match
             if mapping_to_array_index:
                 logger.info(f"Built mapping-to-array index with {len(mapping_to_array_index)} entries")
