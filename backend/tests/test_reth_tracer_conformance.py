@@ -6,6 +6,7 @@ from app.services.tracer.extractor import TransactionTraceExtractor
 from app.services.tracer.journal import StorageJournalBuilder
 from app.services.tracer.rpc_client import TraceRPCClient
 from app.services.web3_provider import Web3Provider
+from tests.reth_js_oracle import TraceRPCClient as JsOracleTraceRPCClient
 
 
 RUN_CONFORMANCE = os.environ.get("RUN_RETH_TRACER_CONFORMANCE") == "1"
@@ -63,7 +64,8 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.settings = Settings()
         self.provider = Web3Provider(self.settings)
-        self.client = TraceRPCClient(self.provider, self.settings)
+        self.client = JsOracleTraceRPCClient(self.provider, self.settings)
+        self.native_client = TraceRPCClient(self.provider, self.settings)
 
     async def asyncTearDown(self):
         await self.provider.close()
@@ -166,40 +168,96 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
         version = await self.provider.make_request(1, "web3_clientVersion", [])
         self.assertTrue(version["result"].startswith("reth/v2.3.0"))
 
-        result = await self.client._execute_compact_storage_trace(1, VOTING_TX)
+        oracle = await self.client._execute_compact_storage_trace(1, VOTING_TX)
+        native = await self.native_client.execute_slotscan_trace(1, VOTING_TX)
+        receipt = await self.native_client.get_receipt(1, VOTING_TX)
 
-        self.assertIsNotNone(result)
+        self.assertIsNotNone(oracle)
         target = [
-            write for write in result.writes if write["slot"] == VOTING_SLOT
+            write for write in native.writes if write["slot"] == VOTING_SLOT
         ]
-        self.assertEqual(result.evm_step_count, 167759)
-        self.assertEqual(len(result.writes), 99)
-        self.assertEqual(len(result.sha3_operations), 275)
+        self.assertEqual(native.evm_step_count, 167759)
+        self.assertEqual(len(native.writes), 99)
+        self.assertEqual(len(native.sha3_operations), 275)
         self.assertEqual(len(target), 1)
         self.assertEqual(target[0]["address"], VOTING_PROXY)
         self.assertEqual(
             target[0]["code_address"],
             VOTING_IMPLEMENTATION,
         )
-        self.assertTrue(result.observed_storage_complete)
-        self.assertTrue(all(write["old_value"] is None for write in result.writes))
+        self.assertTrue(native.observed_storage_complete)
+        self.assertIsNotNone(target[0]["old_value"])
+        self.assertEqual(
+            TransactionTraceExtractor._hash(receipt["blockHash"]),
+            native.block_hash,
+        )
+        self.assertEqual(
+            TransactionTraceExtractor._quantity(receipt["transactionIndex"]),
+            native.transaction_index,
+        )
+        self.assertEqual(
+            TransactionTraceExtractor._quantity(receipt["status"]) == 1,
+            native.root_succeeded,
+        )
 
-        full_response = await self.provider.make_request(
+        identity_fields = (
+            "address",
+            "code_address",
+            "code_attribution",
+            "pc",
+            "slot",
+            "value",
+            "opcode",
+            "namespace",
+            "depth",
+            "index",
+            "frame_id",
+            "frame_parent_id",
+            "frame_failed",
+            "frame_reverted",
+            "rollback_frame_id",
+            "rollback_parent_id",
+        )
+        self.assertEqual(
+            [
+                tuple(write[field] for field in identity_fields)
+                for write in native.writes
+            ],
+            [
+                tuple(write[field] for field in identity_fields)
+                for write in oracle.writes
+            ],
+        )
+        self.assertEqual(native.sha3_operations, oracle.sha3_operations)
+        self.assertEqual(native.observed_storage, oracle.observed_storage)
+        self.assertEqual(
+            native.observed_storage_complete,
+            oracle.observed_storage_complete,
+        )
+
+        diff_response = await self.provider.make_request(
             1,
             "debug_traceTransaction",
             [
                 VOTING_TX,
                 {
                     "tracer": "prestateTracer",
-                    "tracerConfig": {"diffMode": False},
+                    "tracerConfig": {"diffMode": True},
                 },
             ],
         )
-        self.assertNotIn("error", full_response)
-        expected_storage = normalized_prestate_storage(
-            full_response["result"]
+        self.assertNotIn("error", diff_response)
+        oracle_diff = diff_response["result"]
+        TransactionTraceExtractor._normalize_diff(oracle_diff)
+        self.assertEqual(native.prestate_diff, oracle_diff)
+
+        journal = StorageJournalBuilder().build(
+            native.writes,
+            native.prestate_diff,
+            root_succeeded=native.root_succeeded,
+            evm_step_count=native.evm_step_count,
         )
-        self.assertEqual(result.observed_storage, expected_storage)
+        self.assertTrue(journal.capabilities.state_reconciliation)
 
     async def test_calls_and_caught_or_uncaught_reverts(self):
         target_success = "0x600160005500"
@@ -400,7 +458,7 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
         )
         for marker, settings, program in cases:
             with self.subTest(marker=marker):
-                source = TraceRPCClient(
+                source = JsOracleTraceRPCClient(
                     self.provider,
                     settings,
                 )._compact_storage_tracer_source()
@@ -424,7 +482,7 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(callback_result["fatal"], "tracer:exception")
 
     async def test_observation_overflow_and_lazy_materialization(self):
-        bounded_client = TraceRPCClient(
+        bounded_client = JsOracleTraceRPCClient(
             self.provider,
             Settings(MAX_PRESTATE_STORAGE_ENTRIES=1),
         )

@@ -51,5 +51,9 @@ test-results/
 # Logs
 *.log
 logs/
+
+# Rust
+target/
+
 .claude
 AGENTS.private.md

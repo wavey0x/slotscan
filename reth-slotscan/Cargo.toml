@@ -1,0 +1,25 @@
+[package]
+name = "reth-slotscan"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+
+[dependencies]
+alloy-primitives = { version = "=1.6.0", features = ["serde"] }
+alloy-rpc-types-trace = { version = "=2.0.5", default-features = false }
+async-trait = "0.1.89"
+clap = { version = "4", features = ["derive"] }
+jsonrpsee = { version = "=0.26.0", features = ["server", "macros"] }
+reth-ethereum = { git = "https://github.com/paradigmxyz/reth", rev = "9384bc53d8c0c77e59cac83fdaaf3b372c6d2216", features = ["node", "cli"] }
+reth-rpc-eth-api = { git = "https://github.com/paradigmxyz/reth", rev = "9384bc53d8c0c77e59cac83fdaaf3b372c6d2216" }
+revm-inspectors = "=0.40.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

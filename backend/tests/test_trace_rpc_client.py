@@ -2,439 +2,301 @@ import copy
 import unittest
 
 from app.config import Settings
-from app.models.errors import TraceNotAvailableError
-from app.services.tracer.rpc_client import TraceRPCClient
+from app.models.errors import RPCError, TraceNotAvailableError, TransactionNotFoundError
+from app.services.tracer.rpc_client import TRACE_METHOD, TraceRPCClient
 
 
+TX_HASH = "0x" + "ab" * 32
+BLOCK_HASH = "0x" + "cd" * 32
 ADDRESS = "0x" + "11" * 20
-CALL_TARGET = "0x" + "aa" * 20
-EIP_TARGET = "0x" + "bb" * 20
-ZERO_WORD = "0x" + "00" * 32
-ONE_WORD = "0x" + "00" * 31 + "01"
-
-
-def frame(
-    frame_id,
-    parent_id,
-    frame_type,
-    depth,
-    storage,
-    requested,
-    *,
-    outcome="succeeded",
-    faulted=False,
-    exit_error=None,
-    completion_word=ONE_WORD,
-    code_address=None,
-    code_attribution="exact",
-    code_source="direct",
-    code_designator=None,
-):
-    if code_address is None and code_attribution == "exact":
-        code_address = requested
-    return {
-        "id": frame_id,
-        "parent_id": parent_id,
-        "type": frame_type,
-        "depth": depth,
-        "storage_address": storage,
-        "requested_code_address": requested,
-        "code_address": code_address,
-        "code_attribution": code_attribution,
-        "code_source": code_source,
-        "code_designator": code_designator,
-        "target_confirmed": True,
-        "faulted": faulted,
-        "exit_error": exit_error,
-        "outcome": outcome,
-        "completion_validated": True,
-        "completion_word": completion_word,
-    }
+CODE_ADDRESS = "0x" + "22" * 20
+SLOT = "0x" + "00" * 31 + "01"
+ZERO = "0x" + "00" * 32
+ONE = "0x" + "00" * 31 + "01"
 
 
 def valid_result():
     return {
-        "fatal": None,
-        "executable": True,
-        "stepCount": 10,
-        "hookEnters": 1,
-        "hookExits": 1,
-        "frameStack": [0],
+        "transactionHash": TX_HASH,
+        "blockHash": BLOCK_HASH,
+        "transactionIndex": 3,
+        "rootSucceeded": True,
+        "prestateDiff": {
+            "pre": {
+                ADDRESS: {
+                    "balance": "0x1",
+                    "nonce": 1,
+                    "storage": {SLOT: ZERO},
+                }
+            },
+            "post": {ADDRESS: {"storage": {SLOT: ONE}}},
+        },
         "writes": [
             {
+                "address": ADDRESS,
+                "codeAddress": CODE_ADDRESS,
+                "codeAttribution": "exact",
+                "codeSource": "direct",
+                "codeDesignator": None,
                 "pc": 7,
-                "slot": "0x1",
-                "value": "0x2",
-                "old_value": None,
+                "slot": SLOT,
+                "oldValue": ZERO,
+                "value": ONE,
                 "opcode": "SSTORE",
                 "namespace": "persistent",
                 "depth": 2,
                 "index": 5,
-                "frame_id": 1,
+                "frameId": 1,
+                "frameParentId": 0,
+                "frameFailed": False,
+                "frameReverted": False,
+                "rollbackFrameId": None,
+                "rollbackParentId": None,
             }
         ],
-        "sha3s": [],
-        "observedStorage": {
-            ADDRESS: {"0x" + "0" * 63 + "1": ZERO_WORD}
-        },
-        "observedStorageComplete": True,
-        "frames": [
-            frame(
-                0,
-                None,
-                "ROOT",
-                1,
-                ADDRESS,
-                ADDRESS,
-                completion_word=None,
-            ),
-            frame(
-                1,
-                0,
-                "DELEGATECALL",
-                2,
-                ADDRESS,
-                CALL_TARGET,
-            ),
-        ],
-        "lastOp": "STOP",
-        "lastDepth": 1,
-    }
-
-
-class _ResultProvider:
-    def __init__(self, result):
-        self.result = result
-
-    async def make_request(self, chain_id, method, params):
-        return {"result": copy.deepcopy(self.result)}
-
-
-class CompactTraceValidatorTests(unittest.TestCase):
-    def setUp(self):
-        self.client = TraceRPCClient(object(), Settings())
-
-    def decode(self, result=None):
-        return self.client._decode_compact_trace_result(
-            copy.deepcopy(result or valid_result())
-        )
-
-    def test_valid_delegate_frame_is_flattened_without_reconstructing_it(self):
-        evidence = self.decode()
-
-        self.assertEqual(evidence.evm_step_count, 10)
-        self.assertEqual(evidence.sha3_operations, [])
-        self.assertEqual(evidence.writes[0]["address"], ADDRESS)
-        self.assertEqual(evidence.writes[0]["code_address"], CALL_TARGET)
-        self.assertEqual(evidence.writes[0]["slot"], "0x" + "0" * 63 + "1")
-        self.assertEqual(evidence.writes[0]["value"], "0x" + "0" * 63 + "2")
-        self.assertFalse(evidence.writes[0]["frame_reverted"])
-        self.assertEqual(
-            evidence.observed_storage,
-            {ADDRESS: {"0x" + "0" * 63 + "1": ZERO_WORD}},
-        )
-
-    def test_caught_child_failure_reverts_only_the_child_write(self):
-        result = valid_result()
-        result["frames"][1].update(
-            {
-                "outcome": "failed",
-                "faulted": True,
-                "exit_error": "execution reverted",
-                "completion_word": ZERO_WORD,
-            }
-        )
-
-        writes = self.decode(result).writes
-
-        self.assertTrue(writes[0]["frame_failed"])
-        self.assertTrue(writes[0]["frame_reverted"])
-        self.assertEqual(writes[0]["rollback_frame_id"], 1)
-        self.assertIsNone(writes[0]["rollback_parent_id"])
-
-    def test_failed_root_reverts_successful_descendant_write(self):
-        result = valid_result()
-        result["frames"][0].update(
-            {
-                "outcome": "failed",
-                "faulted": True,
-                "exit_error": "execution reverted",
-            }
-        )
-
-        writes = self.decode(result).writes
-
-        self.assertFalse(writes[0]["frame_failed"])
-        self.assertTrue(writes[0]["frame_reverted"])
-        self.assertEqual(writes[0]["rollback_frame_id"], 0)
-
-    def test_valid_one_hop_eip7702_resolution_is_accepted(self):
-        result = valid_result()
-        result["frames"][1].update(
-            {
-                "code_address": EIP_TARGET,
-                "code_source": "eip7702",
-                "code_designator": "0xef0100" + EIP_TARGET[2:],
-            }
-        )
-
-        writes = self.decode(result).writes
-
-        self.assertEqual(writes[0]["code_address"], EIP_TARGET)
-        self.assertEqual(writes[0]["code_attribution"], "exact")
-
-    def test_unknown_code_attribution_retains_the_raw_write(self):
-        result = valid_result()
-        result["frames"][1].update(
-            {
-                "code_address": None,
-                "code_attribution": "unknown",
-                "code_source": "unknown",
-                "code_designator": None,
-            }
-        )
-
-        writes = self.decode(result).writes
-
-        self.assertIsNone(writes[0]["code_address"])
-        self.assertEqual(writes[0]["code_attribution"], "unknown")
-
-    def test_sha3_preimage_is_strictly_validated_and_hashed(self):
-        result = valid_result()
-        result["sha3s"] = [
+        "sha3Operations": [
             {
                 "address": ADDRESS,
                 "preimage": "0x" + "12" * 32,
                 "size": 32,
                 "depth": 2,
             }
-        ]
+        ],
+        "observedStorage": {ADDRESS: {SLOT: ZERO}},
+        "observedStorageComplete": True,
+        "stepCount": 10,
+        "degradedReason": None,
+    }
 
-        sha3s = self.decode(result).sha3_operations
 
-        self.assertEqual(sha3s[0]["preimage"], "0x" + "12" * 32)
-        self.assertEqual(len(sha3s[0]["hash"]), 64)
+class _Provider:
+    def __init__(self, response=None, exception=None, receipt=None):
+        self.response = response
+        self.exception = exception
+        self.receipt = receipt
+        self.calls = []
 
-    def test_legitimate_noop_trace_is_not_marked_executable(self):
-        result = {
-            "fatal": None,
-            "executable": False,
-            "stepCount": 0,
-            "hookEnters": 0,
-            "hookExits": 0,
-            "frameStack": [],
-            "writes": [],
-            "sha3s": [],
-            "frames": [],
-            "observedStorage": {},
-            "observedStorageComplete": True,
+    async def make_request(self, chain_id, method, params):
+        self.calls.append((chain_id, method, params))
+        if self.exception:
+            raise self.exception
+        return copy.deepcopy(self.response)
+
+    async def get_transaction_receipt(self, chain_id, tx_hash):
+        if self.exception:
+            raise self.exception
+        return self.receipt
+
+
+class NativeTraceRPCClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_calls_one_native_method_with_all_limits_and_decodes_evidence(self):
+        provider = _Provider(
+            {"jsonrpc": "2.0", "id": 7, "result": valid_result()}
+        )
+        client = TraceRPCClient(
+            provider,
+            Settings(
+                MAX_TRACE_STEPS=20,
+                MAX_SSTORE_OPS=4,
+                MAX_TRACE_SHA3_OPS=3,
+                MAX_TRACE_PREIMAGE_BYTES=1_024,
+                MAX_PRESTATE_STORAGE_ENTRIES=8,
+            ),
+        )
+
+        evidence = await client.execute_slotscan_trace(1, TX_HASH.upper().replace("X", "x"))
+
+        self.assertEqual(
+            provider.calls,
+            [
+                (
+                    1,
+                    TRACE_METHOD,
+                    [
+                        TX_HASH,
+                        {
+                            "maxSteps": 20,
+                            "maxWrites": 4,
+                            "maxSha3Operations": 3,
+                            "maxPreimageBytes": 1_024,
+                            "maxObservedStorage": 8,
+                        },
+                    ],
+                )
+            ],
+        )
+        self.assertEqual(evidence.block_hash, BLOCK_HASH)
+        self.assertEqual(evidence.writes[0]["old_value"], ZERO)
+        self.assertEqual(evidence.writes[0]["code_address"], CODE_ADDRESS)
+        self.assertEqual(evidence.sha3_operations[0]["preimage"], "0x" + "12" * 32)
+        self.assertEqual(len(evidence.sha3_operations[0]["hash"]), 64)
+
+    async def test_case_folds_addresses_slots_values_and_designators_together(self):
+        result = valid_result()
+        result["prestateDiff"] = {
+            "pre": {
+                ADDRESS.upper().replace("X", "x"): {
+                    "storage": {
+                        SLOT.upper().replace("X", "x"): ZERO.upper().replace("X", "x")
+                    }
+                }
+            },
+            "post": {},
         }
-
-        evidence = self.decode(result)
-        self.assertEqual(evidence.writes, [])
-        self.assertEqual(evidence.evm_step_count, 0)
-        self.assertTrue(evidence.observed_storage_complete)
-
-    def test_complete_observations_require_every_persistent_write(self):
-        result = valid_result()
-        result["observedStorage"] = {}
-
-        with self.assertRaisesRegex(ValueError, "persistent write key"):
-            self.decode(result)
-
-    def test_incomplete_observations_allow_missing_and_null_values(self):
-        result = valid_result()
+        write = result["writes"][0]
+        write["address"] = write["address"].upper().replace("X", "x")
+        write["codeAddress"] = CODE_ADDRESS.upper().replace("X", "x")
+        write["codeSource"] = "eip7702"
+        write["codeDesignator"] = (
+            "0xef0100" + CODE_ADDRESS[2:]
+        ).upper().replace("X", "x")
+        write["slot"] = SLOT.upper().replace("X", "x")
+        write["oldValue"] = ZERO.upper().replace("X", "x")
+        write["value"] = ONE.upper().replace("X", "x")
         result["observedStorage"] = {
-            ADDRESS: {"0x" + "0" * 63 + "1": None}
+            ADDRESS.upper().replace("X", "x"): {
+                SLOT.upper().replace("X", "x"): ZERO.upper().replace("X", "x")
+            }
         }
-        result["observedStorageComplete"] = False
 
-        evidence = self.decode(result)
+        evidence = await TraceRPCClient(
+            _Provider({"result": result})
+        ).execute_slotscan_trace(1, TX_HASH)
 
-        self.assertEqual(len(evidence.writes), 1)
-        self.assertIsNone(
-            evidence.observed_storage[ADDRESS]["0x" + "0" * 63 + "1"]
-        )
-        self.assertIsNone(evidence.degraded_reason)
+        self.assertEqual(evidence.writes[0]["address"], ADDRESS)
+        self.assertEqual(evidence.writes[0]["slot"], SLOT)
+        self.assertEqual(evidence.writes[0]["value"], ONE)
+        self.assertEqual(evidence.observed_storage, {ADDRESS: {SLOT: ZERO}})
 
-    def test_observed_storage_widths_and_completeness_are_strict(self):
-        cases = []
-        short_slot = valid_result()
-        short_slot["observedStorage"] = {ADDRESS: {"0x1": ZERO_WORD}}
-        cases.append(short_slot)
-        short_value = valid_result()
-        short_value["observedStorage"] = {
-            ADDRESS: {"0x" + "0" * 63 + "1": "0x0"}
-        }
-        cases.append(short_value)
-        null_complete = valid_result()
-        null_complete["observedStorage"] = {
-            ADDRESS: {"0x" + "0" * 63 + "1": None}
-        }
-        cases.append(null_complete)
-        missing_flag = valid_result()
-        del missing_flag["observedStorageComplete"]
-        cases.append(missing_flag)
-        empty_account = valid_result()
-        empty_account["observedStorage"][CALL_TARGET] = {}
-        cases.append(empty_account)
-        duplicate_address = valid_result()
-        duplicate_address["observedStorage"].update(
+    async def test_degraded_trace_keeps_prestate_but_rejects_partial_details(self):
+        degraded = valid_result()
+        degraded.update(
             {
-                CALL_TARGET: {"0x" + "0" * 64: ZERO_WORD},
-                CALL_TARGET.upper().replace("0X", "0x"): {
-                    "0x" + "0" * 63 + "2": ZERO_WORD
-                },
+                "writes": [],
+                "sha3Operations": [],
+                "observedStorage": {},
+                "observedStorageComplete": False,
+                "stepCount": 100,
+                "degradedReason": "trace_limit",
             }
         )
-        cases.append(duplicate_address)
+        evidence = await TraceRPCClient(
+            _Provider({"result": degraded}),
+            Settings(MAX_TRACE_STEPS=1),
+        ).execute_slotscan_trace(1, TX_HASH)
 
-        for result in cases:
-            with self.subTest(result=result), self.assertRaises(ValueError):
-                self.decode(result)
+        self.assertEqual(evidence.prestate_diff["post"][ADDRESS]["storage"][SLOT], ONE)
+        self.assertEqual(evidence.evm_step_count, 0)
+        self.assertEqual(evidence.degraded_reason, "trace_limit")
 
-    def test_observed_storage_account_and_entry_limits_are_enforced(self):
-        too_many_accounts = valid_result()
-        too_many_accounts["observedStorage"][CALL_TARGET] = {
-            "0x" + "0" * 63 + "2": ZERO_WORD
-        }
-        account_bounded = TraceRPCClient(
-            object(),
-            Settings(MAX_PRESTATE_ACCOUNTS=1),
-        )
-        with self.assertRaisesRegex(
-            TraceNotAvailableError,
-            "observed-account limit",
+        for field, value in (
+            ("writes", valid_result()["writes"]),
+            ("sha3Operations", valid_result()["sha3Operations"]),
+            ("observedStorage", valid_result()["observedStorage"]),
+            ("observedStorageComplete", True),
         ):
-            account_bounded._decode_compact_trace_result(too_many_accounts)
+            malformed = copy.deepcopy(degraded)
+            malformed[field] = value
+            with self.subTest(field=field), self.assertRaises(RPCError):
+                await TraceRPCClient(
+                    _Provider({"result": malformed})
+                ).execute_slotscan_trace(1, TX_HASH)
 
-        too_many_entries = valid_result()
-        too_many_entries["observedStorage"][ADDRESS][
-            "0x" + "0" * 63 + "2"
-        ] = ZERO_WORD
-        entry_bounded = TraceRPCClient(
-            object(),
-            Settings(MAX_PRESTATE_STORAGE_ENTRIES=1),
-        )
-        with self.assertRaisesRegex(
-            TraceNotAvailableError,
-            "observation limit",
-        ):
-            entry_bounded._decode_compact_trace_result(too_many_entries)
-
-    def test_malformed_evidence_is_rejected_before_normalization(self):
+    async def test_rejects_malformed_envelope_and_cross_field_contradictions(self):
         cases = {}
-
-        boolean_id = valid_result()
-        boolean_id["frames"][1]["id"] = True
-        cases["boolean frame id"] = boolean_id
-
-        long_address = valid_result()
-        long_address["frames"][1]["storage_address"] = "0x" + "11" * 21
-        cases["overlong address"] = long_address
-
-        long_word = valid_result()
-        long_word["writes"][0]["slot"] = "0x1" + "00" * 32
-        cases["overlong word"] = long_word
-
-        missing_parent = valid_result()
-        missing_parent["frames"][1]["parent_id"] = 9
-        cases["missing parent"] = missing_parent
-
-        bad_completion = valid_result()
-        bad_completion["frames"][1]["completion_word"] = ZERO_WORD
-        cases["completion contradiction"] = bad_completion
-
-        bad_designator = valid_result()
-        bad_designator["frames"][1].update(
-            {
-                "code_address": EIP_TARGET,
-                "code_source": "eip7702",
-                "code_designator": "0xef0100" + "bb" * 19,
-            }
-        )
-        cases["invalid EIP-7702 designator"] = bad_designator
-
-        malformed_preimage = valid_result()
-        malformed_preimage["sha3s"] = [
-            {
-                "address": ADDRESS,
-                "preimage": "0x12",
-                "size": 32,
-                "depth": 2,
-            }
-        ]
-        cases["truncated preimage"] = malformed_preimage
-
-        unbalanced_hooks = valid_result()
-        unbalanced_hooks["hookExits"] = 0
-        cases["unbalanced hooks"] = unbalanced_hooks
-
-        root_contradiction = valid_result()
-        root_contradiction["frames"][0]["outcome"] = "failed"
-        cases["root outcome contradiction"] = root_contradiction
-
-        malformed_last_op = valid_result()
-        malformed_last_op["lastOp"] = ["STOP"]
-        cases["malformed final opcode"] = malformed_last_op
+        extra = valid_result()
+        extra["unexpected"] = True
+        cases["extra envelope field"] = extra
+        wrong_hash = valid_result()
+        wrong_hash["transactionHash"] = "0x" + "ee" * 32
+        cases["transaction mismatch"] = wrong_hash
+        boolean_index = valid_result()
+        boolean_index["transactionIndex"] = True
+        cases["boolean index"] = boolean_index
+        unordered = valid_result()
+        unordered["writes"].append(copy.deepcopy(unordered["writes"][0]))
+        cases["unordered writes"] = unordered
+        wrong_opcode = valid_result()
+        wrong_opcode["writes"][0]["namespace"] = "transient"
+        cases["opcode namespace"] = wrong_opcode
+        missing_observation = valid_result()
+        missing_observation["observedStorage"] = {}
+        cases["complete observation omission"] = missing_observation
+        bad_rollback = valid_result()
+        bad_rollback["writes"][0]["frameReverted"] = True
+        cases["rollback contradiction"] = bad_rollback
+        short_old_value = valid_result()
+        short_old_value["writes"][0]["oldValue"] = "0x0"
+        cases["short old value"] = short_old_value
+        malformed_prestate = valid_result()
+        malformed_prestate["prestateDiff"]["pre"][ADDRESS]["unknown"] = 1
+        cases["prestate account field"] = malformed_prestate
 
         for name, result in cases.items():
-            with self.subTest(name=name), self.assertRaises(ValueError):
-                self.decode(result)
-
-    def test_frames_not_referenced_by_writes_are_rejected(self):
-        result = valid_result()
-        result["hookEnters"] = 2
-        result["hookExits"] = 2
-        result["frames"].append(
-            frame(
-                2,
-                0,
-                "CALL",
-                2,
-                EIP_TARGET,
-                EIP_TARGET,
-            )
-        )
-
-        with self.assertRaisesRegex(ValueError, "not reduced"):
-            self.decode(result)
-
-    def test_each_limit_marker_uses_the_trace_limit_path(self):
-        for marker in (
-            "limit:steps",
-            "limit:writes",
-            "limit:sha3",
-            "limit:preimage_bytes",
-        ):
-            with self.subTest(marker=marker), self.assertRaises(
-                TraceNotAvailableError
+            with self.subTest(name=name), self.assertRaisesRegex(
+                RPCError,
+                "invalid trace response",
             ):
-                self.decode({"fatal": marker})
+                await TraceRPCClient(
+                    _Provider({"result": result})
+                ).execute_slotscan_trace(1, TX_HASH)
 
-    def test_callback_fatal_is_rejected_as_malformed_evidence(self):
-        with self.assertRaisesRegex(ValueError, "callback failed"):
-            self.decode({"fatal": "tracer:exception"})
+    async def test_observation_and_prestate_limits_are_independently_enforced(self):
+        observed = valid_result()
+        observed["prestateDiff"] = {"pre": {}, "post": {}}
+        observed["observedStorage"][ADDRESS][ZERO] = ZERO
+        with self.assertRaisesRegex(TraceNotAvailableError, "observation limit"):
+            await TraceRPCClient(
+                _Provider({"result": observed}),
+                Settings(MAX_PRESTATE_STORAGE_ENTRIES=1),
+            ).execute_slotscan_trace(1, TX_HASH)
 
+        prestate = valid_result()
+        prestate["prestateDiff"]["pre"][ADDRESS]["storage"][ZERO] = ZERO
+        prestate["observedStorage"] = {ADDRESS: {SLOT: ZERO}}
+        with self.assertRaisesRegex(TraceNotAvailableError, "storage limit"):
+            await TraceRPCClient(
+                _Provider({"result": prestate}),
+                Settings(MAX_PRESTATE_STORAGE_ENTRIES=2),
+            ).execute_slotscan_trace(1, TX_HASH)
 
-class CompactTraceRoutingTests(unittest.IsolatedAsyncioTestCase):
-    async def test_callback_failure_degrades_without_caching_evidence(self):
-        client = TraceRPCClient(_ResultProvider({"fatal": "tracer:exception"}))
+        accounts = valid_result()
+        accounts["prestateDiff"] = {"pre": {}, "post": {}}
+        accounts["observedStorage"]["0x" + "33" * 20] = {ZERO: ZERO}
+        with self.assertRaisesRegex(TraceNotAvailableError, "observed-account"):
+            await TraceRPCClient(
+                _Provider({"result": accounts}),
+                Settings(MAX_PRESTATE_ACCOUNTS=1),
+            ).execute_slotscan_trace(1, TX_HASH)
 
-        result = await client.execute_compact_trace(1, "0x" + "ab" * 32)
+    async def test_rpc_errors_never_expose_private_upstream_text(self):
+        secret = "https://user:password@private-rpc.invalid/key?token=secret"
+        for provider in (
+            _Provider(exception=RuntimeError(secret)),
+            _Provider({"error": {"code": -32603, "message": secret}}),
+        ):
+            with self.subTest(provider=provider), self.assertRaises(RPCError) as raised:
+                await TraceRPCClient(provider).execute_slotscan_trace(1, TX_HASH)
+            self.assertNotIn("password", str(raised.exception))
+            self.assertNotIn("token", str(raised.exception))
+            self.assertEqual(raised.exception.error, "upstream request failed")
 
-        self.assertEqual(result.writes, [])
-        self.assertFalse(result.observed_storage_complete)
-        self.assertEqual(result.degraded_reason, "tracer_unavailable")
+        with self.assertRaises(RPCError) as raised:
+            await TraceRPCClient(
+                _Provider(exception=RuntimeError(secret))
+            ).get_receipt(1, TX_HASH)
+        self.assertNotIn("secret", str(raised.exception))
 
-    async def test_limit_failure_uses_the_stable_trace_limit_reason(self):
-        client = TraceRPCClient(_ResultProvider({"fatal": "limit:steps"}))
+    async def test_unavailable_and_not_found_errors_have_stable_domain_types(self):
+        with self.assertRaises(TraceNotAvailableError):
+            await TraceRPCClient(
+                _Provider({"error": {"code": -32601, "message": "private detail"}})
+            ).execute_slotscan_trace(1, TX_HASH)
 
-        result = await client.execute_compact_trace(1, "0x" + "ab" * 32)
-
-        self.assertEqual(result.writes, [])
-        self.assertFalse(result.observed_storage_complete)
-        self.assertEqual(result.degraded_reason, "trace_limit")
+        with self.assertRaises(TransactionNotFoundError):
+            await TraceRPCClient(
+                _Provider({"error": {"code": -32000, "message": "transaction not found"}})
+            ).execute_slotscan_trace(1, TX_HASH)
 
 
 if __name__ == "__main__":

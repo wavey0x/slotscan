@@ -9,7 +9,7 @@ from app.config import Settings
 from app.models.domain import StorageLayout, StorageType, StorageVariable
 from app.repositories.trace_cache import TransactionTraceArtifactData
 from app.services.decoder import TypeDecoder
-from app.services.tracer.rpc_client import TraceRPCClient
+from tests.reth_js_oracle import TraceRPCClient
 from app.services.tracer.tracer import TransactionAnalysisService
 
 

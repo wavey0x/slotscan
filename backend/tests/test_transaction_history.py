@@ -17,7 +17,7 @@ from app.models.domain import (
     StorageType,
     StorageVariable,
 )
-from app.models.errors import RPCError, TraceNotAvailableError
+from app.models.errors import RPCError
 from app.repositories.trace_cache import (
     TransactionTraceArtifactData,
 )
@@ -30,7 +30,7 @@ from app.services.tracer.extractor import (
     TransactionTraceEvidence,
     TransactionTraceExtractor,
 )
-from app.services.tracer.rpc_client import CompactTraceEvidence, TraceRPCClient
+from app.services.tracer.rpc_client import SlotScanTraceEvidence
 from app.services.transaction_history import TransactionHistoryService
 
 
@@ -172,102 +172,6 @@ class _FailingHistoryService:
             "debug_traceTransaction",
             "https://user:secret@rpc.example/key?token=abc",
         )
-
-
-class _CompactTraceProvider:
-    def __init__(self):
-        self.params = None
-
-    async def make_request(self, chain_id, method, params):
-        self.params = params
-        return {
-            "result": {
-                "fatal": None,
-                "executable": True,
-                "hookEnters": 1,
-                "hookExits": 1,
-                "frameStack": [0],
-                "writes": [
-                    {
-                        "slot": "0x1",
-                        "value": "0x1",
-                        "old_value": None,
-                        "opcode": "SSTORE",
-                        "namespace": "persistent",
-                        "pc": 1,
-                        "depth": 1,
-                        "index": 5,
-                        "frame_id": 0,
-                    },
-                    {
-                        "slot": "0x2",
-                        "value": "0x2",
-                        "old_value": None,
-                        "opcode": "SSTORE",
-                        "namespace": "persistent",
-                        "pc": 2,
-                        "depth": 2,
-                        "index": 8,
-                        "frame_id": 1,
-                    }
-                ],
-                "sha3s": [],
-                "observedStorage": {
-                    ADDRESS_A: {SLOT_1: ZERO},
-                    ADDRESS_B: {"0x" + "0" * 63 + "2": ZERO},
-                },
-                "observedStorageComplete": True,
-                "frames": [
-                    {
-                        "id": 0,
-                        "parent_id": None,
-                        "type": "ROOT",
-                        "depth": 1,
-                        "storage_address": ADDRESS_A,
-                        "requested_code_address": ADDRESS_A,
-                        "code_address": CODE_A,
-                        "code_attribution": "exact",
-                        "code_source": "eip7702",
-                        "code_designator": "0xef0100" + "aa" * 20,
-                        "target_confirmed": True,
-                        "faulted": False,
-                        "exit_error": None,
-                        "outcome": "succeeded",
-                        "completion_validated": True,
-                        "completion_word": None,
-                    },
-                    {
-                        "id": 1,
-                        "parent_id": 0,
-                        "type": "CALL",
-                        "depth": 2,
-                        "storage_address": ADDRESS_B,
-                        "requested_code_address": ADDRESS_B,
-                        "code_address": CODE_B,
-                        "code_attribution": "exact",
-                        "code_source": "eip7702",
-                        "code_designator": "0xef0100" + "bb" * 20,
-                        "target_confirmed": True,
-                        "faulted": False,
-                        "exit_error": None,
-                        "outcome": "succeeded",
-                        "completion_validated": True,
-                        "completion_word": ONE,
-                    },
-                ],
-                "stepCount": 10,
-                "lastOp": "STOP",
-                "lastDepth": 1,
-            }
-        }
-
-
-class _PrestateProvider:
-    def __init__(self, result):
-        self.result = result
-
-    async def make_request(self, chain_id, method, params):
-        return {"result": self.result}
 
 
 class _HistoryService(TransactionHistoryService):
@@ -481,93 +385,6 @@ class Eip7702TraceTests(IsolatedAsyncioTestCase):
                     traced.capabilities["code_attribution_complete"],
                     expected,
                 )
-
-    async def test_compact_trace_preserves_exact_effective_code_output(self):
-        provider = _CompactTraceProvider()
-        client = TraceRPCClient(
-            provider,
-            Settings(
-                MAX_SSTORE_OPS=2,
-                MAX_TRACE_STEPS=10,
-                MAX_TRACE_SHA3_OPS=1,
-            ),
-        )
-
-        result = await client._execute_compact_storage_trace(
-            1,
-            "0x" + "ab" * 32,
-        )
-
-        self.assertIsNotNone(result)
-        self.assertEqual(result.evm_step_count, 10)
-        self.assertEqual(result.writes[0]["address"], ADDRESS_A)
-        self.assertEqual(result.writes[0]["code_address"], CODE_A)
-        self.assertEqual(result.writes[0]["code_attribution"], "exact")
-        self.assertEqual(result.writes[1]["address"], ADDRESS_B)
-        self.assertEqual(result.writes[1]["code_address"], CODE_B)
-        self.assertEqual(result.writes[1]["code_attribution"], "exact")
-        tracer_source = provider.params[1]["tracer"]
-        self.assertIn("db.getCode(requestedHex)", tracer_source)
-        self.assertIn("rawCode.length === 48", tracer_source)
-        self.assertIn("rawCode.slice(0, 8) === '0xef0100'", tracer_source)
-        self.assertNotIn("pendingCalls", tracer_source)
-        self.assertNotIn("toAddress(log.stack.peek(1))", tracer_source)
-        self.assertIn("enter: function(call)", tracer_source)
-        self.assertIn("exit: function(result)", tracer_source)
-        self.assertIn("pendingCompletions", tracer_source)
-        self.assertIn("if (this.fatal === null)", tracer_source)
-        self.assertIn("this.steps >= 10", tracer_source)
-        self.assertIn("this.writes.length >= 2", tracer_source)
-        self.assertIn("this.sha3s.length >= 1", tracer_source)
-
-    async def test_compact_trace_rejects_the_first_write_above_the_limit(self):
-        client = TraceRPCClient(
-            _CompactTraceProvider(),
-            Settings(MAX_SSTORE_OPS=1),
-        )
-
-        with self.assertRaises(TraceNotAvailableError):
-            await client._execute_compact_storage_trace(
-                1,
-                "0x" + "ab" * 32,
-            )
-
-    async def test_public_trace_degrades_when_compact_trace_reaches_a_limit(self):
-        client = TraceRPCClient(
-            _CompactTraceProvider(),
-            Settings(MAX_SSTORE_OPS=1),
-        )
-
-        evidence = await client.execute_compact_trace(
-            1,
-            "0x" + "ab" * 32,
-        )
-
-        self.assertEqual(evidence.writes, [])
-        self.assertEqual(evidence.sha3_operations, [])
-        self.assertEqual(evidence.evm_step_count, 0)
-        self.assertEqual(evidence.degraded_reason, "trace_limit")
-
-    async def test_prestate_trace_rejects_oversized_storage_before_normalization(self):
-        client = TraceRPCClient(
-            _PrestateProvider(
-                {
-                    "pre": {
-                        ADDRESS_A: {
-                            "storage": {
-                                SLOT_1: ONE,
-                                ZERO: ONE,
-                            }
-                        }
-                    },
-                    "post": {},
-                }
-            ),
-            Settings(MAX_PRESTATE_STORAGE_ENTRIES=1),
-        )
-
-        with self.assertRaises(TraceNotAvailableError):
-            await client.execute_prestate_diff(1, artifact().tx_hash)
 
     def test_incomplete_code_attribution_keeps_raw_writes_without_layout(self):
         tracer = TransactionAnalysisService(
@@ -798,31 +615,28 @@ class PrestateRecoveryTests(TestCase):
 
 
 class TraceExtractorTests(IsolatedAsyncioTestCase):
-    async def test_extraction_uses_two_traces_and_merges_observed_storage(self):
+    async def test_extraction_uses_one_native_trace_and_merges_observed_storage(self):
         class RPCClient:
             def __init__(self):
-                self.prestate_calls = 0
-                self.compact_calls = 0
+                self.native_calls = 0
 
-            async def execute_prestate_diff(self, chain_id, tx_hash):
-                self.prestate_calls += 1
-                return {
-                    "pre": {},
-                    "post": {ADDRESS_A: {"storage": {SLOT_1: ONE}}},
-                }
-
-            async def get_receipt(self, chain_id, tx_hash):
-                return {"status": 1}
-
-            async def execute_compact_trace(self, chain_id, tx_hash):
-                self.compact_calls += 1
-                return CompactTraceEvidence(
+            async def execute_slotscan_trace(self, chain_id, tx_hash):
+                self.native_calls += 1
+                return SlotScanTraceEvidence(
+                    transaction_hash=tx_hash,
+                    block_hash="0x" + "dd" * 32,
+                    transaction_index=2,
+                    root_succeeded=True,
+                    prestate_diff={
+                        "pre": {},
+                        "post": {ADDRESS_A: {"storage": {SLOT_1: ONE}}},
+                    },
                     writes=[
                         {
                             "address": ADDRESS_A,
                             "slot": SLOT_1,
                             "value": ONE,
-                            "old_value": None,
+                            "old_value": ZERO,
                             "namespace": "persistent",
                         }
                     ],
@@ -832,6 +646,13 @@ class TraceExtractorTests(IsolatedAsyncioTestCase):
                     evm_step_count=10,
                 )
 
+            async def get_receipt(self, chain_id, tx_hash):
+                return {
+                    "blockHash": "0x" + "dd" * 32,
+                    "transactionIndex": 2,
+                    "status": 1,
+                }
+
         rpc_client = RPCClient()
 
         evidence = await TransactionTraceExtractor(rpc_client).extract(
@@ -839,8 +660,7 @@ class TraceExtractorTests(IsolatedAsyncioTestCase):
             artifact().tx_hash,
         )
 
-        self.assertEqual(rpc_client.prestate_calls, 1)
-        self.assertEqual(rpc_client.compact_calls, 1)
+        self.assertEqual(rpc_client.native_calls, 1)
         self.assertEqual(
             evidence.prestate_diff["pre"][ADDRESS_A]["storage"][SLOT_1],
             ZERO,
@@ -852,14 +672,13 @@ class TraceExtractorTests(IsolatedAsyncioTestCase):
 
     async def test_incomplete_observations_preserve_raw_write_inventory(self):
         class RPCClient:
-            async def execute_prestate_diff(self, chain_id, tx_hash):
-                return {"pre": {}, "post": {}}
-
-            async def get_receipt(self, chain_id, tx_hash):
-                return {"status": 1}
-
-            async def execute_compact_trace(self, chain_id, tx_hash):
-                return CompactTraceEvidence(
+            async def execute_slotscan_trace(self, chain_id, tx_hash):
+                return SlotScanTraceEvidence(
+                    transaction_hash=tx_hash,
+                    block_hash="0x" + "ee" * 32,
+                    transaction_index=3,
+                    root_succeeded=True,
+                    prestate_diff={"pre": {}, "post": {}},
                     writes=[
                         {
                             "address": ADDRESS_A,
@@ -875,6 +694,13 @@ class TraceExtractorTests(IsolatedAsyncioTestCase):
                     evm_step_count=10,
                 )
 
+            async def get_receipt(self, chain_id, tx_hash):
+                return {
+                    "blockHash": "0x" + "ee" * 32,
+                    "transactionIndex": 3,
+                    "status": 1,
+                }
+
         evidence = await TransactionTraceExtractor(RPCClient()).extract(
             1,
             artifact().tx_hash,
@@ -883,6 +709,47 @@ class TraceExtractorTests(IsolatedAsyncioTestCase):
         self.assertEqual(len(evidence.writes), 1)
         self.assertIsNone(evidence.degraded_reason)
         self.assertEqual(evidence.prestate_diff, {"pre": {}, "post": {}})
+
+    async def test_receipt_identity_and_root_outcome_must_match_native_trace(self):
+        native = SlotScanTraceEvidence(
+            transaction_hash=artifact().tx_hash,
+            block_hash="0x" + "aa" * 32,
+            transaction_index=4,
+            root_succeeded=True,
+            prestate_diff={"pre": {}, "post": {}},
+            writes=[],
+            sha3_operations=[],
+            observed_storage={},
+            observed_storage_complete=True,
+            evm_step_count=1,
+        )
+        valid_receipt = {
+            "blockHash": native.block_hash,
+            "transactionIndex": native.transaction_index,
+            "status": 1,
+        }
+        for field, value in (
+            ("blockHash", "0x" + "bb" * 32),
+            ("transactionIndex", 5),
+            ("status", 0),
+        ):
+            receipt = {**valid_receipt, field: value}
+
+            class RPCClient:
+                async def execute_slotscan_trace(self, chain_id, tx_hash):
+                    return native
+
+                async def get_receipt(self, chain_id, tx_hash):
+                    return receipt
+
+            with self.subTest(field=field), self.assertRaisesRegex(
+                RPCError,
+                "receipt identity does not match trace",
+            ):
+                await TransactionTraceExtractor(RPCClient()).extract(
+                    1,
+                    artifact().tx_hash,
+                )
 
 
 class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):

@@ -10,6 +10,8 @@ version handling remains part of the analysis domain.
 
 - **Backend** (`/backend`): FastAPI API for fetching sources, parsing layouts, reading storage, and tracing txs.
 - **Frontend** (`/frontend`): Next.js UI for browsing storage and diffs.
+- **Custom Reth node** (`/reth-slotscan`): Normal Reth plus SlotScan's native
+  single-replay transaction-trace RPC.
 - **PostgreSQL**: Caches contract metadata and results.
 
 Transaction-wide history is available at
@@ -54,6 +56,11 @@ DATABASE_URL=postgresql+asyncpg://wavey@localhost:5432/slotscan_dev
 RPC_URL_1=http://your-rpc:8545
 ETHERSCAN_API_KEY_1=your-key
 ```
+
+Transaction tracing requires `RPC_URL_1` to point at the `reth-slotscan`
+binary, not stock Reth. The custom executable replaces the stock executable
+against the existing compatible Reth data directory; it is not a sidecar and
+does not require a second sync. See [`reth-slotscan/README.md`](reth-slotscan/README.md).
 
 ## Notes
 

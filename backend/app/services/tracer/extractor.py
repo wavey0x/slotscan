@@ -3,7 +3,8 @@
 from dataclasses import dataclass
 import logging
 
-from app.services.tracer.rpc_client import TraceRPCClient
+from app.models.errors import RPCError
+from app.services.tracer.rpc_client import TRACE_METHOD, TraceRPCClient
 
 
 logger = logging.getLogger(__name__)
@@ -26,36 +27,74 @@ class TransactionTraceExtractor:
         self.rpc_client = rpc_client
 
     async def extract(self, chain_id: int, tx_hash: str) -> TransactionTraceEvidence:
-        # Receipt and prestate calls are deliberately kept together here so
-        # contract projections never issue their own transaction trace.
+        # The receipt is independent network I/O, so overlap it with the one
+        # native replay while keeping all trace evidence in that single replay.
         import asyncio
 
-        prestate_diff, receipt = await asyncio.gather(
-            self.rpc_client.execute_prestate_diff(chain_id, tx_hash),
+        native, receipt = await asyncio.gather(
+            self.rpc_client.execute_slotscan_trace(chain_id, tx_hash),
             self.rpc_client.get_receipt(chain_id, tx_hash),
         )
-        compact = await self.rpc_client.execute_compact_trace(
-            chain_id,
-            tx_hash,
-        )
+        self._validate_receipt_identity(native, receipt)
+        prestate_diff = native.prestate_diff
         self._normalize_diff(prestate_diff)
         self._merge_observed_prestate(
             prestate_diff,
-            compact.observed_storage,
+            native.observed_storage,
         )
-        if not compact.observed_storage_complete and compact.writes:
+        if not native.observed_storage_complete and native.writes:
             logger.warning(
-                "Compact trace returned incomplete transaction-start storage "
+                "Native trace returned incomplete transaction-start storage "
                 "observations"
             )
         return TransactionTraceEvidence(
             receipt=receipt,
             prestate_diff=prestate_diff,
-            writes=compact.writes,
-            sha3_operations=compact.sha3_operations,
-            evm_step_count=compact.evm_step_count,
-            degraded_reason=compact.degraded_reason,
+            writes=native.writes,
+            sha3_operations=native.sha3_operations,
+            evm_step_count=native.evm_step_count,
+            degraded_reason=native.degraded_reason,
         )
+
+    @classmethod
+    def _validate_receipt_identity(cls, native, receipt: dict) -> None:
+        try:
+            receipt_block_hash = cls._hash(receipt["blockHash"])
+            receipt_index = cls._quantity(receipt["transactionIndex"])
+            receipt_status = cls._quantity(receipt["status"]) == 1
+        except (KeyError, TypeError, ValueError):
+            raise RPCError(TRACE_METHOD, "receipt identity is malformed") from None
+        if (
+            receipt_block_hash != native.block_hash
+            or receipt_index != native.transaction_index
+            or receipt_status != native.root_succeeded
+        ):
+            raise RPCError(TRACE_METHOD, "receipt identity does not match trace")
+
+    @staticmethod
+    def _hash(value) -> str:
+        if isinstance(value, bytes):
+            value = "0x" + value.hex()
+        elif not isinstance(value, str) and hasattr(value, "hex"):
+            value = value.hex()
+        if (
+            not isinstance(value, str)
+            or len(value) != 66
+            or not value.startswith("0x")
+        ):
+            raise ValueError("invalid hash")
+        bytes.fromhex(value[2:])
+        return value.lower()
+
+    @staticmethod
+    def _quantity(value) -> int:
+        if isinstance(value, bool):
+            raise ValueError("invalid quantity")
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            return int(value, 16)
+        raise TypeError("invalid quantity")
 
     @staticmethod
     def _word(value: str | int) -> str:
