@@ -293,6 +293,35 @@ class CompactTraceValidatorTests(unittest.TestCase):
             with self.subTest(result=result), self.assertRaises(ValueError):
                 self.decode(result)
 
+    def test_observed_storage_account_and_entry_limits_are_enforced(self):
+        too_many_accounts = valid_result()
+        too_many_accounts["observedStorage"][CALL_TARGET] = {
+            "0x" + "0" * 63 + "2": ZERO_WORD
+        }
+        account_bounded = TraceRPCClient(
+            object(),
+            Settings(MAX_PRESTATE_ACCOUNTS=1),
+        )
+        with self.assertRaisesRegex(
+            TraceNotAvailableError,
+            "observed-account limit",
+        ):
+            account_bounded._decode_compact_trace_result(too_many_accounts)
+
+        too_many_entries = valid_result()
+        too_many_entries["observedStorage"][ADDRESS][
+            "0x" + "0" * 63 + "2"
+        ] = ZERO_WORD
+        entry_bounded = TraceRPCClient(
+            object(),
+            Settings(MAX_PRESTATE_STORAGE_ENTRIES=1),
+        )
+        with self.assertRaisesRegex(
+            TraceNotAvailableError,
+            "observation limit",
+        ):
+            entry_bounded._decode_compact_trace_result(too_many_entries)
+
     def test_malformed_evidence_is_rejected_before_normalization(self):
         cases = {}
 

@@ -32,6 +32,29 @@ def call_bytecode(target):
     return "6000600060006000600073" + target[2:] + "5af1"
 
 
+def delegatecall_bytecode(target):
+    return "600060006000600073" + target[2:] + "5af4"
+
+
+def callcode_bytecode(target):
+    return "6000600060006000600073" + target[2:] + "5af2"
+
+
+def normalized_word(value):
+    return "0x" + value.removeprefix("0x").lower().zfill(64)
+
+
+def normalized_prestate_storage(prestate):
+    return {
+        address.lower(): {
+            normalized_word(slot): normalized_word(value)
+            for slot, value in state.get("storage", {}).items()
+        }
+        for address, state in prestate.items()
+        if state.get("storage")
+    }
+
+
 @unittest.skipUnless(
     RUN_CONFORMANCE,
     "set RUN_RETH_TRACER_CONFORMANCE=1 for deployment-provider checks",
@@ -52,6 +75,23 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
         overrides=None,
         tracer_source=None,
     ):
+        return await self._trace_call(
+            code,
+            overrides=overrides,
+            tracer=(
+                tracer_source
+                or self.client._compact_storage_tracer_source()
+            ),
+        )
+
+    async def _trace_call(
+        self,
+        code,
+        *,
+        overrides=None,
+        tracer,
+        tracer_config=None,
+    ):
         state_overrides = {
             FROM: {"balance": "0x1000000000000000000"},
             ROOT: {
@@ -61,6 +101,12 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
             },
         }
         state_overrides.update(overrides or {})
+        trace_config = {
+            "tracer": tracer,
+            "stateOverrides": state_overrides,
+        }
+        if tracer_config is not None:
+            trace_config["tracerConfig"] = tracer_config
         response = await self.provider.make_request(
             1,
             "debug_traceCall",
@@ -71,17 +117,50 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
                     "gas": "0x989680",
                 },
                 "latest",
-                {
-                    "tracer": (
-                        tracer_source
-                        or self.client._compact_storage_tracer_source()
-                    ),
-                    "stateOverrides": state_overrides,
-                },
+                trace_config,
             ],
         )
         self.assertNotIn("error", response)
         return response["result"]
+
+    async def trace_call_differential(
+        self,
+        code,
+        *,
+        overrides=None,
+        client=None,
+        tracer_source=None,
+    ):
+        compact_client = client or self.client
+        compact_raw = await self.trace_call(
+            code,
+            overrides=overrides,
+            tracer_source=(
+                tracer_source
+                or compact_client._compact_storage_tracer_source()
+            ),
+        )
+        compact = compact_client._decode_compact_trace_result(compact_raw)
+        full_prestate = await self._trace_call(
+            code,
+            overrides=overrides,
+            tracer="prestateTracer",
+            tracer_config={"diffMode": False},
+        )
+        expected_storage = normalized_prestate_storage(full_prestate)
+        has_persistent_writes = any(
+            write["namespace"] == "persistent"
+            for write in compact.writes
+        )
+        if compact.observed_storage_complete:
+            if has_persistent_writes:
+                self.assertEqual(
+                    compact.observed_storage,
+                    expected_storage,
+                )
+            else:
+                self.assertEqual(compact.observed_storage, {})
+        return compact_raw, compact, expected_storage
 
     async def test_provider_contract_and_voting_delegate_attribution(self):
         version = await self.provider.make_request(1, "web3_clientVersion", [])
@@ -117,15 +196,9 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertNotIn("error", full_response)
-        expected_storage = {
-            address.lower(): {
-                "0x" + slot.removeprefix("0x").lower().zfill(64):
-                "0x" + value.removeprefix("0x").lower().zfill(64)
-                for slot, value in state.get("storage", {}).items()
-            }
-            for address, state in full_response["result"].items()
-            if state.get("storage")
-        }
+        expected_storage = normalized_prestate_storage(
+            full_response["result"]
+        )
         self.assertEqual(result.observed_storage, expected_storage)
 
     async def test_calls_and_caught_or_uncaught_reverts(self):
@@ -133,23 +206,25 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
         target_revert = "0x600160005560006000fd"
         harness = call_bytecode(TARGET) + "60015500"
 
-        success_raw = await self.trace_call(
-            harness,
-            overrides={TARGET: {"code": target_success}},
+        _success_raw, success, _success_prestate = (
+            await self.trace_call_differential(
+                harness,
+                overrides={TARGET: {"code": target_success}},
+            )
         )
-        success_writes = self.client._decode_compact_trace_result(
-            success_raw
-        ).writes
+        success_writes = success.writes
         child_success = next(
             write for write in success_writes if write["address"] == TARGET
         )
         self.assertFalse(child_success["frame_reverted"])
 
-        caught_raw = await self.trace_call(
-            harness,
-            overrides={TARGET: {"code": target_revert}},
+        _caught_raw, caught, _caught_prestate = (
+            await self.trace_call_differential(
+                harness,
+                overrides={TARGET: {"code": target_revert}},
+            )
         )
-        caught_writes = self.client._decode_compact_trace_result(caught_raw).writes
+        caught_writes = caught.writes
         child_failure = next(
             write for write in caught_writes if write["address"] == TARGET
         )
@@ -160,22 +235,70 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(root_after_catch["frame_reverted"])
         self.assertEqual(root_after_catch["value"], "0x" + "0" * 64)
 
-        uncaught_raw = await self.trace_call(target_revert[2:])
-        uncaught_writes = self.client._decode_compact_trace_result(
-            uncaught_raw
-        ).writes
-        self.assertTrue(uncaught_writes[0]["frame_reverted"])
-        self.assertEqual(uncaught_writes[0]["rollback_frame_id"], 0)
+        _uncaught_raw, uncaught, _uncaught_prestate = (
+            await self.trace_call_differential(target_revert[2:])
+        )
+        self.assertTrue(uncaught.writes[0]["frame_reverted"])
+        self.assertEqual(uncaught.writes[0]["rollback_frame_id"], 0)
+
+    async def test_delegatecall_and_callcode_storage_ownership(self):
+        target_code = "0x600160005500"
+        cases = (
+            ("DELEGATECALL", delegatecall_bytecode(TARGET) + "5000"),
+            ("CALLCODE", callcode_bytecode(TARGET) + "5000"),
+        )
+
+        for expected_type, harness in cases:
+            with self.subTest(expected_type=expected_type):
+                raw, evidence, _prestate = (
+                    await self.trace_call_differential(
+                        harness,
+                        overrides={TARGET: {"code": target_code}},
+                    )
+                )
+                self.assertEqual(len(evidence.writes), 1)
+                self.assertEqual(evidence.writes[0]["address"], ROOT)
+                self.assertEqual(
+                    evidence.writes[0]["code_address"],
+                    TARGET,
+                )
+                child = next(
+                    frame
+                    for frame in raw["frames"]
+                    if frame["type"] == expected_type
+                )
+                self.assertEqual(child["storage_address"], ROOT)
+                self.assertEqual(child["code_address"], TARGET)
 
     async def test_creation_failure_and_eip7702_resolution(self):
+        successful_creation = (
+            "600a6012600039600a60006000f060015500"
+            "600160005560006000f3"
+        )
+        success_raw, success, _success_prestate = (
+            await self.trace_call_differential(successful_creation)
+        )
+        created_write = next(
+            write
+            for write in success.writes
+            if write["address"] != ROOT
+        )
+        self.assertFalse(created_write["frame_reverted"])
+        success_frame = next(
+            frame
+            for frame in success_raw["frames"]
+            if frame["type"] == "CREATE"
+        )
+        self.assertEqual(success_frame["outcome"], "succeeded")
+
         creation_failure = (
             "600a6012600039600a60006000f060015500"
             "600160005560006000fd"
         )
-        creation_raw = await self.trace_call(creation_failure)
-        creation_writes = self.client._decode_compact_trace_result(
-            creation_raw
-        ).writes
+        creation_raw, creation, _creation_prestate = (
+            await self.trace_call_differential(creation_failure)
+        )
+        creation_writes = creation.writes
         constructor_write = next(
             write
             for write in creation_writes
@@ -191,14 +314,16 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(create_frame["completion_word"], "0x" + "0" * 64)
 
         authority_harness = call_bytecode(AUTHORITY) + "60015500"
-        eip_raw = await self.trace_call(
-            authority_harness,
-            overrides={
-                AUTHORITY: {"code": "0xef0100" + DELEGATE[2:]},
-                DELEGATE: {"code": "0x600160005500"},
-            },
+        eip_raw, eip, _eip_prestate = (
+            await self.trace_call_differential(
+                authority_harness,
+                overrides={
+                    AUTHORITY: {"code": "0xef0100" + DELEGATE[2:]},
+                    DELEGATE: {"code": "0x600160005500"},
+                },
+            )
         )
-        eip_writes = self.client._decode_compact_trace_result(eip_raw).writes
+        eip_writes = eip.writes
         delegated_write = next(
             write
             for write in eip_writes
@@ -223,23 +348,25 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
             + call_bytecode(PRECOMPILE)
             + "50600160005500"
         )
-        empty_raw = await self.trace_call(empty_and_precompile)
-        self.client._decode_compact_trace_result(empty_raw)
+        empty_raw, _empty, _empty_prestate = (
+            await self.trace_call_differential(empty_and_precompile)
+        )
         self.assertEqual(empty_raw["hookEnters"], 2)
         self.assertEqual(empty_raw["hookExits"], 2)
         self.assertEqual([frame["id"] for frame in empty_raw["frames"]], [0])
 
         selfdestruct_harness = call_bytecode(TARGET) + "60015500"
-        selfdestruct_raw = await self.trace_call(
-            selfdestruct_harness,
-            overrides={
-                TARGET: {
-                    "balance": "0x1",
-                    "code": "0x73" + BENEFICIARY[2:] + "ff",
-                }
-            },
+        selfdestruct_raw, _selfdestruct, _selfdestruct_prestate = (
+            await self.trace_call_differential(
+                selfdestruct_harness,
+                overrides={
+                    TARGET: {
+                        "balance": "0x1",
+                        "code": "0x73" + BENEFICIARY[2:] + "ff",
+                    }
+                },
+            )
         )
-        self.client._decode_compact_trace_result(selfdestruct_raw)
         self.assertEqual(selfdestruct_raw["hookEnters"], 2)
         self.assertEqual(selfdestruct_raw["hookExits"], 2)
         self.assertEqual(
@@ -296,40 +423,72 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(callback_result["fatal"], "tracer:exception")
 
-    async def test_observation_overflow_and_failures_preserve_writes(self):
+    async def test_observation_overflow_and_lazy_materialization(self):
         bounded_client = TraceRPCClient(
             self.provider,
             Settings(MAX_PRESTATE_STORAGE_ENTRIES=1),
         )
-        bounded_raw = await self.trace_call(
-            "60005450600160015500",
-            tracer_source=bounded_client._compact_storage_tracer_source(),
+        _bounded_raw, bounded, _bounded_prestate = (
+            await self.trace_call_differential(
+                "6001600055600260015500",
+                client=bounded_client,
+            )
         )
-        bounded = bounded_client._decode_compact_trace_result(bounded_raw)
-        self.assertEqual(len(bounded.writes), 1)
+        self.assertEqual(len(bounded.writes), 2)
         self.assertFalse(bounded.observed_storage_complete)
         self.assertEqual(
             set(bounded.observed_storage[ROOT]),
-            {"0x" + "0" * 63 + "1"},
+            {"0x" + "0" * 64},
         )
 
         source = self.client._compact_storage_tracer_source()
         failing_source = source.replace("db.getState(", "db.getStateFailure(")
         self.assertNotEqual(source, failing_source)
-        failed_raw = await self.trace_call(
-            "600160005500",
-            tracer_source=failing_source,
+        _failed_raw, failed, full_prestate = (
+            await self.trace_call_differential(
+                "60005400",
+                tracer_source=failing_source,
+            )
         )
-        failed = self.client._decode_compact_trace_result(failed_raw)
-        self.assertEqual(len(failed.writes), 1)
-        self.assertFalse(failed.observed_storage_complete)
-        self.assertIsNone(
-            failed.observed_storage[ROOT]["0x" + "0" * 64]
+        self.assertEqual(failed.writes, [])
+        self.assertTrue(failed.observed_storage_complete)
+        self.assertEqual(failed.observed_storage, {})
+        self.assertIn(ROOT, full_prestate)
+
+    async def test_transient_and_read_only_execution_skip_observations(self):
+        _transient_raw, transient, _transient_prestate = (
+            await self.trace_call_differential("600160005d00")
         )
+        self.assertEqual(len(transient.writes), 1)
+        self.assertEqual(transient.writes[0]["namespace"], "transient")
+        self.assertEqual(transient.observed_storage, {})
+
+        _read_raw, read_only, full_prestate = (
+            await self.trace_call_differential("60005400")
+        )
+        self.assertEqual(read_only.writes, [])
+        self.assertEqual(read_only.observed_storage, {})
+        self.assertIn(ROOT, full_prestate)
 
     async def test_sloads_and_repeated_writes_replay_immediate_before_values(self):
-        raw = await self.trace_call("600154506001600055600260005500")
-        evidence = self.client._decode_compact_trace_result(raw)
+        _cycle_raw, cycle, _cycle_prestate = (
+            await self.trace_call_differential(
+                "60006000556001600055600060005500"
+            )
+        )
+        self.assertEqual(len(cycle.writes), 3)
+        self.assertEqual(
+            [write["value"] for write in cycle.writes],
+            [
+                "0x" + "0" * 64,
+                "0x" + "0" * 63 + "1",
+                "0x" + "0" * 64,
+            ],
+        )
+
+        _raw, evidence, _prestate = await self.trace_call_differential(
+            "600154506001600055600260005500"
+        )
         slot_zero = "0x" + "0" * 64
         slot_one = "0x" + "0" * 63 + "1"
 
@@ -362,7 +521,11 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
             root_succeeded=True,
             evm_step_count=evidence.evm_step_count,
         )
-        repeated = next(history for history in journal.histories if history.slot == slot_zero)
+        repeated = next(
+            history
+            for history in journal.histories
+            if history.slot == slot_zero
+        )
         self.assertEqual(
             [event.value_before for event in repeated.writes],
             ["0x" + "0" * 64, "0x" + "0" * 63 + "1"],
