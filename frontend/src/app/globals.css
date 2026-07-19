@@ -22,11 +22,11 @@
 
   :root.dark {
     --color-black: 255 255 255;
-    --color-white: 17 17 17;
-    --color-gray-50: 25 25 25;
-    --color-gray-100: 31 31 31;
-    --color-gray-200: 45 45 45;
-    --color-gray-300: 63 63 63;
+    --color-white: 38 38 38;
+    --color-gray-50: 45 45 45;
+    --color-gray-100: 51 51 51;
+    --color-gray-200: 63 63 63;
+    --color-gray-300: 82 82 82;
     --color-gray-400: 139 139 139;
     --color-gray-500: 170 170 170;
     --color-gray-600: 190 190 190;
