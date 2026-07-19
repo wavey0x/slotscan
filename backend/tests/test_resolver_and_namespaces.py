@@ -688,6 +688,16 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
         class Provider:
             async def get_storage_values(self, chain_id, address, slots, block):
                 test.assertEqual(block, 123)
+                test.assertEqual(
+                    slots,
+                    [
+                        EIP1967_IMPL_SLOT,
+                        EIP1822_SLOT,
+                        ZEPPELINOS_IMPL_SLOT,
+                        EIP1967_BEACON_SLOT,
+                    ],
+                )
+                test.assertTrue(all(type(slot) is int for slot in slots))
                 return _storage_values(
                     slots,
                     lambda slot: (

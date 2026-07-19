@@ -30,24 +30,26 @@ from app.utils.vyper import vyper_storage_policy
 logger = logging.getLogger(__name__)
 
 # EIP-1967 Implementation Slot
-EIP1967_IMPL_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
-
-# EIP-1967 Admin Slot
-EIP1967_ADMIN_SLOT = "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103"
+EIP1967_IMPL_SLOT = (
+    0x360894A13BA1A3210667C828492DB98DCA3E2076CC3735A920A3CA505D382BBC
+)
 
 # EIP-1822 UUPS Slot
-EIP1822_SLOT = "0xc5f16f0fcc639fa48a6947836d9850f504798523bf8c9a3a87d5876cf622bcf7"
+EIP1822_SLOT = (
+    0xC5F16F0FCC639FA48A6947836D9850F504798523BF8C9A3A87D5876CF622BCF7
+)
 
 # ZeppelinOS (pre-EIP-1967) Implementation Slot - keccak256("org.zeppelinos.proxy.implementation")
 # Used by USDC and other older OpenZeppelin proxies
-ZEPPELINOS_IMPL_SLOT = "0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3"
-
-# ZeppelinOS Admin Slot - keccak256("org.zeppelinos.proxy.admin")
-ZEPPELINOS_ADMIN_SLOT = "0x10d6a54a4754c8869d6886b5f5d7fbfa5b4522237ea5c60d11bc4e7a1ff9390b"
+ZEPPELINOS_IMPL_SLOT = (
+    0x7050C9E0F4CA769C69BD3A8EF740BC37934F8E2C036E5A723FD8EE048ED3F8C3
+)
 
 # EIP-1967 Beacon Slot - keccak256("eip1967.proxy.beacon") - 1
 # Used by Euler EVK, OpenZeppelin BeaconProxy, and other upgradeable contracts
-EIP1967_BEACON_SLOT = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50"
+EIP1967_BEACON_SLOT = (
+    0xA3F0AD74E5423AEFD80D3EF4346578335A9A72AEAEE59FF6CB3582B35133D50
+)
 
 # Standard beacon implementation() function selector
 BEACON_IMPL_SELECTOR = "0x5c60da1b"
