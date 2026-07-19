@@ -1,5 +1,6 @@
 """RPC client for trace operations."""
 
+from dataclasses import dataclass
 import logging
 import re
 from typing import Any
@@ -11,6 +12,16 @@ from app.models.errors import RPCError, TraceNotAvailableError, TransactionNotFo
 from app.services.web3_provider import Web3Provider
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CompactTraceEvidence:
+    writes: list[dict]
+    sha3_operations: list[dict]
+    observed_storage: dict[str, dict[str, str | None]]
+    observed_storage_complete: bool
+    evm_step_count: int
+    degraded_reason: str | None = None
 
 
 class TraceRPCClient:
@@ -34,6 +45,7 @@ class TraceRPCClient:
         self.max_prestate_storage_entries = (
             settings.max_prestate_storage_entries if settings else 100_000
         )
+        self.max_observed_storage = self.max_prestate_storage_entries
 
     async def get_receipt(self, chain_id: int, tx_hash: str) -> dict:
         """Fetch transaction receipt with error handling."""
@@ -49,17 +61,11 @@ class TraceRPCClient:
             raise TransactionNotFoundError(tx_hash)
         return receipt
 
-    async def execute_prestate_trace(
-        self,
-        chain_id: int,
-        tx_hash: str,
-        *,
-        diff_mode: bool = True,
-    ) -> dict:
-        """Execute debug_traceTransaction with prestateTracer."""
+    async def execute_prestate_diff(self, chain_id: int, tx_hash: str) -> dict:
+        """Execute debug_traceTransaction with the diff-mode prestate tracer."""
         tracer_config = {
             "tracer": "prestateTracer",
-            "tracerConfig": {"diffMode": diff_mode},
+            "tracerConfig": {"diffMode": True},
         }
 
         try:
@@ -96,19 +102,18 @@ class TraceRPCClient:
         self._validate_prestate_size(trace)
         return trace
 
-    async def execute_structlogs_trace(
+    async def execute_compact_trace(
         self,
         chain_id: int,
         tx_hash: str,
-    ) -> tuple[list[dict], list[dict], int, str | None]:
+    ) -> CompactTraceEvidence:
         """Extract compact write and SHA3 evidence with the Reth JS tracer.
 
         Internal frame identity comes exclusively from ``enter``/``exit``
         hooks. Malformed or partial evidence fails closed; raw struct-log
         reconstruction is deliberately unsupported.
 
-        Returns writes, SHA3 preimages, step count, and an optional stable
-        degradation reason.
+        Returns one bounded evidence object with an optional degradation reason.
         """
         try:
             compact = await self._execute_compact_storage_trace(chain_id, tx_hash)
@@ -118,27 +123,39 @@ class TraceRPCClient:
                 tx_hash,
                 exc.reason,
             )
-            return [], [], 0, "trace_limit"
+            return CompactTraceEvidence(
+                writes=[],
+                sha3_operations=[],
+                observed_storage={},
+                observed_storage_complete=False,
+                evm_step_count=0,
+                degraded_reason="trace_limit",
+            )
         if compact is not None:
-            writes, sha3s, step_count = compact
-            return writes, sha3s, step_count, None
+            return compact
         logger.warning(
             "Compact storage tracer unavailable for %s; raw structLogs are disabled",
             tx_hash,
         )
-        return [], [], 0, "tracer_unavailable"
+        return CompactTraceEvidence(
+            writes=[],
+            sha3_operations=[],
+            observed_storage={},
+            observed_storage_complete=False,
+            evm_step_count=0,
+            degraded_reason="tracer_unavailable",
+        )
 
     async def _execute_compact_storage_trace(
         self,
         chain_id: int,
         tx_hash: str,
-    ) -> tuple[list[dict], list[dict], int] | None:
+    ) -> CompactTraceEvidence | None:
         """Run a compact node-side forensic tracer before raw struct logs.
 
         Full opcode traces can exceed provider response limits. This tracer
-        returns only SSTORE/TSTORE and SHA3 evidence while retaining storage/
-        code attribution and frame outcomes. Pre-write values are recovered by
-        the extractor's full-prestate replay.
+        returns only storage writes, SHA3 evidence, and bounded transaction-start
+        storage observations while retaining code attribution and frame outcomes.
         """
         tracer = self._compact_storage_tracer_source()
         try:
@@ -174,6 +191,7 @@ class TraceRPCClient:
         tracer = r"""
         {
           writes: [], sha3s: [], frames: {}, frameStack: [],
+          observedKeys: [], observedKeySet: {}, observedOverflow: false,
           pendingCompletions: {}, nextFrameId: 1,
           steps: 0, hookEnters: 0, hookExits: 0,
           lastOp: null, lastDepth: null, sha3Bytes: 0, fatal: null,
@@ -193,6 +211,38 @@ class TraceRPCClient:
             var hex = word.toString(16);
             while (hex.length < 40) hex = '0' + hex;
             return '0x' + hex.slice(-40).toLowerCase();
+          },
+          hexBytes: function(hex, size) {
+            var clean = hex.slice(0, 2) === '0x' ? hex.slice(2) : hex;
+            if (clean.length !== size * 2) {
+              throw new Error('slotscan state key has invalid width');
+            }
+            var output = new Uint8Array(size);
+            for (var i = 0; i < size; i++) {
+              output[i] = (
+                parseInt(clean.slice(i * 2, i * 2 + 2), 16) | 0
+              );
+            }
+            return output;
+          },
+          stateWord: function(value) {
+            var hex = toHex(value).toLowerCase();
+            var clean = hex.slice(0, 2) === '0x' ? hex.slice(2) : hex;
+            while (clean.length < 64) clean = '0' + clean;
+            if (clean.length !== 64) {
+              throw new Error('slotscan state value has invalid width');
+            }
+            return '0x' + clean;
+          },
+          rememberSload: function(address, slot) {
+            var key = address + ':' + slot;
+            if (this.observedKeySet[key]) return;
+            if (this.observedKeys.length >= __MAX_OBSERVED_STORAGE__) {
+              this.observedOverflow = true;
+              return;
+            }
+            this.observedKeySet[key] = true;
+            this.observedKeys.push({address: address, slot: slot});
           },
           resolveCode: function(requested, db) {
             var requestedHex = (
@@ -329,7 +379,12 @@ class TraceRPCClient:
             var op = log.op.toString();
             this.lastOp = op;
             this.lastDepth = log.getDepth();
-            if (op === 'SSTORE' || op === 'TSTORE') {
+            if (op === 'SLOAD') {
+              this.rememberSload(
+                frame.storage_address,
+                this.wordHex(log.stack.peek(0))
+              );
+            } else if (op === 'SSTORE' || op === 'TSTORE') {
               if (this.writes.length >= __MAX_WRITES__) {
                 this.reachLimit('limit:writes');
               }
@@ -488,6 +543,8 @@ class TraceRPCClient:
                 writes: [],
                 sha3s: [],
                 frames: [],
+                observedStorage: {},
+                observedStorageComplete: true,
                 lastOp: null,
                 lastDepth: null
               };
@@ -547,6 +604,61 @@ class TraceRPCClient:
                 completion_word: frame.completion_word
               });
             }
+            var observationKeys = [];
+            var observationSet = {};
+            var observedStorage = {};
+            var observedStorageComplete = true;
+            var hasPersistentWrites = false;
+            var addObservation = function(address, slot) {
+              var key = address + ':' + slot;
+              if (observationSet[key]) return;
+              if (observationKeys.length >= __MAX_OBSERVED_STORAGE__) {
+                observedStorageComplete = false;
+                return;
+              }
+              observationSet[key] = true;
+              observationKeys.push({address: address, slot: slot});
+            };
+            for (var writeIndex = 0;
+                 writeIndex < this.writes.length;
+                 writeIndex++) {
+              var write = this.writes[writeIndex];
+              if (write.namespace !== 'persistent') continue;
+              hasPersistentWrites = true;
+              addObservation(
+                this.frames[write.frame_id].storage_address,
+                write.slot
+              );
+            }
+            if (hasPersistentWrites) {
+              if (this.observedOverflow) observedStorageComplete = false;
+              for (var observedIndex = 0;
+                   observedIndex < this.observedKeys.length;
+                   observedIndex++) {
+                var observedKey = this.observedKeys[observedIndex];
+                addObservation(observedKey.address, observedKey.slot);
+              }
+              for (var stateIndex = 0;
+                   stateIndex < observationKeys.length;
+                   stateIndex++) {
+                var stateKey = observationKeys[stateIndex];
+                if (!observedStorage[stateKey.address]) {
+                  observedStorage[stateKey.address] = {};
+                }
+                try {
+                  observedStorage[stateKey.address][stateKey.slot] =
+                    this.stateWord(
+                      db.getState(
+                        this.hexBytes(stateKey.address, 20),
+                        this.hexBytes(stateKey.slot, 32)
+                      )
+                    );
+                } catch (error) {
+                  observedStorage[stateKey.address][stateKey.slot] = null;
+                  observedStorageComplete = false;
+                }
+              }
+            }
             return {
               fatal: null,
               executable: true,
@@ -557,6 +669,8 @@ class TraceRPCClient:
               writes: this.writes,
               sha3s: this.sha3s,
               frames: outputFrames,
+              observedStorage: observedStorage,
+              observedStorageComplete: observedStorageComplete,
               lastOp: this.lastOp,
               lastDepth: this.lastDepth
             };
@@ -568,12 +682,13 @@ class TraceRPCClient:
             .replace("__MAX_WRITES__", str(self.max_writes))
             .replace("__MAX_SHA3S__", str(self.max_sha3_ops))
             .replace("__MAX_SHA3_BYTES__", str(self.max_preimage_bytes))
+            .replace("__MAX_OBSERVED_STORAGE__", str(self.max_observed_storage))
         )
 
     def _decode_compact_trace_result(
         self,
         result: Any,
-    ) -> tuple[list[dict], list[dict], int]:
+    ) -> CompactTraceEvidence:
         if not isinstance(result, dict) or "fatal" not in result:
             raise ValueError("missing compact trace envelope")
 
@@ -605,6 +720,12 @@ class TraceRPCClient:
         writes_value = result.get("writes")
         sha3s_value = result.get("sha3s")
         frames_value = result.get("frames")
+        observed_storage_complete = result.get("observedStorageComplete")
+        if not isinstance(observed_storage_complete, bool):
+            raise ValueError("invalid observed-storage completeness marker")
+        observed_storage = self._validate_observed_storage(
+            result.get("observedStorage")
+        )
         if not all(
             isinstance(value, list)
             for value in (frame_stack, writes_value, sha3s_value, frames_value)
@@ -619,9 +740,17 @@ class TraceRPCClient:
                 or writes_value
                 or sha3s_value
                 or frames_value
+                or observed_storage
+                or not observed_storage_complete
             ):
                 raise ValueError("no-op trace contains executable evidence")
-            return [], [], 0
+            return CompactTraceEvidence(
+                writes=[],
+                sha3_operations=[],
+                observed_storage={},
+                observed_storage_complete=True,
+                evm_step_count=0,
+            )
         if frame_stack != [0]:
             raise ValueError("final frame stack is not root-only")
         if step_count == 0:
@@ -639,6 +768,27 @@ class TraceRPCClient:
         )
         sha3s = self._validate_compact_sha3s(sha3s_value)
         self._validate_reduced_frame_graph(frames, writes)
+        persistent_write_keys = {
+            (write["address"], write["slot"])
+            for write in writes
+            if write["namespace"] == "persistent"
+        }
+        observed_keys = {
+            (address, slot)
+            for address, storage in observed_storage.items()
+            for slot in storage
+        }
+        if observed_storage_complete:
+            if any(
+                value is None
+                for storage in observed_storage.values()
+                for value in storage.values()
+            ):
+                raise ValueError("complete observed storage contains null values")
+            if not persistent_write_keys.issubset(observed_keys):
+                raise ValueError(
+                    "complete observed storage omitted a persistent write key"
+                )
 
         logger.info(
             "Compact storage trace: steps=%s, writes=%s, sha3s=%s, last=%s@%s",
@@ -648,7 +798,66 @@ class TraceRPCClient:
             result.get("lastOp"),
             result.get("lastDepth"),
         )
-        return writes, sha3s, step_count
+        return CompactTraceEvidence(
+            writes=writes,
+            sha3_operations=sha3s,
+            observed_storage=observed_storage,
+            observed_storage_complete=observed_storage_complete,
+            evm_step_count=step_count,
+        )
+
+    def _validate_observed_storage(
+        self,
+        observed_value: Any,
+    ) -> dict[str, dict[str, str | None]]:
+        if not isinstance(observed_value, dict):
+            raise ValueError("observed storage must be an object")
+        observed: dict[str, dict[str, str | None]] = {}
+        count = 0
+        for raw_address, raw_storage in observed_value.items():
+            if len(observed) >= self.max_prestate_accounts:
+                raise TraceNotAvailableError(
+                    "Trace exceeds the configured observed-account limit"
+                )
+            address = self._strict_address(
+                raw_address,
+                "observed_storage.address",
+            )
+            if address in observed:
+                raise ValueError("duplicate observed-storage address")
+            if not isinstance(raw_storage, dict):
+                raise ValueError("observed account storage must be an object")
+            if not raw_storage:
+                raise ValueError("observed account storage must not be empty")
+            storage: dict[str, str | None] = {}
+            for raw_slot, raw_value in raw_storage.items():
+                if not isinstance(raw_slot, str) or not re.fullmatch(
+                    r"0x[0-9a-fA-F]{64}",
+                    raw_slot,
+                ):
+                    raise ValueError("observed storage slot must be exactly 32 bytes")
+                slot = raw_slot.lower()
+                if slot in storage:
+                    raise ValueError("duplicate observed-storage slot")
+                if raw_value is None:
+                    value = None
+                elif isinstance(raw_value, str) and re.fullmatch(
+                    r"0x[0-9a-fA-F]{64}",
+                    raw_value,
+                ):
+                    value = raw_value.lower()
+                else:
+                    raise ValueError(
+                        "observed storage value must be null or exactly 32 bytes"
+                    )
+                storage[slot] = value
+                count += 1
+                if count > self.max_observed_storage:
+                    raise TraceNotAvailableError(
+                        "Trace exceeds the configured observation limit"
+                    )
+            observed[address] = storage
+        return observed
 
     def _validate_compact_frames(
         self,

@@ -1,25 +1,32 @@
-import json
 import unittest
-from unittest.mock import AsyncMock
-
-from web3 import AsyncHTTPProvider, AsyncWeb3
 
 from app.config import Settings
 from app.services.web3_provider import BlockRef, StorageAttempt, Web3Provider
 
 
 BLOCK_HASH = "0x" + "ab" * 32
+ADDRESS = "0x" + "11" * 20
 
 
-class _FakeBatch:
+class _FakeProvider:
     def __init__(self):
-        self.requests = []
+        self.calls = []
+        self.response_override = None
 
-    def add(self, request):
-        self.requests.append(request)
-
-    async def async_execute(self):
-        return [await request for request in self.requests]
+    async def make_request(self, method, params):
+        self.calls.append((method, params))
+        if self.response_override is not None:
+            return self.response_override
+        address, slot_words = next(iter(params[0].items()))
+        return {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                address.lower(): [
+                    f"0x{int(slot, 16):064x}" for slot in slot_words
+                ]
+            },
+        }
 
 
 class _FakeEth:
@@ -34,10 +41,6 @@ class _FakeEth:
         self.identifiers.append(("code", block_identifier))
         return b"\x60\x00"
 
-    async def get_storage_at(self, address, slot, block_identifier):
-        self.identifiers.append(("storage", block_identifier))
-        return int(slot).to_bytes(32, "big")
-
     async def call(self, transaction, block_identifier):
         self.identifiers.append(("call", block_identifier))
         return bytes(32)
@@ -46,74 +49,163 @@ class _FakeEth:
 class _FakeWeb3:
     def __init__(self):
         self.eth = _FakeEth()
-
-    def batch_requests(self):
-        return _FakeBatch()
+        self.provider = _FakeProvider()
 
 
 class StorageAttemptTests(unittest.IsolatedAsyncioTestCase):
-    async def test_http_provider_restores_reordered_batch_responses_by_id(self):
-        provider = AsyncHTTPProvider("http://rpc.invalid")
-
-        async def reversed_transport(uri, request_data, **kwargs):
-            requests = json.loads(request_data)
-            responses = [
-                {
-                    "jsonrpc": "2.0",
-                    "id": request["id"],
-                    "result": f"0x{int(request['params'][1], 16):064x}",
-                }
-                for request in reversed(requests)
-            ]
-            return json.dumps(responses).encode()
-
-        provider._request_session_manager.async_make_post_request = AsyncMock(
-            side_effect=reversed_transport
-        )
-        web3 = AsyncWeb3(provider)
-        web3.middleware_onion.remove("ens_name_to_address")
-        attempt = StorageAttempt(
-            web3=web3,
+    def make_attempt(self, web3=None):
+        return StorageAttempt(
+            web3=web3 or _FakeWeb3(),
             block_ref=BlockRef(1, 123, BLOCK_HASH),
             timeout_seconds=2,
         )
 
-        values = await attempt.batch_get_storage_at(
+    async def test_native_read_deduplicates_and_preserves_slot_order(self):
+        attempt = self.make_attempt()
+
+        values = await attempt.get_storage_values(
             1,
-            "0x" + "11" * 20,
-            [2, 1],
+            ADDRESS,
+            [2, 1, 2],
             123,
         )
 
         self.assertEqual(values, {2: f"0x{2:064x}", 1: f"0x{1:064x}"})
-
-    async def test_every_state_call_uses_the_exact_eip1898_identifier(self):
-        web3 = _FakeWeb3()
-        attempt = StorageAttempt(
-            web3=web3,
-            block_ref=BlockRef(1, 123, BLOCK_HASH),
-            timeout_seconds=2,
+        method, params = attempt.web3.provider.calls[0]
+        self.assertEqual(method, "eth_getStorageValues")
+        self.assertEqual(
+            list(next(iter(params[0].values()))),
+            [f"0x{2:064x}", f"0x{1:064x}"],
+        )
+        self.assertEqual(
+            params[1],
+            {"blockHash": BLOCK_HASH, "requireCanonical": True},
         )
 
-        await attempt.get_code(1, "0x" + "11" * 20, 123)
-        await attempt.get_storage_at(1, "0x" + "11" * 20, 0, 123)
-        await attempt.eth_call(1, {"to": "0x" + "11" * 20}, 123)
-        values = await attempt.batch_get_storage_at(
+    async def test_empty_read_performs_no_rpc(self):
+        web3 = _FakeWeb3()
+
+        values = await self.make_attempt(web3).get_storage_values(
             1,
-            "0x" + "11" * 20,
-            [2, 1],
+            ADDRESS,
+            [],
             123,
         )
 
-        expected = {
-            "blockHash": BLOCK_HASH,
-            "requireCanonical": True,
-        }
-        self.assertTrue(web3.eth.identifiers)
-        self.assertTrue(
-            all(identifier == expected for _, identifier in web3.eth.identifiers)
+        self.assertEqual(values, {})
+        self.assertEqual(web3.provider.calls, [])
+
+    async def test_native_read_chunks_at_reth_limit_with_same_block(self):
+        web3 = _FakeWeb3()
+        slots = list(range(1025))
+
+        values = await self.make_attempt(web3).get_storage_values(
+            1,
+            ADDRESS,
+            slots,
+            123,
         )
-        self.assertEqual(list(values), [2, 1])
+
+        self.assertEqual(len(values), 1025)
+        self.assertEqual(
+            [len(next(iter(params[0].values()))) for _, params in web3.provider.calls],
+            [1024, 1],
+        )
+        self.assertEqual(
+            {str(params[1]) for _, params in web3.provider.calls},
+            {str({"blockHash": BLOCK_HASH, "requireCanonical": True})},
+        )
+
+    async def test_general_provider_encodes_integer_block_as_hex(self):
+        provider = Web3Provider(Settings())
+        web3 = _FakeWeb3()
+        provider._instances[1] = web3
+
+        values = await provider.get_storage_values(1, ADDRESS, [0], 123)
+
+        self.assertEqual(values, {0: "0x" + "00" * 32})
+        self.assertEqual(web3.provider.calls[0][1][1], "0x7b")
+
+    async def test_general_provider_preserves_eip1898_object(self):
+        provider = Web3Provider(Settings())
+        web3 = _FakeWeb3()
+        provider._instances[1] = web3
+        block = {"blockNumber": "0x7b"}
+
+        await provider.get_storage_values(1, ADDRESS, [0], block)
+
+        self.assertIs(web3.provider.calls[0][1][1], block)
+
+    async def test_general_provider_forwards_allowed_tags_unchanged(self):
+        provider = Web3Provider(Settings())
+        web3 = _FakeWeb3()
+        provider._instances[1] = web3
+
+        for tag in ("earliest", "finalized", "latest", "pending", "safe"):
+            await provider.get_storage_values(1, ADDRESS, [0], tag)
+
+        self.assertEqual(
+            [params[1] for _, params in web3.provider.calls],
+            ["earliest", "finalized", "latest", "pending", "safe"],
+        )
+
+    async def test_general_provider_rejects_stringified_numbers_and_tags(self):
+        provider = Web3Provider(Settings())
+        for block in ("123", "0x7b", "LATEST"):
+            with self.subTest(block=block):
+                web3 = _FakeWeb3()
+                provider._instances[1] = web3
+                with self.assertRaises(RuntimeError):
+                    await provider.get_storage_values(1, ADDRESS, [0], block)
+                self.assertEqual(web3.provider.calls, [])
+
+    async def test_every_other_state_call_uses_exact_eip1898_identifier(self):
+        web3 = _FakeWeb3()
+        attempt = self.make_attempt(web3)
+
+        await attempt.get_code(1, ADDRESS, 123)
+        await attempt.eth_call(1, {"to": ADDRESS}, 123)
+
+        expected = {"blockHash": BLOCK_HASH, "requireCanonical": True}
+        self.assertEqual(
+            web3.eth.identifiers,
+            [("code", expected), ("call", expected)],
+        )
+
+    async def test_rejects_invalid_slots_before_rpc(self):
+        for slot in (-1, 2**256, True, "1"):
+            with self.subTest(slot=slot):
+                web3 = _FakeWeb3()
+                with self.assertRaises(ValueError):
+                    await self.make_attempt(web3).get_storage_values(
+                        1,
+                        ADDRESS,
+                        [slot],
+                        123,
+                    )
+                self.assertEqual(web3.provider.calls, [])
+
+    async def test_rejects_rpc_errors_and_malformed_results(self):
+        cases = (
+            {"error": {"code": -32602, "message": "private endpoint detail"}},
+            {"result": []},
+            {"result": {}},
+            {"result": {ADDRESS: [], "0x" + "22" * 20: []}},
+            {"result": {ADDRESS: []}},
+            {"result": {ADDRESS: ["0x01"]}},
+            {"result": {ADDRESS: ["0x" + "gg" * 32]}},
+        )
+        for response in cases:
+            with self.subTest(response=response):
+                web3 = _FakeWeb3()
+                web3.provider.response_override = response
+                with self.assertRaises(RuntimeError):
+                    await self.make_attempt(web3).get_storage_values(
+                        1,
+                        ADDRESS,
+                        [0],
+                        123,
+                    )
 
     async def test_exact_number_hash_pair_is_validated(self):
         provider = Web3Provider(Settings())
@@ -131,16 +223,12 @@ class StorageAttemptTests(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_attempt_rejects_a_different_block_or_chain(self):
-        attempt = StorageAttempt(
-            web3=_FakeWeb3(),
-            block_ref=BlockRef(1, 123, BLOCK_HASH),
-            timeout_seconds=2,
-        )
+        attempt = self.make_attempt()
 
         with self.assertRaises(ValueError):
-            await attempt.get_code(2, "0x" + "11" * 20, 123)
+            await attempt.get_code(2, ADDRESS, 123)
         with self.assertRaises(ValueError):
-            await attempt.get_code(1, "0x" + "11" * 20, 124)
+            await attempt.get_code(1, ADDRESS, 124)
 
 
 if __name__ == "__main__":

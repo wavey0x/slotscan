@@ -963,41 +963,24 @@ class ContractResolver:
             bytecode,
             GNOSIS_SAFE_MASTER_COPY_SELECTOR,
         )
-        evidence_reads = [
-            self.web3_provider.get_storage_at(
-                chain_id,
-                proxy_address,
-                EIP1967_IMPL_SLOT,
-                block_id,
-            ),
-            self.web3_provider.get_storage_at(
-                chain_id,
-                proxy_address,
-                EIP1822_SLOT,
-                block_id,
-            ),
-            self.web3_provider.get_storage_at(
-                chain_id,
-                proxy_address,
-                ZEPPELINOS_IMPL_SLOT,
-                block_id,
-            ),
-            self.web3_provider.get_storage_at(
-                chain_id,
-                proxy_address,
-                EIP1967_BEACON_SLOT,
-                block_id,
-            ),
+        evidence_slots = [
+            EIP1967_IMPL_SLOT,
+            EIP1822_SLOT,
+            ZEPPELINOS_IMPL_SLOT,
+            EIP1967_BEACON_SLOT,
         ]
         if safe_candidate:
-            evidence_reads.extend(
-                (
-                    self.web3_provider.get_storage_at(
-                        chain_id,
-                        proxy_address,
-                        0,
-                        block_id,
-                    ),
+            evidence_slots.append(0)
+        storage_read = self.web3_provider.get_storage_values(
+            chain_id,
+            proxy_address,
+            evidence_slots,
+            block_id,
+        )
+        try:
+            if safe_candidate:
+                storage_values, safe_getter_implementation = await asyncio.gather(
+                    storage_read,
                     self._call_address_getter(
                         chain_id,
                         proxy_address,
@@ -1005,27 +988,38 @@ class ContractResolver:
                         block_id,
                     ),
                 )
-            )
-        try:
-            slot_values = await asyncio.gather(*evidence_reads)
-            impl_value, uups_value, zos_value, beacon_value = slot_values[:4]
+            else:
+                storage_values = await storage_read
+                safe_getter_implementation = None
         except Exception as exc:
-            raise RPCError("eth_getStorageAt", str(exc)) from exc
+            raise RPCError("eth_getStorageValues", str(exc)) from exc
+
+        try:
+            slot_values = {
+                slot: bytes.fromhex(value[2:])
+                for slot, value in storage_values.items()
+            }
+        except (AttributeError, ValueError) as exc:
+            raise RPCError(
+                "eth_getStorageValues",
+                "Storage response contained an invalid hexadecimal word",
+            ) from exc
+        if set(slot_values) != set(evidence_slots):
+            raise RPCError(
+                "eth_getStorageValues",
+                "Storage response omitted proxy evidence",
+            )
 
         safe_slot_implementation = None
-        safe_getter_implementation = None
         if safe_candidate:
-            safe_slot_implementation = self._extract_address(
-                bytes(slot_values[4])
-            )
-            safe_getter_implementation = slot_values[5]
+            safe_slot_implementation = self._extract_address(slot_values[0])
 
-        for proxy_type, slot_value in (
-            ("eip1967", impl_value),
-            ("eip1822", uups_value),
-            ("zeppelinos", zos_value),
+        for proxy_type, slot in (
+            ("eip1967", EIP1967_IMPL_SLOT),
+            ("eip1822", EIP1822_SLOT),
+            ("zeppelinos", ZEPPELINOS_IMPL_SLOT),
         ):
-            implementation = self._extract_address(bytes(slot_value))
+            implementation = self._extract_address(slot_values[slot])
             if implementation and await self._is_valid_proxy_target(
                 chain_id,
                 proxy_address,
@@ -1038,7 +1032,7 @@ class ContractResolver:
                     admin_address=None,
                 )
 
-        beacon_address = self._extract_address(bytes(beacon_value))
+        beacon_address = self._extract_address(slot_values[EIP1967_BEACON_SLOT])
         if beacon_address and await self._is_valid_proxy_target(
             chain_id,
             proxy_address,

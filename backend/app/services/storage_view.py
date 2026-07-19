@@ -349,7 +349,7 @@ class StorageViewService:
         )
         reader = StorageReader(attempt)
         try:
-            word_values = await reader.read_slots_batch(
+            word_values = await reader.read_slots(
                 chain_id,
                 metadata.address,
                 list(plan.words),
@@ -536,7 +536,7 @@ class StorageViewService:
             path = f"{declaration.name}[{index}]"
             if type_info.encoding == "dynamic_array":
                 reader = StorageReader(context.attempt)
-                length_values = await reader.read_slots_batch(
+                length_values = await reader.read_slots(
                     chain_id,
                     checksum_address,
                     [declaration.slot],
@@ -556,7 +556,7 @@ class StorageViewService:
             )
 
         reader = StorageReader(context.attempt)
-        word_values = await reader.read_slots_batch(
+        word_values = await reader.read_slots(
             chain_id,
             checksum_address,
             [slot],

@@ -148,18 +148,26 @@ class VotingRethAttributionRegressionTests(unittest.TestCase):
             "frameStack": [0],
             "writes": [fixture["write"]],
             "sha3s": [fixture["sha3"]],
+            "observedStorage": {
+                fixture["storage_address"]: {
+                    fixture["slot"]: fixture["value_before"]
+                }
+            },
+            "observedStorageComplete": True,
             "frames": fixture["frames"],
             "lastOp": "STOP",
             "lastDepth": 1,
         }
         client = TraceRPCClient(object(), Settings())
 
-        writes, sha3s, step_count = client._decode_compact_trace_result(
+        evidence = client._decode_compact_trace_result(
             compact_result
         )
+        writes = evidence.writes
+        sha3s = evidence.sha3_operations
 
         self.assertEqual(len(fixture["transaction_hash"]), 66)
-        self.assertEqual(step_count, 167759)
+        self.assertEqual(evidence.evm_step_count, 167759)
         self.assertEqual(writes[0]["address"], fixture["storage_address"])
         self.assertEqual(
             writes[0]["code_address"],
@@ -209,7 +217,7 @@ class VotingRethAttributionRegressionTests(unittest.TestCase):
                 "address_attribution_complete": True,
                 "code_attribution_complete": True,
             },
-            trace_step_count=step_count,
+            trace_step_count=evidence.evm_step_count,
         )
         layout = voting_layout()
         service = TransactionAnalysisService(

@@ -6,17 +6,17 @@ from app.services.compiled_layout import compile_layout
 from app.services.storage import StorageReader, plan_compiled_scalar_reads
 
 
-class _FailingBatchProvider:
-    async def batch_get_storage_at(self, *args, **kwargs):
+class _FailingStorageProvider:
+    async def get_storage_values(self, *args, **kwargs):
         raise RuntimeError("boom")
 
 
 class RPCFailureTests(unittest.IsolatedAsyncioTestCase):
-    async def test_batch_failure_is_not_retried_or_replaced_with_zero(self):
-        reader = StorageReader(_FailingBatchProvider())
+    async def test_native_failure_is_not_retried_or_replaced_with_zero(self):
+        reader = StorageReader(_FailingStorageProvider())
 
         with self.assertRaisesRegex(RPCError, "boom"):
-            await reader.read_slots_batch(
+            await reader.read_slots(
                 1,
                 "0x" + "11" * 20,
                 [1, 2],

@@ -74,6 +74,10 @@ def valid_result():
             }
         ],
         "sha3s": [],
+        "observedStorage": {
+            ADDRESS: {"0x" + "0" * 63 + "1": ZERO_WORD}
+        },
+        "observedStorageComplete": True,
         "frames": [
             frame(
                 0,
@@ -116,15 +120,19 @@ class CompactTraceValidatorTests(unittest.TestCase):
         )
 
     def test_valid_delegate_frame_is_flattened_without_reconstructing_it(self):
-        writes, sha3s, step_count = self.decode()
+        evidence = self.decode()
 
-        self.assertEqual(step_count, 10)
-        self.assertEqual(sha3s, [])
-        self.assertEqual(writes[0]["address"], ADDRESS)
-        self.assertEqual(writes[0]["code_address"], CALL_TARGET)
-        self.assertEqual(writes[0]["slot"], "0x" + "0" * 63 + "1")
-        self.assertEqual(writes[0]["value"], "0x" + "0" * 63 + "2")
-        self.assertFalse(writes[0]["frame_reverted"])
+        self.assertEqual(evidence.evm_step_count, 10)
+        self.assertEqual(evidence.sha3_operations, [])
+        self.assertEqual(evidence.writes[0]["address"], ADDRESS)
+        self.assertEqual(evidence.writes[0]["code_address"], CALL_TARGET)
+        self.assertEqual(evidence.writes[0]["slot"], "0x" + "0" * 63 + "1")
+        self.assertEqual(evidence.writes[0]["value"], "0x" + "0" * 63 + "2")
+        self.assertFalse(evidence.writes[0]["frame_reverted"])
+        self.assertEqual(
+            evidence.observed_storage,
+            {ADDRESS: {"0x" + "0" * 63 + "1": ZERO_WORD}},
+        )
 
     def test_caught_child_failure_reverts_only_the_child_write(self):
         result = valid_result()
@@ -137,7 +145,7 @@ class CompactTraceValidatorTests(unittest.TestCase):
             }
         )
 
-        writes, _, _ = self.decode(result)
+        writes = self.decode(result).writes
 
         self.assertTrue(writes[0]["frame_failed"])
         self.assertTrue(writes[0]["frame_reverted"])
@@ -154,7 +162,7 @@ class CompactTraceValidatorTests(unittest.TestCase):
             }
         )
 
-        writes, _, _ = self.decode(result)
+        writes = self.decode(result).writes
 
         self.assertFalse(writes[0]["frame_failed"])
         self.assertTrue(writes[0]["frame_reverted"])
@@ -170,7 +178,7 @@ class CompactTraceValidatorTests(unittest.TestCase):
             }
         )
 
-        writes, _, _ = self.decode(result)
+        writes = self.decode(result).writes
 
         self.assertEqual(writes[0]["code_address"], EIP_TARGET)
         self.assertEqual(writes[0]["code_attribution"], "exact")
@@ -186,7 +194,7 @@ class CompactTraceValidatorTests(unittest.TestCase):
             }
         )
 
-        writes, _, _ = self.decode(result)
+        writes = self.decode(result).writes
 
         self.assertIsNone(writes[0]["code_address"])
         self.assertEqual(writes[0]["code_attribution"], "unknown")
@@ -202,7 +210,7 @@ class CompactTraceValidatorTests(unittest.TestCase):
             }
         ]
 
-        _, sha3s, _ = self.decode(result)
+        sha3s = self.decode(result).sha3_operations
 
         self.assertEqual(sha3s[0]["preimage"], "0x" + "12" * 32)
         self.assertEqual(len(sha3s[0]["hash"]), 64)
@@ -218,9 +226,72 @@ class CompactTraceValidatorTests(unittest.TestCase):
             "writes": [],
             "sha3s": [],
             "frames": [],
+            "observedStorage": {},
+            "observedStorageComplete": True,
         }
 
-        self.assertEqual(self.decode(result), ([], [], 0))
+        evidence = self.decode(result)
+        self.assertEqual(evidence.writes, [])
+        self.assertEqual(evidence.evm_step_count, 0)
+        self.assertTrue(evidence.observed_storage_complete)
+
+    def test_complete_observations_require_every_persistent_write(self):
+        result = valid_result()
+        result["observedStorage"] = {}
+
+        with self.assertRaisesRegex(ValueError, "persistent write key"):
+            self.decode(result)
+
+    def test_incomplete_observations_allow_missing_and_null_values(self):
+        result = valid_result()
+        result["observedStorage"] = {
+            ADDRESS: {"0x" + "0" * 63 + "1": None}
+        }
+        result["observedStorageComplete"] = False
+
+        evidence = self.decode(result)
+
+        self.assertEqual(len(evidence.writes), 1)
+        self.assertIsNone(
+            evidence.observed_storage[ADDRESS]["0x" + "0" * 63 + "1"]
+        )
+        self.assertIsNone(evidence.degraded_reason)
+
+    def test_observed_storage_widths_and_completeness_are_strict(self):
+        cases = []
+        short_slot = valid_result()
+        short_slot["observedStorage"] = {ADDRESS: {"0x1": ZERO_WORD}}
+        cases.append(short_slot)
+        short_value = valid_result()
+        short_value["observedStorage"] = {
+            ADDRESS: {"0x" + "0" * 63 + "1": "0x0"}
+        }
+        cases.append(short_value)
+        null_complete = valid_result()
+        null_complete["observedStorage"] = {
+            ADDRESS: {"0x" + "0" * 63 + "1": None}
+        }
+        cases.append(null_complete)
+        missing_flag = valid_result()
+        del missing_flag["observedStorageComplete"]
+        cases.append(missing_flag)
+        empty_account = valid_result()
+        empty_account["observedStorage"][CALL_TARGET] = {}
+        cases.append(empty_account)
+        duplicate_address = valid_result()
+        duplicate_address["observedStorage"].update(
+            {
+                CALL_TARGET: {"0x" + "0" * 64: ZERO_WORD},
+                CALL_TARGET.upper().replace("0X", "0x"): {
+                    "0x" + "0" * 63 + "2": ZERO_WORD
+                },
+            }
+        )
+        cases.append(duplicate_address)
+
+        for result in cases:
+            with self.subTest(result=result), self.assertRaises(ValueError):
+                self.decode(result)
 
     def test_malformed_evidence_is_rejected_before_normalization(self):
         cases = {}
@@ -321,16 +392,20 @@ class CompactTraceRoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_callback_failure_degrades_without_caching_evidence(self):
         client = TraceRPCClient(_ResultProvider({"fatal": "tracer:exception"}))
 
-        result = await client.execute_structlogs_trace(1, "0x" + "ab" * 32)
+        result = await client.execute_compact_trace(1, "0x" + "ab" * 32)
 
-        self.assertEqual(result, ([], [], 0, "tracer_unavailable"))
+        self.assertEqual(result.writes, [])
+        self.assertFalse(result.observed_storage_complete)
+        self.assertEqual(result.degraded_reason, "tracer_unavailable")
 
     async def test_limit_failure_uses_the_stable_trace_limit_reason(self):
         client = TraceRPCClient(_ResultProvider({"fatal": "limit:steps"}))
 
-        result = await client.execute_structlogs_trace(1, "0x" + "ab" * 32)
+        result = await client.execute_compact_trace(1, "0x" + "ab" * 32)
 
-        self.assertEqual(result, ([], [], 0, "trace_limit"))
+        self.assertEqual(result.writes, [])
+        self.assertFalse(result.observed_storage_complete)
+        self.assertEqual(result.degraded_reason, "trace_limit")
 
 
 if __name__ == "__main__":

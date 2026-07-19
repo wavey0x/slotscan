@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import dataclass
 import logging
+import re
 from typing import Any
 
 from web3 import AsyncWeb3, AsyncHTTPProvider, Web3
@@ -12,6 +13,166 @@ from app.config import Settings
 from app.models.errors import RPCError
 
 logger = logging.getLogger(__name__)
+
+RETH_STORAGE_VALUES_LIMIT = 1024
+STORAGE_BLOCK_TAGS = frozenset(
+    {"earliest", "finalized", "latest", "pending", "safe"}
+)
+
+
+def _storage_block_parameter(block: int | str | dict[str, Any]) -> str | dict[str, Any]:
+    """Encode one state selector for a raw JSON-RPC request."""
+    if isinstance(block, bool):
+        raise ValueError("Block selector must be an integer, tag, or EIP-1898 object")
+    if isinstance(block, int):
+        if block < 0:
+            raise ValueError("Block selector cannot be negative")
+        return hex(block)
+    if isinstance(block, str):
+        if block in STORAGE_BLOCK_TAGS:
+            return block
+        raise ValueError(f"Invalid block tag: {block}")
+    if not isinstance(block, dict):
+        raise ValueError("Invalid EIP-1898 block selector")
+    if set(block) in ({"blockHash"}, {"blockHash", "requireCanonical"}):
+        block_hash = block["blockHash"]
+        if (
+            not isinstance(block_hash, str)
+            or not block_hash.startswith("0x")
+            or len(block_hash) != 66
+        ):
+            raise ValueError("Invalid EIP-1898 block hash")
+        try:
+            bytes.fromhex(block_hash[2:])
+        except ValueError as exc:
+            raise ValueError("Invalid EIP-1898 block hash") from exc
+        if "requireCanonical" in block and not isinstance(
+            block["requireCanonical"],
+            bool,
+        ):
+            raise ValueError("Invalid EIP-1898 canonical requirement")
+        return block
+    if set(block) == {"blockNumber"}:
+        block_number = block["blockNumber"]
+        if not isinstance(block_number, str) or not re.fullmatch(
+            r"0x(?:0|[1-9a-fA-F][0-9a-fA-F]*)",
+            block_number,
+        ):
+            raise ValueError("Invalid EIP-1898 block number")
+        return block
+    raise ValueError("Invalid EIP-1898 block selector")
+
+
+def _storage_slots(slots: list[int]) -> list[int]:
+    """Validate and first-seen deduplicate native storage slots."""
+    unique: list[int] = []
+    seen: set[int] = set()
+    for slot in slots:
+        if isinstance(slot, bool) or not isinstance(slot, int):
+            raise ValueError("Storage slots must be integers")
+        if slot < 0 or slot >= 2**256:
+            raise ValueError("Storage slot is outside the uint256 range")
+        if slot not in seen:
+            unique.append(slot)
+            seen.add(slot)
+    return unique
+
+
+def _decode_storage_values_response(
+    response: object,
+    address: str,
+    expected_count: int,
+) -> list[str]:
+    """Decode Reth's single-address eth_getStorageValues response strictly."""
+    if not isinstance(response, dict):
+        raise RPCError("eth_getStorageValues", "Invalid JSON-RPC response envelope")
+    if "error" in response:
+        error = response["error"]
+        code = error.get("code") if isinstance(error, dict) else None
+        detail = f"RPC returned error code {code}" if code is not None else "RPC error"
+        raise RPCError("eth_getStorageValues", detail)
+    result = response.get("result")
+    if not isinstance(result, dict):
+        raise RPCError("eth_getStorageValues", "Result must be an object")
+    matching = [
+        value
+        for key, value in result.items()
+        if isinstance(key, str) and key.lower() == address.lower()
+    ]
+    if len(result) != 1 or len(matching) != 1:
+        raise RPCError(
+            "eth_getStorageValues",
+            "Result did not contain exactly the requested address",
+        )
+    values = matching[0]
+    if not isinstance(values, list) or len(values) != expected_count:
+        raise RPCError(
+            "eth_getStorageValues",
+            "Storage vector cardinality did not match the request",
+        )
+    decoded: list[str] = []
+    for value in values:
+        if (
+            not isinstance(value, str)
+            or not value.startswith("0x")
+            or len(value) != 66
+        ):
+            raise RPCError(
+                "eth_getStorageValues",
+                "Storage vector contained an invalid word",
+            )
+        try:
+            raw = bytes.fromhex(value[2:])
+        except ValueError as exc:
+            raise RPCError(
+                "eth_getStorageValues",
+                "Storage vector contained an invalid hexadecimal word",
+            ) from exc
+        if len(raw) != 32:
+            raise RPCError(
+                "eth_getStorageValues",
+                "Storage vector contained a non-32-byte word",
+            )
+        decoded.append("0x" + raw.hex())
+    return decoded
+
+
+async def _request_storage_values(
+    web3: AsyncWeb3,
+    address: str,
+    unique_slots: list[int],
+    block: int | str | dict[str, Any],
+) -> dict[int, str]:
+    """Request validated, first-seen unique slots from Reth."""
+    checksum_address = Web3.to_checksum_address(address)
+    block_parameter = _storage_block_parameter(block)
+    results: dict[int, str] = {}
+    for start in range(0, len(unique_slots), RETH_STORAGE_VALUES_LIMIT):
+        chunk = unique_slots[start : start + RETH_STORAGE_VALUES_LIMIT]
+        response = await web3.provider.make_request(
+            "eth_getStorageValues",
+            [
+                {
+                    checksum_address: [
+                        "0x" + slot.to_bytes(32, byteorder="big").hex()
+                        for slot in chunk
+                    ]
+                },
+                block_parameter,
+            ],
+        )
+        values = _decode_storage_values_response(
+            response,
+            checksum_address,
+            len(chunk),
+        )
+        results.update(zip(chunk, values, strict=True))
+    if set(results) != set(unique_slots) or len(results) != len(unique_slots):
+        raise RPCError(
+            "eth_getStorageValues",
+            "Result omitted one or more requested storage slots",
+        )
+    return results
 
 
 @dataclass(frozen=True)
@@ -79,24 +240,6 @@ class StorageAttempt:
             ),
         )
 
-    async def get_storage_at(
-        self,
-        chain_id: int,
-        address: str,
-        slot: int | str,
-        block: int | str,
-    ):
-        self._validate_chain(chain_id)
-        self._validate_block(block)
-        return await self._wait(
-            "eth_getStorageAt",
-            self.web3.eth.get_storage_at(
-                address,
-                slot,
-                block_identifier=self.block_identifier,
-            ),
-        )
-
     async def eth_call(
         self,
         chain_id: int,
@@ -117,54 +260,28 @@ class StorageAttempt:
         self._validate_chain(chain_id)
         return self.block_ref.number
 
-    async def batch_get_storage_at(
+    async def get_storage_values(
         self,
         chain_id: int,
         address: str,
         slots: list[int],
         block: int | str,
-        batch_size: int = 100,
     ) -> dict[int, str]:
-        """Read strict, complete batches through this attempt's RPC client."""
+        """Read strict, complete vectors through this attempt's RPC client."""
         self._validate_chain(chain_id)
         self._validate_block(block)
-        if not slots:
+        unique_slots = _storage_slots(slots)
+        if not unique_slots:
             return {}
-        address = Web3.to_checksum_address(address)
-        results: dict[int, str] = {}
-
-        for start in range(0, len(slots), batch_size):
-            batch_slots = slots[start : start + batch_size]
-            batch = self.web3.batch_requests()
-            for slot in batch_slots:
-                batch.add(
-                    self.web3.eth.get_storage_at(
-                        address,
-                        slot,
-                        block_identifier=self.block_identifier,
-                    )
-                )
-            responses = await self._wait(
-                "eth_getStorageAt batch",
-                batch.async_execute(),
-            )
-            if len(responses) != len(batch_slots):
-                raise RuntimeError(
-                    "Batch response cardinality did not match the request"
-                )
-            for slot, response in zip(batch_slots, responses, strict=True):
-                if isinstance(response, Exception):
-                    raise RuntimeError(f"Slot {slot}: {response}")
-                if not isinstance(response, bytes) or len(response) != 32:
-                    length = len(response) if isinstance(response, bytes) else "unknown"
-                    raise RuntimeError(
-                        f"Slot {slot}: expected 32 bytes, received {length}"
-                    )
-                results[slot] = "0x" + response.hex()
-
-        if len(results) != len(slots):
-            raise RuntimeError("Batch response omitted one or more requested slots")
-        return results
+        return await self._wait(
+            "eth_getStorageValues",
+            _request_storage_values(
+                self.web3,
+                address,
+                unique_slots,
+                self.block_identifier,
+            ),
+        )
 
 
 class Web3Provider:
@@ -290,15 +407,6 @@ class Web3Provider:
             lambda web3: web3.eth.get_code(address, block_identifier=block),
         )
 
-    async def get_storage_at(
-        self, chain_id: int, address: str, slot: int | str, block: int | str
-    ):
-        return await self._call(
-            chain_id,
-            "eth_getStorageAt",
-            lambda web3: web3.eth.get_storage_at(address, slot, block_identifier=block),
-        )
-
     async def get_block_number(self, chain_id: int) -> int:
         return await self._call(
             chain_id,
@@ -319,80 +427,23 @@ class Web3Provider:
             await web3.provider.disconnect()
         self._instances.clear()
 
-    async def batch_get_storage_at(
+    async def get_storage_values(
         self,
         chain_id: int,
         address: str,
         slots: list[int],
-        block: int | str,
-        batch_size: int = 100,
+        block: int | str | dict[str, Any],
     ) -> dict[int, str]:
-        """
-        Batch multiple eth_getStorageAt calls into single HTTP requests.
-
-        Uses JSON-RPC batching to reduce HTTP overhead significantly.
-        100 slots = 1 HTTP request instead of 100.
-
-        Args:
-            chain_id: Chain ID
-            address: Contract address
-            slots: List of slot numbers to read
-            block: Block number or 'latest'
-            batch_size: Max calls per batch (RPC endpoints often limit this)
-
-        Returns:
-            Dict mapping slot number to hex value string
-        """
-        if not slots:
+        unique_slots = _storage_slots(slots)
+        if not unique_slots:
             return {}
-
-        address = Web3.to_checksum_address(address)
-
-        results = {}
-
-        # Process in batches (RPC endpoints often limit batch size to 100-1000)
-        for i in range(0, len(slots), batch_size):
-            batch_slots = slots[i : i + batch_size]
-
-            async def execute_batch(web3):
-                batch = web3.batch_requests()
-                for slot in batch_slots:
-                    batch.add(
-                        web3.eth.get_storage_at(address, slot, block_identifier=block)
-                    )
-                batch_responses = await batch.async_execute()
-                if len(batch_responses) != len(batch_slots):
-                    raise RuntimeError(
-                        "Batch response cardinality did not match the request"
-                    )
-                for slot, response in zip(batch_slots, batch_responses):
-                    if isinstance(response, Exception):
-                        raise RuntimeError(f"Slot {slot}: {response}")
-                    if not isinstance(response, bytes):
-                        raise RuntimeError(
-                            f"Slot {slot}: unexpected response type "
-                            f"{type(response).__name__}"
-                        )
-                    if len(response) != 32:
-                        raise RuntimeError(
-                            f"Slot {slot}: expected 32 bytes, received {len(response)}"
-                        )
-                return batch_responses
-
-            responses = await self._call(
-                chain_id,
-                f"eth_getStorageAt batch {i}-{i + len(batch_slots)}",
-                execute_batch,
-            )
-
-            # Map responses back to slots (responses are in same order as added)
-            for slot, response in zip(batch_slots, responses):
-                if isinstance(response, bytes):
-                    results[slot] = "0x" + response.hex()
-                else:  # validated inside execute_batch
-                    raise RPCError("eth_getStorageAt", f"Slot {slot}: invalid response")
-
-        logger.debug(
-            f"Batch read {len(slots)} slots in {(len(slots) + batch_size - 1) // batch_size} batches"
+        return await self._call(
+            chain_id,
+            "eth_getStorageValues",
+            lambda web3: _request_storage_values(
+                web3,
+                address,
+                unique_slots,
+                block,
+            ),
         )
-        return results

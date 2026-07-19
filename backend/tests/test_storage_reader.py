@@ -32,13 +32,12 @@ class _StorageProvider:
         self.values = values or {}
         self.requested_slots: list[int] = []
 
-    async def batch_get_storage_at(
+    async def get_storage_values(
         self,
         chain_id: int,
         address: str,
         slots: list[int],
         block: int,
-        batch_size: int = 100,
     ) -> dict[int, str]:
         self.requested_slots = slots
         return {slot: self.values.get(slot, ZERO_WORD) for slot in slots}
@@ -247,11 +246,11 @@ class ScalarReadPlanningTests(unittest.TestCase):
 
 
 class ScalarStorageReaderTests(unittest.IsolatedAsyncioTestCase):
-    async def test_batch_deduplicates_in_first_seen_order(self):
+    async def test_native_read_deduplicates_in_first_seen_order(self):
         provider = _StorageProvider({1: uint_word(1), 2: uint_word(2)})
         reader = StorageReader(provider)
 
-        values = await reader.read_slots_batch(
+        values = await reader.read_slots(
             1,
             "0x" + "44" * 20,
             [2, 1, 2, 1],
@@ -261,20 +260,20 @@ class ScalarStorageReaderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(provider.requested_slots, [2, 1])
         self.assertEqual(list(values), [2, 1])
 
-    async def test_incomplete_or_malformed_batch_returns_no_values(self):
+    async def test_incomplete_or_malformed_read_returns_no_values(self):
         class _IncompleteProvider(_StorageProvider):
-            async def batch_get_storage_at(self, *args, **kwargs):
+            async def get_storage_values(self, *args, **kwargs):
                 return {1: ZERO_WORD}
 
         class _MalformedProvider(_StorageProvider):
-            async def batch_get_storage_at(self, *args, **kwargs):
+            async def get_storage_values(self, *args, **kwargs):
                 return {1: "0x01"}
 
         for provider in (_IncompleteProvider(), _MalformedProvider()):
             with self.subTest(provider=type(provider).__name__):
                 reader = StorageReader(provider)
                 with self.assertRaises(RPCError):
-                    await reader.read_slots_batch(
+                    await reader.read_slots(
                         1,
                         "0x" + "55" * 20,
                         [1, 2] if isinstance(provider, _IncompleteProvider) else [1],

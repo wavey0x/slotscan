@@ -19,39 +19,35 @@ BLOCK_HASH = "0x" + "ab" * 32
 ADDRESS = "0x" + "11" * 20
 
 
-class _Batch:
-    def __init__(self, fail=False):
-        self.requests = []
-        self.fail = fail
-
-    def add(self, request):
-        self.requests.append(request)
-
-    async def async_execute(self):
-        if self.fail:
-            for request in self.requests:
-                request.close()
-            raise RuntimeError("storage unavailable")
-        return [await request for request in self.requests]
-
-
 class _Eth:
-    def __init__(self, values=None):
-        self.storage_calls = []
-        self.values = values or {2**255: 42}
+    pass
 
-    async def get_storage_at(self, address, slot, block_identifier):
-        self.storage_calls.append((slot, block_identifier))
-        return self.values.get(slot, 0).to_bytes(32, "big")
+
+class _Provider:
+    def __init__(self, fail=False, values=None):
+        self.fail = fail
+        self.values = values or {2**255: 42}
+        self.storage_calls = []
+
+    async def make_request(self, method, params):
+        if self.fail:
+            raise RuntimeError("storage unavailable")
+        address, slots = next(iter(params[0].items()))
+        self.storage_calls.extend((int(slot, 16), params[1]) for slot in slots)
+        return {
+            "result": {
+                address: [
+                    f"0x{self.values.get(int(slot, 16), 0):064x}"
+                    for slot in slots
+                ]
+            }
+        }
 
 
 class _Web3:
     def __init__(self, fail=False, values=None):
-        self.eth = _Eth(values)
-        self.fail = fail
-
-    def batch_requests(self):
-        return _Batch(self.fail)
+        self.eth = _Eth()
+        self.provider = _Provider(fail, values)
 
 
 def _compiled_layout():
@@ -146,7 +142,7 @@ class StorageViewTests(unittest.IsolatedAsyncioTestCase):
         by_path = {item["path"]: item for item in response["values"]["items"]}
         self.assertIs(by_path["enabled"]["value_decoded"], True)
         self.assertEqual(by_path["small"]["value_decoded"], "42")
-        self.assertEqual([slot for slot, _ in web3.eth.storage_calls], [7])
+        self.assertEqual([slot for slot, _ in web3.provider.storage_calls], [7])
 
     async def test_coherent_view_uses_string_safe_values_and_on_demand_status(self):
         web3 = _Web3()
@@ -177,7 +173,10 @@ class StorageViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(by_path["counter"]["value_decoded"], "42")
         self.assertEqual(by_path["counter"]["slot"], hex(2**255))
         self.assertEqual(by_path["balances"]["status"], "on_demand")
-        self.assertEqual([slot for slot, _ in web3.eth.storage_calls], [2**255])
+        self.assertEqual(
+            [slot for slot, _ in web3.provider.storage_calls],
+            [2**255],
+        )
 
     async def test_value_failure_keeps_the_valid_layout_without_partial_items(self):
         attempt = StorageAttempt(
@@ -257,7 +256,7 @@ class StorageViewTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response["layout"]["status"], "unverified")
         self.assertEqual(response["values"]["status"], "unavailable")
-        self.assertEqual(web3.eth.storage_calls, [])
+        self.assertEqual(web3.provider.storage_calls, [])
 
 
 if __name__ == "__main__":

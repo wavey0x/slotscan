@@ -43,13 +43,12 @@ class _Attempt:
         self.values = values
         self.calls = []
 
-    async def batch_get_storage_at(
+    async def get_storage_values(
         self,
         chain_id,
         address,
         slots,
         block,
-        batch_size=100,
     ):
         self.calls.append(list(slots))
         return {

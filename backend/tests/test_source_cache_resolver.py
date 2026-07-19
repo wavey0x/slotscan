@@ -223,19 +223,25 @@ class _Provider:
             return value.get(block, b"")
         return value
 
-    async def get_storage_at(self, chain_id, address, slot, block):
-        self.storage_calls.append((address.lower(), slot, block))
-        if slot == EIP1967_IMPL_SLOT:
-            implementation = self._at_block(
-                self.implementations,
-                address,
-                block,
-            )
-            return _address_word(implementation) if implementation else bytes(32)
-        if slot == EIP1967_BEACON_SLOT:
-            beacon = self._at_block(self.beacons, address, block)
-            return _address_word(beacon) if beacon else bytes(32)
-        return bytes(32)
+    async def get_storage_values(self, chain_id, address, slots, block):
+        values = {}
+        for slot in slots:
+            self.storage_calls.append((address.lower(), slot, block))
+            value = bytes(32)
+            if slot == EIP1967_IMPL_SLOT:
+                implementation = self._at_block(
+                    self.implementations,
+                    address,
+                    block,
+                )
+                if implementation:
+                    value = _address_word(implementation)
+            elif slot == EIP1967_BEACON_SLOT:
+                beacon = self._at_block(self.beacons, address, block)
+                if beacon:
+                    value = _address_word(beacon)
+            values[slot] = "0x" + value.hex()
+        return values
 
     async def eth_call(self, chain_id, transaction, block):
         implementation = self._at_block(
@@ -827,16 +833,22 @@ class ResolverSourceIdentityTests(unittest.IsolatedAsyncioTestCase):
                     return b"\x60\x00"
                 return b""
 
-            async def get_storage_at(
+            async def get_storage_values(
                 self,
                 chain_id,
                 address,
-                slot,
+                slots,
                 block,
             ):
-                if slot == 0:
-                    return _address_word(IMPLEMENTATION_A)
-                return bytes(32)
+                return {
+                    slot: "0x"
+                    + (
+                        _address_word(IMPLEMENTATION_A)
+                        if slot == 0
+                        else bytes(32)
+                    ).hex()
+                    for slot in slots
+                }
 
             async def eth_call(self, chain_id, transaction, block):
                 test.assertEqual(

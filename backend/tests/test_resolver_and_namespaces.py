@@ -43,6 +43,14 @@ from app.utils.vyper import (
 ADDRESS = "0x" + "11" * 20
 
 
+def _storage_values(slots, value_for_slot=None):
+    value_for_slot = value_for_slot or (lambda _slot: bytes(32))
+    return {
+        slot: "0x" + value_for_slot(slot).hex()
+        for slot in slots
+    }
+
+
 def _make_resolver(provider, settings=None, **kwargs):
     return ContractResolver(
         provider,
@@ -608,8 +616,9 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self):
                 self.storage_calls = []
 
-            async def get_storage_at(self, chain_id, address, slot, block):
-                self.storage_calls.append(slot)
+            async def get_storage_values(self, chain_id, address, slots, block):
+                self.storage_calls.extend(slots)
+                return _storage_values(slots)
 
         provider = Provider()
         detected = await _make_resolver(provider).detect_proxy(
@@ -627,7 +636,7 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
         test = self
 
         class Provider:
-            async def get_storage_at(self, *args):
+            async def get_storage_values(self, *args):
                 raise AssertionError("minimal proxy must not read proxy slots")
 
             async def get_code(self, chain_id, address, block):
@@ -677,11 +686,16 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
         test = self
 
         class Provider:
-            async def get_storage_at(self, chain_id, address, slot, block):
+            async def get_storage_values(self, chain_id, address, slots, block):
                 test.assertEqual(block, 123)
-                if slot == EIP1967_IMPL_SLOT:
-                    return bytes(12) + bytes.fromhex(implementation[2:])
-                return bytes(32)
+                return _storage_values(
+                    slots,
+                    lambda slot: (
+                        bytes(12) + bytes.fromhex(implementation[2:])
+                        if slot == EIP1967_IMPL_SLOT
+                        else bytes(32)
+                    ),
+                )
 
             async def get_code(self, chain_id, address, block):
                 test.assertEqual((address, block), (implementation, 123))
@@ -701,10 +715,15 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
         implementation = Web3.to_checksum_address("0x" + "22" * 20)
 
         class Provider:
-            async def get_storage_at(self, chain_id, address, slot, block):
-                if slot == EIP1967_IMPL_SLOT:
-                    return b"\x01" + bytes(11) + bytes.fromhex(implementation[2:])
-                return bytes(32)
+            async def get_storage_values(self, chain_id, address, slots, block):
+                return _storage_values(
+                    slots,
+                    lambda slot: (
+                        b"\x01" + bytes(11) + bytes.fromhex(implementation[2:])
+                        if slot == EIP1967_IMPL_SLOT
+                        else bytes(32)
+                    ),
+                )
 
             async def get_code(self, *args):
                 raise AssertionError("malformed address must not be probed")
@@ -724,10 +743,15 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
         test = self
 
         class Provider:
-            async def get_storage_at(self, chain_id, address, slot, block):
-                if slot == EIP1967_BEACON_SLOT:
-                    return bytes(12) + bytes.fromhex(beacon[2:])
-                return bytes(32)
+            async def get_storage_values(self, chain_id, address, slots, block):
+                return _storage_values(
+                    slots,
+                    lambda slot: (
+                        bytes(12) + bytes.fromhex(beacon[2:])
+                        if slot == EIP1967_BEACON_SLOT
+                        else bytes(32)
+                    ),
+                )
 
             async def get_code(self, chain_id, address, block):
                 return b"\x60\x00" if address in {beacon, implementation} else b""
@@ -759,16 +783,21 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
         for expected_type, implementation_slot in cases:
             with self.subTest(expected_type=expected_type):
                 class Provider:
-                    async def get_storage_at(
+                    async def get_storage_values(
                         self,
                         chain_id,
                         address,
-                        slot,
+                        slots,
                         block,
                     ):
-                        if slot == implementation_slot:
-                            return bytes(12) + bytes.fromhex(implementation[2:])
-                        return bytes(32)
+                        return _storage_values(
+                            slots,
+                            lambda slot: (
+                                bytes(12) + bytes.fromhex(implementation[2:])
+                                if slot == implementation_slot
+                                else bytes(32)
+                            ),
+                        )
 
                     async def get_code(self, chain_id, address, block):
                         return b"\x60\x00" if address == implementation else b""
@@ -791,16 +820,21 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
         test = self
 
         class Provider:
-            async def get_storage_at(
+            async def get_storage_values(
                 self,
                 chain_id,
                 address,
-                slot,
+                slots,
                 block,
             ):
-                if slot == 0:
-                    return bytes(12) + bytes.fromhex(implementation[2:])
-                return bytes(32)
+                return _storage_values(
+                    slots,
+                    lambda slot: (
+                        bytes(12) + bytes.fromhex(implementation[2:])
+                        if slot == 0
+                        else bytes(32)
+                    ),
+                )
 
             async def eth_call(self, chain_id, transaction, block):
                 test.assertEqual(
@@ -841,16 +875,21 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
         test = self
 
         class Provider:
-            async def get_storage_at(
+            async def get_storage_values(
                 self,
                 chain_id,
                 address,
-                slot,
+                slots,
                 block,
             ):
-                if slot == 0:
-                    return bytes(12) + bytes.fromhex(implementation[2:])
-                return bytes(32)
+                return _storage_values(
+                    slots,
+                    lambda slot: (
+                        bytes(12) + bytes.fromhex(implementation[2:])
+                        if slot == 0
+                        else bytes(32)
+                    ),
+                )
 
             async def eth_call(self, chain_id, transaction, block):
                 test.assertEqual(
@@ -881,16 +920,21 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
         getter_implementation = Web3.to_checksum_address("0x" + "33" * 20)
 
         class Provider:
-            async def get_storage_at(
+            async def get_storage_values(
                 self,
                 chain_id,
                 address,
-                slot,
+                slots,
                 block,
             ):
-                if slot == 0:
-                    return bytes(12) + bytes.fromhex(slot_implementation[2:])
-                return bytes(32)
+                return _storage_values(
+                    slots,
+                    lambda slot: (
+                        bytes(12) + bytes.fromhex(slot_implementation[2:])
+                        if slot == 0
+                        else bytes(32)
+                    ),
+                )
 
             async def eth_call(self, chain_id, transaction, block):
                 return bytes(12) + bytes.fromhex(getter_implementation[2:])
@@ -915,16 +959,21 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
         implementation = Web3.to_checksum_address("0x" + "22" * 20)
 
         class Provider:
-            async def get_storage_at(
+            async def get_storage_values(
                 self,
                 chain_id,
                 address,
-                slot,
+                slots,
                 block,
             ):
-                if slot == 0:
-                    return bytes(12) + bytes.fromhex(implementation[2:])
-                return bytes(32)
+                return _storage_values(
+                    slots,
+                    lambda slot: (
+                        bytes(12) + bytes.fromhex(implementation[2:])
+                        if slot == 0
+                        else bytes(32)
+                    ),
+                )
 
             async def eth_call(self, chain_id, transaction, block):
                 return bytes(12) + bytes.fromhex(implementation[2:])
@@ -949,8 +998,8 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
         implementation = Web3.to_checksum_address("0x" + "22" * 20)
 
         class Provider:
-            async def get_storage_at(self, *args):
-                return bytes(32)
+            async def get_storage_values(self, _chain_id, _address, slots, _block):
+                return _storage_values(slots)
 
             async def eth_call(self, chain_id, transaction, block):
                 if transaction["data"] == BEACON_IMPL_SELECTOR:
@@ -981,8 +1030,8 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_implementation_getter_alone_is_not_proxy_proof(self):
         class Provider:
-            async def get_storage_at(self, *args):
-                return bytes(32)
+            async def get_storage_values(self, _chain_id, _address, slots, _block):
+                return _storage_values(slots)
 
             async def eth_call(self, *args):
                 raise AssertionError("generic getter must not be probed")

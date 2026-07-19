@@ -244,17 +244,17 @@ def plan_compiled_scalar_reads(
 
 def _validate_word(slot: int, value: object) -> str:
     if not isinstance(value, str) or not value.startswith("0x"):
-        raise RPCError("eth_getStorageAt", f"Slot {slot}: invalid storage word")
+        raise RPCError("eth_getStorageValues", f"Slot {slot}: invalid storage word")
     try:
         raw = bytes.fromhex(value[2:])
     except ValueError as exc:
         raise RPCError(
-            "eth_getStorageAt",
+            "eth_getStorageValues",
             f"Slot {slot}: invalid hexadecimal storage word",
         ) from exc
     if len(raw) != 32:
         raise RPCError(
-            "eth_getStorageAt",
+            "eth_getStorageValues",
             f"Slot {slot}: expected 32 bytes, received {len(raw)}",
         )
     return "0x" + raw.hex()
@@ -266,7 +266,7 @@ class StorageReader:
     def __init__(self, web3_provider: Web3Provider):
         self.web3_provider = web3_provider
 
-    async def read_slots_batch(
+    async def read_slots(
         self,
         chain_id: int,
         address: str,
@@ -279,19 +279,18 @@ class StorageReader:
 
         unique_slots = list(dict.fromkeys(slots))
         try:
-            values = await self.web3_provider.batch_get_storage_at(
+            values = await self.web3_provider.get_storage_values(
                 chain_id,
                 address,
                 unique_slots,
                 block_number,
-                batch_size=100,
             )
         except Exception as exc:
-            raise RPCError("eth_getStorageAt", str(exc)) from exc
+            raise RPCError("eth_getStorageValues", str(exc)) from exc
 
         if set(values) != set(unique_slots) or len(values) != len(unique_slots):
             raise RPCError(
-                "eth_getStorageAt",
-                "Batch response did not contain the complete requested word set",
+                "eth_getStorageValues",
+                "Response did not contain the complete requested word set",
             )
         return {slot: _validate_word(slot, values[slot]) for slot in unique_slots}

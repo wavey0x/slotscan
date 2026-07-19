@@ -30,7 +30,7 @@ from app.services.tracer.extractor import (
     TransactionTraceEvidence,
     TransactionTraceExtractor,
 )
-from app.services.tracer.rpc_client import TraceRPCClient
+from app.services.tracer.rpc_client import CompactTraceEvidence, TraceRPCClient
 from app.services.transaction_history import TransactionHistoryService
 
 
@@ -212,6 +212,11 @@ class _CompactTraceProvider:
                     }
                 ],
                 "sha3s": [],
+                "observedStorage": {
+                    ADDRESS_A: {SLOT_1: ZERO},
+                    ADDRESS_B: {"0x" + "0" * 63 + "2": ZERO},
+                },
+                "observedStorageComplete": True,
                 "frames": [
                     {
                         "id": 0,
@@ -494,14 +499,13 @@ class Eip7702TraceTests(IsolatedAsyncioTestCase):
         )
 
         self.assertIsNotNone(result)
-        writes, _, step_count = result
-        self.assertEqual(step_count, 10)
-        self.assertEqual(writes[0]["address"], ADDRESS_A)
-        self.assertEqual(writes[0]["code_address"], CODE_A)
-        self.assertEqual(writes[0]["code_attribution"], "exact")
-        self.assertEqual(writes[1]["address"], ADDRESS_B)
-        self.assertEqual(writes[1]["code_address"], CODE_B)
-        self.assertEqual(writes[1]["code_attribution"], "exact")
+        self.assertEqual(result.evm_step_count, 10)
+        self.assertEqual(result.writes[0]["address"], ADDRESS_A)
+        self.assertEqual(result.writes[0]["code_address"], CODE_A)
+        self.assertEqual(result.writes[0]["code_attribution"], "exact")
+        self.assertEqual(result.writes[1]["address"], ADDRESS_B)
+        self.assertEqual(result.writes[1]["code_address"], CODE_B)
+        self.assertEqual(result.writes[1]["code_attribution"], "exact")
         tracer_source = provider.params[1]["tracer"]
         self.assertIn("db.getCode(requestedHex)", tracer_source)
         self.assertIn("rawCode.length === 48", tracer_source)
@@ -534,17 +538,15 @@ class Eip7702TraceTests(IsolatedAsyncioTestCase):
             Settings(MAX_SSTORE_OPS=1),
         )
 
-        writes, sha3s, step_count, degraded_reason = (
-            await client.execute_structlogs_trace(
-                1,
-                "0x" + "ab" * 32,
-            )
+        evidence = await client.execute_compact_trace(
+            1,
+            "0x" + "ab" * 32,
         )
 
-        self.assertEqual(writes, [])
-        self.assertEqual(sha3s, [])
-        self.assertEqual(step_count, 0)
-        self.assertEqual(degraded_reason, "trace_limit")
+        self.assertEqual(evidence.writes, [])
+        self.assertEqual(evidence.sha3_operations, [])
+        self.assertEqual(evidence.evm_step_count, 0)
+        self.assertEqual(evidence.degraded_reason, "trace_limit")
 
     async def test_prestate_trace_rejects_oversized_storage_before_normalization(self):
         client = TraceRPCClient(
@@ -565,7 +567,7 @@ class Eip7702TraceTests(IsolatedAsyncioTestCase):
         )
 
         with self.assertRaises(TraceNotAvailableError):
-            await client.execute_prestate_trace(1, artifact().tx_hash)
+            await client.execute_prestate_diff(1, artifact().tx_hash)
 
     def test_incomplete_code_attribution_keeps_raw_writes_without_layout(self):
         tracer = TransactionAnalysisService(
@@ -731,14 +733,13 @@ class PrestateRecoveryTests(TestCase):
 
         TransactionTraceExtractor._merge_observed_prestate(
             diff,
-            {ADDRESS_A: {"storage": {SLOT_1: FIVE, slot_two: SIX}}},
-            {(ADDRESS_A, SLOT_1)},
+            {ADDRESS_A: {SLOT_1: FIVE, slot_two: SIX}},
         )
 
         self.assertEqual(diff["pre"][ADDRESS_A]["storage"][slot_two], SIX)
         self.assertEqual(diff["post"][ADDRESS_A]["storage"][slot_two], SIX)
 
-    def test_full_prestate_account_is_normalized_once(self):
+    def test_observed_account_is_normalized_once(self):
         class CountingStorage(dict):
             def __init__(self, values):
                 super().__init__(values)
@@ -754,8 +755,7 @@ class PrestateRecoveryTests(TestCase):
 
         TransactionTraceExtractor._merge_observed_prestate(
             diff,
-            {ADDRESS_A: {"storage": storage}},
-            {(ADDRESS_A, SLOT_1), (ADDRESS_A, slot_two)},
+            {ADDRESS_A: storage},
         )
 
         self.assertEqual(storage.items_calls, 1)
@@ -770,8 +770,7 @@ class PrestateRecoveryTests(TestCase):
         TransactionTraceExtractor._normalize_diff(diff)
         TransactionTraceExtractor._merge_observed_prestate(
             diff,
-            {ADDRESS_A: {"storage": {}}},
-            {(ADDRESS_A, SLOT_1)},
+            {ADDRESS_A: {SLOT_1: ZERO}},
         )
 
         self.assertEqual(diff["pre"][ADDRESS_A]["storage"][SLOT_1], ZERO)
@@ -781,12 +780,109 @@ class PrestateRecoveryTests(TestCase):
         diff = {"pre": {}, "post": {}}
         TransactionTraceExtractor._merge_observed_prestate(
             diff,
-            {ADDRESS_A: {"storage": {SLOT_1: FIVE}}},
-            {(ADDRESS_A, SLOT_1)},
+            {ADDRESS_A: {SLOT_1: FIVE}},
         )
 
         self.assertEqual(diff["pre"][ADDRESS_A]["storage"][SLOT_1], FIVE)
         self.assertEqual(diff["post"][ADDRESS_A]["storage"][SLOT_1], FIVE)
+
+    def test_null_observations_are_never_treated_as_zero(self):
+        diff = {"pre": {}, "post": {}}
+
+        TransactionTraceExtractor._merge_observed_prestate(
+            diff,
+            {ADDRESS_A: {SLOT_1: None}},
+        )
+
+        self.assertEqual(diff, {"pre": {}, "post": {}})
+
+
+class TraceExtractorTests(IsolatedAsyncioTestCase):
+    async def test_extraction_uses_two_traces_and_merges_observed_storage(self):
+        class RPCClient:
+            def __init__(self):
+                self.prestate_calls = 0
+                self.compact_calls = 0
+
+            async def execute_prestate_diff(self, chain_id, tx_hash):
+                self.prestate_calls += 1
+                return {
+                    "pre": {},
+                    "post": {ADDRESS_A: {"storage": {SLOT_1: ONE}}},
+                }
+
+            async def get_receipt(self, chain_id, tx_hash):
+                return {"status": 1}
+
+            async def execute_compact_trace(self, chain_id, tx_hash):
+                self.compact_calls += 1
+                return CompactTraceEvidence(
+                    writes=[
+                        {
+                            "address": ADDRESS_A,
+                            "slot": SLOT_1,
+                            "value": ONE,
+                            "old_value": None,
+                            "namespace": "persistent",
+                        }
+                    ],
+                    sha3_operations=[],
+                    observed_storage={ADDRESS_A: {SLOT_1: ZERO}},
+                    observed_storage_complete=True,
+                    evm_step_count=10,
+                )
+
+        rpc_client = RPCClient()
+
+        evidence = await TransactionTraceExtractor(rpc_client).extract(
+            1,
+            artifact().tx_hash,
+        )
+
+        self.assertEqual(rpc_client.prestate_calls, 1)
+        self.assertEqual(rpc_client.compact_calls, 1)
+        self.assertEqual(
+            evidence.prestate_diff["pre"][ADDRESS_A]["storage"][SLOT_1],
+            ZERO,
+        )
+        self.assertEqual(
+            evidence.prestate_diff["post"][ADDRESS_A]["storage"][SLOT_1],
+            ONE,
+        )
+
+    async def test_incomplete_observations_preserve_raw_write_inventory(self):
+        class RPCClient:
+            async def execute_prestate_diff(self, chain_id, tx_hash):
+                return {"pre": {}, "post": {}}
+
+            async def get_receipt(self, chain_id, tx_hash):
+                return {"status": 1}
+
+            async def execute_compact_trace(self, chain_id, tx_hash):
+                return CompactTraceEvidence(
+                    writes=[
+                        {
+                            "address": ADDRESS_A,
+                            "slot": SLOT_1,
+                            "value": ONE,
+                            "old_value": None,
+                            "namespace": "persistent",
+                        }
+                    ],
+                    sha3_operations=[],
+                    observed_storage={ADDRESS_A: {SLOT_1: None}},
+                    observed_storage_complete=False,
+                    evm_step_count=10,
+                )
+
+        evidence = await TransactionTraceExtractor(RPCClient()).extract(
+            1,
+            artifact().tx_hash,
+        )
+
+        self.assertEqual(len(evidence.writes), 1)
+        self.assertIsNone(evidence.degraded_reason)
+        self.assertEqual(evidence.prestate_diff, {"pre": {}, "post": {}})
 
 
 class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):

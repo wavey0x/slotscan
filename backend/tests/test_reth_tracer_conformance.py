@@ -2,6 +2,8 @@ import os
 import unittest
 
 from app.config import Settings
+from app.services.tracer.extractor import TransactionTraceExtractor
+from app.services.tracer.journal import StorageJournalBuilder
 from app.services.tracer.rpc_client import TraceRPCClient
 from app.services.web3_provider import Web3Provider
 
@@ -88,17 +90,43 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
         result = await self.client._execute_compact_storage_trace(1, VOTING_TX)
 
         self.assertIsNotNone(result)
-        writes, sha3s, step_count = result
-        target = [write for write in writes if write["slot"] == VOTING_SLOT]
-        self.assertEqual(step_count, 167759)
-        self.assertEqual(len(writes), 99)
-        self.assertEqual(len(sha3s), 275)
+        target = [
+            write for write in result.writes if write["slot"] == VOTING_SLOT
+        ]
+        self.assertEqual(result.evm_step_count, 167759)
+        self.assertEqual(len(result.writes), 99)
+        self.assertEqual(len(result.sha3_operations), 275)
         self.assertEqual(len(target), 1)
         self.assertEqual(target[0]["address"], VOTING_PROXY)
         self.assertEqual(
             target[0]["code_address"],
             VOTING_IMPLEMENTATION,
         )
+        self.assertTrue(result.observed_storage_complete)
+        self.assertTrue(all(write["old_value"] is None for write in result.writes))
+
+        full_response = await self.provider.make_request(
+            1,
+            "debug_traceTransaction",
+            [
+                VOTING_TX,
+                {
+                    "tracer": "prestateTracer",
+                    "tracerConfig": {"diffMode": False},
+                },
+            ],
+        )
+        self.assertNotIn("error", full_response)
+        expected_storage = {
+            address.lower(): {
+                "0x" + slot.removeprefix("0x").lower().zfill(64):
+                "0x" + value.removeprefix("0x").lower().zfill(64)
+                for slot, value in state.get("storage", {}).items()
+            }
+            for address, state in full_response["result"].items()
+            if state.get("storage")
+        }
+        self.assertEqual(result.observed_storage, expected_storage)
 
     async def test_calls_and_caught_or_uncaught_reverts(self):
         target_success = "0x600160005500"
@@ -109,9 +137,9 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
             harness,
             overrides={TARGET: {"code": target_success}},
         )
-        success_writes, _, _ = self.client._decode_compact_trace_result(
+        success_writes = self.client._decode_compact_trace_result(
             success_raw
-        )
+        ).writes
         child_success = next(
             write for write in success_writes if write["address"] == TARGET
         )
@@ -121,9 +149,7 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
             harness,
             overrides={TARGET: {"code": target_revert}},
         )
-        caught_writes, _, _ = self.client._decode_compact_trace_result(
-            caught_raw
-        )
+        caught_writes = self.client._decode_compact_trace_result(caught_raw).writes
         child_failure = next(
             write for write in caught_writes if write["address"] == TARGET
         )
@@ -135,9 +161,9 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(root_after_catch["value"], "0x" + "0" * 64)
 
         uncaught_raw = await self.trace_call(target_revert[2:])
-        uncaught_writes, _, _ = self.client._decode_compact_trace_result(
+        uncaught_writes = self.client._decode_compact_trace_result(
             uncaught_raw
-        )
+        ).writes
         self.assertTrue(uncaught_writes[0]["frame_reverted"])
         self.assertEqual(uncaught_writes[0]["rollback_frame_id"], 0)
 
@@ -147,9 +173,9 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
             "600160005560006000fd"
         )
         creation_raw = await self.trace_call(creation_failure)
-        creation_writes, _, _ = self.client._decode_compact_trace_result(
+        creation_writes = self.client._decode_compact_trace_result(
             creation_raw
-        )
+        ).writes
         constructor_write = next(
             write
             for write in creation_writes
@@ -172,7 +198,7 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
                 DELEGATE: {"code": "0x600160005500"},
             },
         )
-        eip_writes, _, _ = self.client._decode_compact_trace_result(eip_raw)
+        eip_writes = self.client._decode_compact_trace_result(eip_raw).writes
         delegated_write = next(
             write
             for write in eip_writes
@@ -269,6 +295,78 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
             tracer_source=injected,
         )
         self.assertEqual(callback_result["fatal"], "tracer:exception")
+
+    async def test_observation_overflow_and_failures_preserve_writes(self):
+        bounded_client = TraceRPCClient(
+            self.provider,
+            Settings(MAX_PRESTATE_STORAGE_ENTRIES=1),
+        )
+        bounded_raw = await self.trace_call(
+            "60005450600160015500",
+            tracer_source=bounded_client._compact_storage_tracer_source(),
+        )
+        bounded = bounded_client._decode_compact_trace_result(bounded_raw)
+        self.assertEqual(len(bounded.writes), 1)
+        self.assertFalse(bounded.observed_storage_complete)
+        self.assertEqual(
+            set(bounded.observed_storage[ROOT]),
+            {"0x" + "0" * 63 + "1"},
+        )
+
+        source = self.client._compact_storage_tracer_source()
+        failing_source = source.replace("db.getState(", "db.getStateFailure(")
+        self.assertNotEqual(source, failing_source)
+        failed_raw = await self.trace_call(
+            "600160005500",
+            tracer_source=failing_source,
+        )
+        failed = self.client._decode_compact_trace_result(failed_raw)
+        self.assertEqual(len(failed.writes), 1)
+        self.assertFalse(failed.observed_storage_complete)
+        self.assertIsNone(
+            failed.observed_storage[ROOT]["0x" + "0" * 64]
+        )
+
+    async def test_sloads_and_repeated_writes_replay_immediate_before_values(self):
+        raw = await self.trace_call("600154506001600055600260005500")
+        evidence = self.client._decode_compact_trace_result(raw)
+        slot_zero = "0x" + "0" * 64
+        slot_one = "0x" + "0" * 63 + "1"
+
+        self.assertEqual(
+            set(evidence.observed_storage[ROOT]),
+            {slot_zero, slot_one},
+        )
+        self.assertEqual(
+            [write["slot"] for write in evidence.writes],
+            [slot_zero, slot_zero],
+        )
+        self.assertTrue(all(write["old_value"] is None for write in evidence.writes))
+
+        diff = {
+            "pre": {},
+            "post": {
+                ROOT: {
+                    "storage": {slot_zero: "0x" + "0" * 63 + "2"}
+                }
+            },
+        }
+        TransactionTraceExtractor._normalize_diff(diff)
+        TransactionTraceExtractor._merge_observed_prestate(
+            diff,
+            evidence.observed_storage,
+        )
+        journal = StorageJournalBuilder().build(
+            evidence.writes,
+            diff,
+            root_succeeded=True,
+            evm_step_count=evidence.evm_step_count,
+        )
+        repeated = next(history for history in journal.histories if history.slot == slot_zero)
+        self.assertEqual(
+            [event.value_before for event in repeated.writes],
+            ["0x" + "0" * 64, "0x" + "0" * 63 + "1"],
+        )
 
 
 if __name__ == "__main__":
