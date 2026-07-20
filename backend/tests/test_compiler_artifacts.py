@@ -1,8 +1,14 @@
+import asyncio
 import unittest
+from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
 from app.config import Settings
 from app.models.errors import CompilationError
+from app.services.namespace_storage import (
+    ERC7201_HARNESS_CONTRACT,
+    ERC7201_HARNESS_SOURCE,
+)
 from app.services.layout import LayoutParser
 
 
@@ -50,6 +56,48 @@ class _FakeProcess:
         self.waited = True
         self.returncode = -9 if self.killed else 0
         return self.returncode
+
+
+class _MemoryArtifactRepository:
+    def __init__(self):
+        self.rows = {}
+        self.save_count = 0
+
+    async def get(self, fingerprint):
+        return self.rows.get(fingerprint)
+
+    async def save(self, artifact):
+        self.rows[artifact.fingerprint] = artifact
+        self.save_count += 1
+
+
+def _solidity_output():
+    return {
+        "contracts": {
+            "C.sol": {
+                "C": {
+                    "storageLayout": {
+                        "storage": [
+                            {
+                                "label": "value",
+                                "slot": "0",
+                                "offset": 0,
+                                "type": "t_uint256",
+                                "contract": "C.sol:C",
+                            }
+                        ],
+                        "types": {
+                            "t_uint256": {
+                                "encoding": "inplace",
+                                "label": "uint256",
+                                "numberOfBytes": "32",
+                            }
+                        },
+                    }
+                }
+            }
+        }
+    }
 
 
 class CompilerArtifactTests(unittest.TestCase):
@@ -122,6 +170,208 @@ class CompilerArtifactTests(unittest.TestCase):
             parser._extract_layout("Vault", output)
         with self.assertRaises(Exception):
             parser._extract_layout("VaultHelp", output)
+
+
+class CompilerArtifactCacheTests(unittest.IsolatedAsyncioTestCase):
+    async def test_concurrent_solidity_requests_compile_once_then_hit_cache(self):
+        parser = LayoutParser()
+        repo = _MemoryArtifactRepository()
+        sources = {"C.sol": "contract C { uint256 value; }"}
+        standard_input = parser.build_solidity_standard_input(sources, None)
+
+        async def compile_once(**_kwargs):
+            await asyncio.sleep(0.01)
+            return _solidity_output(), standard_input
+
+        parser._compile_with_layout = AsyncMock(side_effect=compile_once)
+        calls = [
+            parser.parse_with_artifact(
+                "C",
+                sources,
+                "0.8.30",
+                compiler_artifact_repo=repo,
+            )
+            for _ in range(3)
+        ]
+
+        results = await asyncio.gather(*calls)
+        cached_layout, cached_artifact = await parser.parse_with_artifact(
+            "C",
+            sources,
+            "0.8.30",
+            compiler_artifact_repo=repo,
+        )
+
+        self.assertEqual(parser._compile_with_layout.await_count, 1)
+        self.assertEqual(repo.save_count, 1)
+        self.assertEqual(parser._artifact_locks, {})
+        self.assertEqual(
+            [layout.to_dict() for layout, _artifact in results],
+            [cached_layout.to_dict()] * 3,
+        )
+        self.assertTrue(
+            all(
+                artifact.fingerprint == cached_artifact.fingerprint
+                for _layout, artifact in results
+            )
+        )
+
+    async def test_invalid_cached_artifact_is_recompiled_and_replaced(self):
+        parser = LayoutParser()
+        repo = _MemoryArtifactRepository()
+        sources = {"C.sol": "contract C { uint256 value; }"}
+        standard_input = parser.build_solidity_standard_input(sources, None)
+        valid = parser._make_artifact(
+            language="Solidity",
+            compiler_version="0.8.30",
+            pipeline="solc-standard-json",
+            standard_input=standard_input,
+            compiler_output=_solidity_output(),
+            sources=sources,
+        )
+        repo.rows[valid.fingerprint] = replace(valid, compiler_output={})
+        parser._compile_with_layout = AsyncMock(
+            return_value=(_solidity_output(), standard_input)
+        )
+
+        layout, artifact = await parser.parse_with_artifact(
+            "C",
+            sources,
+            "0.8.30",
+            compiler_artifact_repo=repo,
+        )
+
+        self.assertEqual(layout.variables[0].name, "value")
+        self.assertEqual(parser._compile_with_layout.await_count, 1)
+        self.assertEqual(repo.save_count, 1)
+        self.assertEqual(repo.rows[artifact.fingerprint].compiler_output, _solidity_output())
+
+    async def test_failed_compilation_is_not_cached_and_releases_lock(self):
+        parser = LayoutParser()
+        repo = _MemoryArtifactRepository()
+        parser._compile_with_layout = AsyncMock(
+            side_effect=CompilationError("compiler failed")
+        )
+
+        for _ in range(2):
+            with self.assertRaisesRegex(CompilationError, "compiler failed"):
+                await parser.parse_with_artifact(
+                    "C",
+                    {"C.sol": "contract C {}"},
+                    "0.8.30",
+                    compiler_artifact_repo=repo,
+                )
+
+        self.assertEqual(parser._compile_with_layout.await_count, 2)
+        self.assertEqual(repo.rows, {})
+        self.assertEqual(repo.save_count, 0)
+        self.assertEqual(parser._artifact_locks, {})
+
+    async def test_vyper_entry_source_is_part_of_cache_identity(self):
+        parser = LayoutParser()
+        repo = _MemoryArtifactRepository()
+        sources = {
+            "A.vy": "# @version 0.3.10\na: public(uint256)\n",
+            "B.vy": "# @version 0.3.10\nb: public(uint256)\n",
+        }
+
+        async def compile_target(*, filename, **_kwargs):
+            name = filename.removesuffix(".vy").lower()
+            return (
+                {name: {"type": "uint256", "slot": 0}},
+                "0x5f5ffd",
+            )
+
+        parser._compile_vyper_with_layout = AsyncMock(side_effect=compile_target)
+        first_layout, first_artifact = await parser.parse_vyper_with_artifact(
+            "A",
+            sources,
+            "0.3.10",
+            entry_source="A.vy",
+            compiler_artifact_repo=repo,
+        )
+        second_layout, second_artifact = await parser.parse_vyper_with_artifact(
+            "B",
+            sources,
+            "0.3.10",
+            entry_source="B.vy",
+            compiler_artifact_repo=repo,
+        )
+        await parser.parse_vyper_with_artifact(
+            "A",
+            sources,
+            "0.3.10",
+            entry_source="A.vy",
+            compiler_artifact_repo=repo,
+        )
+
+        self.assertEqual(first_layout.variables[0].name, "a")
+        self.assertEqual(second_layout.variables[0].name, "b")
+        self.assertNotEqual(first_artifact.fingerprint, second_artifact.fingerprint)
+        self.assertEqual(parser._compile_vyper_with_layout.await_count, 2)
+        self.assertEqual(repo.save_count, 2)
+
+    async def test_erc7201_harness_compilation_is_cached(self):
+        parser = LayoutParser()
+        repo = _MemoryArtifactRepository()
+        sources = {"C.sol": "contract C {}"}
+        harness_source = "contract SlotScanERC7201Harness { uint256 value; }"
+        augmented_sources = {
+            **sources,
+            ERC7201_HARNESS_SOURCE: harness_source,
+        }
+        standard_input = parser.build_solidity_standard_input(
+            augmented_sources,
+            None,
+            None,
+        )
+        compiler_output = {
+            "contracts": {
+                ERC7201_HARNESS_SOURCE: {
+                    ERC7201_HARNESS_CONTRACT: {
+                        "storageLayout": {
+                            "storage": [
+                                {
+                                    "label": "value",
+                                    "slot": "0",
+                                    "offset": 0,
+                                    "type": "t_uint256",
+                                }
+                            ],
+                            "types": {
+                                "t_uint256": {
+                                    "encoding": "inplace",
+                                    "label": "uint256",
+                                    "numberOfBytes": "32",
+                                }
+                            },
+                        }
+                    }
+                }
+            }
+        }
+        parser._compile_with_layout = AsyncMock(
+            return_value=(compiler_output, standard_input)
+        )
+
+        first, _ = await parser.compile_exact_namespace_types(
+            sources=sources,
+            compiler_version="0.8.30",
+            compiler_settings=None,
+            harness_source=harness_source,
+            compiler_artifact_repo=repo,
+        )
+        second, _ = await parser.compile_exact_namespace_types(
+            sources=sources,
+            compiler_version="0.8.30",
+            compiler_settings=None,
+            harness_source=harness_source,
+            compiler_artifact_repo=repo,
+        )
+
+        self.assertEqual(first, second)
+        self.assertEqual(parser._compile_with_layout.await_count, 1)
+        self.assertEqual(repo.save_count, 1)
 
 
 class VyperTargetTests(unittest.IsolatedAsyncioTestCase):

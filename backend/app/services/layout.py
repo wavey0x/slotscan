@@ -1,5 +1,7 @@
 """Layout parser for extracting storage layouts from Solidity and Vyper source code."""
 
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import json
@@ -8,9 +10,11 @@ import re
 import resource
 import shutil
 import tempfile
-from dataclasses import replace
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional, TypeVar
 
 import solcx
 from solcx.install import get_executable
@@ -29,6 +33,9 @@ from app.services.namespace_storage import (
 )
 from app.utils.vyper import SEQUENTIAL_STORAGE, parse_vyper_version
 
+if TYPE_CHECKING:
+    from app.repositories.compiler_artifacts import CompilerArtifactRepository
+
 # Minimum Solidity version that supports --storage-layout output
 MIN_SOLC_VERSION_FOR_LAYOUT = (0, 5, 13)
 
@@ -40,6 +47,15 @@ logger = logging.getLogger(__name__)
 
 class _CompilerOutputTooLarge(Exception):
     pass
+
+
+@dataclass
+class _ArtifactLockEntry:
+    lock: asyncio.Lock
+    users: int = 0
+
+
+_ArtifactValue = TypeVar("_ArtifactValue")
 
 
 def _limit_compiler_process(memory_limit_bytes: int, cpu_limit_seconds: int) -> None:
@@ -85,6 +101,100 @@ class LayoutParser:
         self._compilation_semaphore = asyncio.Semaphore(
             self.settings.max_parallel_compilations
         )
+        self._artifact_locks: dict[str, _ArtifactLockEntry] = {}
+
+    @asynccontextmanager
+    async def _artifact_lock(self, fingerprint: str) -> AsyncIterator[None]:
+        entry = self._artifact_locks.get(fingerprint)
+        if entry is None:
+            entry = _ArtifactLockEntry(asyncio.Lock())
+            self._artifact_locks[fingerprint] = entry
+        entry.users += 1
+        try:
+            async with entry.lock:
+                yield
+        finally:
+            entry.users -= 1
+            if entry.users == 0 and self._artifact_locks.get(fingerprint) is entry:
+                self._artifact_locks.pop(fingerprint, None)
+
+    async def _load_or_compile_artifact(
+        self,
+        *,
+        fingerprint: str,
+        language: str,
+        compiler_version: str,
+        pipeline: str,
+        standard_input: dict,
+        sources: dict[str, str],
+        compiler_artifact_repo: CompilerArtifactRepository | None,
+        load: Callable[[RawCompilerArtifact], _ArtifactValue],
+        compile_artifact: Callable[[], Awaitable[RawCompilerArtifact]],
+    ) -> tuple[_ArtifactValue, RawCompilerArtifact]:
+        """Load exact raw compiler output or compile it once for this process."""
+
+        def load_if_valid(
+            artifact: RawCompilerArtifact,
+        ) -> tuple[_ArtifactValue, RawCompilerArtifact] | None:
+            source_hashes = {
+                filename: hashlib.sha256(content.encode("utf-8")).hexdigest()
+                for filename, content in sorted(sources.items())
+            }
+            valid_identity = (
+                artifact.fingerprint == fingerprint
+                and artifact.language == language
+                and artifact.compiler_version == compiler_version
+                and artifact.pipeline == pipeline
+                and artifact.standard_input == standard_input
+                and artifact.source_hashes == source_hashes
+                and self.artifact_fingerprint(
+                    language=artifact.language,
+                    compiler_version=artifact.compiler_version,
+                    pipeline=artifact.pipeline,
+                    standard_input=artifact.standard_input,
+                )
+                == fingerprint
+            )
+            if not valid_identity:
+                return None
+            try:
+                return load(artifact), artifact
+            except Exception as exc:
+                logger.warning(
+                    "Ignoring invalid compiler artifact %s: %s",
+                    fingerprint,
+                    exc,
+                )
+                return None
+
+        async def read_cached() -> tuple[_ArtifactValue, RawCompilerArtifact] | None:
+            if compiler_artifact_repo is None:
+                return None
+            cached = await compiler_artifact_repo.get(fingerprint)
+            return load_if_valid(cached) if cached is not None else None
+
+        cached = await read_cached()
+        if cached is not None:
+            return cached
+
+        if compiler_artifact_repo is None:
+            artifact = await compile_artifact()
+            loaded = load_if_valid(artifact)
+            if loaded is None:
+                raise CompilationError("Compiler produced an invalid artifact")
+            return loaded
+
+        async with self._artifact_lock(fingerprint):
+            cached = await read_cached()
+            if cached is not None:
+                return cached
+
+            artifact = await compile_artifact()
+            loaded = load_if_valid(artifact)
+            if loaded is None:
+                raise CompilationError("Compiler produced an invalid artifact")
+            await compiler_artifact_repo.save(artifact)
+            return loaded
 
     async def parse(
         self,
@@ -126,28 +236,61 @@ class LayoutParser:
         compiler_settings: Optional[dict] = None,
         metadata_settings: Optional[dict] = None,
         contract_fqname: Optional[str] = None,
+        compiler_artifact_repo: CompilerArtifactRepository | None = None,
     ) -> tuple[StorageLayout, RawCompilerArtifact]:
-        solc_output, standard_input = await self._compile_with_layout(
-            sources=sources,
-            version=compiler_version,
-            settings=compiler_settings,
-            metadata_settings=metadata_settings,
+        standard_input = self.build_solidity_standard_input(
+            sources,
+            compiler_settings,
+            metadata_settings,
         )
-
-        raw_layout = self._extract_layout(contract_name, solc_output, contract_fqname)
-        layout = replace(
-            self._normalize_layout(raw_layout, contract_name),
-            compiler_version=compiler_version,
-        )
-        artifact = self._make_artifact(
+        pipeline = "solc-standard-json"
+        fingerprint = self.artifact_fingerprint(
             language="Solidity",
             compiler_version=compiler_version,
-            pipeline="solc-standard-json",
+            pipeline=pipeline,
             standard_input=standard_input,
-            compiler_output=solc_output,
-            sources=sources,
         )
-        return layout, artifact
+
+        def load(artifact: RawCompilerArtifact) -> StorageLayout:
+            raw_layout = self._extract_layout(
+                contract_name,
+                artifact.compiler_output,
+                contract_fqname,
+            )
+            return replace(
+                self._normalize_layout(raw_layout, contract_name),
+                compiler_version=compiler_version,
+            )
+
+        async def compile_artifact() -> RawCompilerArtifact:
+            solc_output, compiled_input = await self._compile_with_layout(
+                sources=sources,
+                version=compiler_version,
+                settings=compiler_settings,
+                metadata_settings=metadata_settings,
+            )
+            if compiled_input != standard_input:
+                raise CompilationError("Solidity compiler input changed unexpectedly")
+            return self._make_artifact(
+                language="Solidity",
+                compiler_version=compiler_version,
+                pipeline=pipeline,
+                standard_input=compiled_input,
+                compiler_output=solc_output,
+                sources=sources,
+            )
+
+        return await self._load_or_compile_artifact(
+            fingerprint=fingerprint,
+            language="Solidity",
+            compiler_version=compiler_version,
+            pipeline=pipeline,
+            standard_input=standard_input,
+            sources=sources,
+            compiler_artifact_repo=compiler_artifact_repo,
+            load=load,
+            compile_artifact=compile_artifact,
+        )
 
     async def compile_exact_namespace_types(
         self,
@@ -156,6 +299,7 @@ class LayoutParser:
         compiler_version: str,
         compiler_settings: Optional[dict],
         harness_source: str,
+        compiler_artifact_repo: CompilerArtifactRepository | None = None,
     ) -> tuple[dict[str, StorageType], dict]:
         """Compile a synthetic harness to obtain compiler-derived namespace types."""
         if ERC7201_HARNESS_SOURCE in sources:
@@ -164,26 +308,72 @@ class LayoutParser:
             )
         augmented_sources = dict(sources)
         augmented_sources[ERC7201_HARNESS_SOURCE] = harness_source
-        compiler_output, _ = await self._compile_with_layout(
-            sources=augmented_sources,
-            version=compiler_version,
-            settings=compiler_settings,
-            metadata_settings=compiler_settings,
+        standard_input = self.build_solidity_standard_input(
+            augmented_sources,
+            compiler_settings,
+            compiler_settings,
         )
-        raw_layout = (
-            compiler_output.get("contracts", {})
-            .get(ERC7201_HARNESS_SOURCE, {})
-            .get(ERC7201_HARNESS_CONTRACT, {})
-            .get("storageLayout")
+        pipeline = "solc-erc7201-harness"
+        fingerprint = self.artifact_fingerprint(
+            language="Solidity",
+            compiler_version=compiler_version,
+            pipeline=pipeline,
+            standard_input=standard_input,
         )
-        if not isinstance(raw_layout, dict):
-            raise LayoutNotFoundError(ERC7201_HARNESS_CONTRACT)
-        raw_types = raw_layout.get("types") or {}
-        if not raw_layout.get("storage") or not raw_types:
-            raise CompilationError(
-                "Namespace harness produced no compiler storage types"
+
+        def load(
+            artifact: RawCompilerArtifact,
+        ) -> tuple[dict[str, StorageType], dict]:
+            compiler_output = artifact.compiler_output
+            raw_layout = (
+                compiler_output.get("contracts", {})
+                .get(ERC7201_HARNESS_SOURCE, {})
+                .get(ERC7201_HARNESS_CONTRACT, {})
+                .get("storageLayout")
             )
-        return self._parse_types(raw_types), compiler_output
+            if not isinstance(raw_layout, dict):
+                raise LayoutNotFoundError(ERC7201_HARNESS_CONTRACT)
+            raw_types = raw_layout.get("types") or {}
+            if not raw_layout.get("storage") or not raw_types:
+                raise CompilationError(
+                    "Namespace harness produced no compiler storage types"
+                )
+            return self._parse_types(raw_types), compiler_output
+
+        async def compile_artifact() -> RawCompilerArtifact:
+            compiler_output, compiled_input = await self._compile_with_layout(
+                sources=augmented_sources,
+                version=compiler_version,
+                settings=compiler_settings,
+                metadata_settings=compiler_settings,
+            )
+            if compiled_input != standard_input:
+                raise CompilationError(
+                    "Namespace harness compiler input changed unexpectedly"
+                )
+            return self._make_artifact(
+                language="Solidity",
+                compiler_version=compiler_version,
+                pipeline=pipeline,
+                standard_input=compiled_input,
+                compiler_output=compiler_output,
+                sources=augmented_sources,
+            )
+
+        (namespace_types, compiler_output), _ = (
+            await self._load_or_compile_artifact(
+                fingerprint=fingerprint,
+                language="Solidity",
+                compiler_version=compiler_version,
+                pipeline=pipeline,
+                standard_input=standard_input,
+                sources=augmented_sources,
+                compiler_artifact_repo=compiler_artifact_repo,
+                load=load,
+                compile_artifact=compile_artifact,
+            )
+        )
+        return namespace_types, compiler_output
 
     def parse_from_raw_layout(self, contract_name: str, raw_layout: dict) -> StorageLayout:
         """
@@ -712,6 +902,7 @@ class LayoutParser:
         sources: dict[str, str],
         compiler_version: str,
         entry_source: Optional[str] = None,
+        compiler_artifact_repo: CompilerArtifactRepository | None = None,
     ) -> tuple[StorageLayout, RawCompilerArtifact]:
         vy_files = {k: v for k, v in sources.items() if k.endswith(".vy")}
         if not vy_files:
@@ -731,34 +922,61 @@ class LayoutParser:
                 f"Ambiguous Vyper entry source: {filenames}"
             )
         main_content = vy_files[main_file]
-
-        # Compile with Vyper
-        raw_layout, runtime_bytecode = await self._compile_vyper_with_layout(
-            source_content=main_content,
-            filename=main_file,
-            version=compiler_version,
-        )
-
-        layout = self._normalize_vyper_layout(
-            raw_layout,
-            contract_name,
+        standard_input = {
+            "language": "Vyper",
+            "sources": {
+                filename: {"content": content}
+                for filename, content in sources.items()
+            },
+            "settings": {
+                "compilationTarget": main_file,
+                "outputSelection": ["layout", "bytecode_runtime"],
+            },
+        }
+        pipeline = "vvm-layout"
+        fingerprint = self.artifact_fingerprint(
+            language="Vyper",
             compiler_version=compiler_version,
+            pipeline=pipeline,
+            standard_input=standard_input,
         )
-        # Vyper's layout output provides authoritative slots but older output
-        # versions expose incomplete type structure (and collapse duplicate
-        # pre-0.3.1 lock names). Enrich those positions with the verified
-        # source schema while retaining compiler slots as the authority.
-        from app.services.namespace_storage import NamespaceStorageParser
 
-        inferred = NamespaceStorageParser().parse_vyper_storage(
-            sources,
-            contract_name,
-            compiler_version,
-        )
-        if inferred:
-            compiled_by_name = {variable.name: variable for variable in layout.variables}
+        def load(artifact: RawCompilerArtifact) -> StorageLayout:
+            raw_layout = artifact.compiler_output.get("storageLayout")
+            runtime_bytecode = artifact.compiler_output.get("bytecodeRuntime")
+            if not isinstance(raw_layout, dict) or not isinstance(
+                runtime_bytecode,
+                str,
+            ):
+                raise CompilationError("Vyper compiler artifact is malformed")
+
+            layout = self._normalize_vyper_layout(
+                raw_layout,
+                contract_name,
+                compiler_version=compiler_version,
+            )
+
+            # Vyper's layout output provides authoritative slots but older output
+            # versions expose incomplete type structure (and collapse duplicate
+            # pre-0.3.1 lock names). Enrich those positions with the verified
+            # source schema while retaining compiler slots as the authority.
+            from app.services.namespace_storage import NamespaceStorageParser
+
+            inferred = NamespaceStorageParser().parse_vyper_storage(
+                sources,
+                contract_name,
+                compiler_version,
+            )
+            if not inferred:
+                return layout
+
+            compiled_by_name = {
+                variable.name: variable for variable in layout.variables
+            }
             name_counts = {
-                name: sum(variable.name == name for variable in inferred.variables)
+                name: sum(
+                    variable.name == name for variable in inferred.variables
+                )
                 for name in {variable.name for variable in inferred.variables}
             }
             enriched_variables = []
@@ -769,12 +987,14 @@ class LayoutParser:
                     and name_counts[variable.name] > 1
                 )
                 if compiled and not duplicate_lock:
-                    enriched_variables.append(replace(
-                        variable,
-                        slot=compiled.slot,
-                        provenance="compiler_layout",
-                        confidence="exact",
-                    ))
+                    enriched_variables.append(
+                        replace(
+                            variable,
+                            slot=compiled.slot,
+                            provenance="compiler_layout",
+                            confidence="exact",
+                        )
+                    )
                 else:
                     enriched_variables.append(variable)
             inferred_names = {variable.name for variable in inferred.variables}
@@ -783,7 +1003,7 @@ class LayoutParser:
                 for variable in layout.variables
                 if variable.name not in inferred_names
             )
-            layout = StorageLayout(
+            return StorageLayout(
                 contract_name=contract_name,
                 variables=enriched_variables,
                 types=inferred.types,
@@ -791,26 +1011,36 @@ class LayoutParser:
                 compiler_version=compiler_version,
                 storage_scheme=SEQUENTIAL_STORAGE,
             )
-        standard_input = {
-            "language": "Vyper",
-            "sources": {
-                filename: {"content": content}
-                for filename, content in sources.items()
-            },
-            "settings": {"outputSelection": ["layout", "bytecode_runtime"]},
-        }
-        artifact = self._make_artifact(
+
+        async def compile_artifact() -> RawCompilerArtifact:
+            raw_layout, runtime_bytecode = await self._compile_vyper_with_layout(
+                source_content=main_content,
+                filename=main_file,
+                version=compiler_version,
+            )
+            return self._make_artifact(
+                language="Vyper",
+                compiler_version=compiler_version,
+                pipeline=pipeline,
+                standard_input=standard_input,
+                compiler_output={
+                    "storageLayout": raw_layout,
+                    "bytecodeRuntime": runtime_bytecode,
+                },
+                sources=sources,
+            )
+
+        return await self._load_or_compile_artifact(
+            fingerprint=fingerprint,
             language="Vyper",
             compiler_version=compiler_version,
-            pipeline="vvm-layout",
+            pipeline=pipeline,
             standard_input=standard_input,
-            compiler_output={
-                "storageLayout": raw_layout,
-                "bytecodeRuntime": runtime_bytecode,
-            },
             sources=sources,
+            compiler_artifact_repo=compiler_artifact_repo,
+            load=load,
+            compile_artifact=compile_artifact,
         )
-        return layout, artifact
 
     async def _compile_vyper_with_layout(
         self,

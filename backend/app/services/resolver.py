@@ -328,11 +328,10 @@ class ContractResolver:
                         compiler_settings=verification.compiler_settings,
                         metadata_settings=verification.compiler_settings,
                         contract_fqname=compilation_target,
+                        compiler_artifact_repo=self.compiler_artifact_repo,
                     )
                 )
                 exact_namespace_base = True
-                if self.compiler_artifact_repo:
-                    await self.compiler_artifact_repo.save(compiler_artifact)
                 harness_source = (
                     self.namespace_parser.build_exact_erc7201_harness(
                         compiler_artifact.compiler_output
@@ -345,6 +344,7 @@ class ContractResolver:
                             compiler_version=verification.compiler_version,
                             compiler_settings=verification.compiler_settings,
                             harness_source=harness_source,
+                            compiler_artifact_repo=self.compiler_artifact_repo,
                         )
                     )
                     for type_id, type_info in namespace_types.items():
@@ -418,10 +418,9 @@ class ContractResolver:
                                 and len(verification.compilation_target) == 1
                                 else None
                             ),
+                            compiler_artifact_repo=self.compiler_artifact_repo,
                         )
                     )
-                    if self.compiler_artifact_repo:
-                        await self.compiler_artifact_repo.save(compiler_artifact)
                 except Exception as e:
                     logger.warning(
                         "Exact Vyper layout unavailable for %s: %s",
@@ -679,6 +678,7 @@ class ContractResolver:
                         sources=verification.sources,
                         compiler_version=verification.compiler_version,
                         entry_source=entry_source,
+                        compiler_artifact_repo=self.compiler_artifact_repo,
                     )
                 )
                 if not self._vyper_artifact_matches_runtime(
@@ -694,6 +694,7 @@ class ContractResolver:
                     compiler_settings=verification.compiler_settings,
                     metadata_settings=verification.compiler_settings,
                     contract_fqname=compilation_target,
+                    compiler_artifact_repo=self.compiler_artifact_repo,
                 )
                 if not self._artifact_matches_runtime(
                     artifact,
@@ -713,8 +714,6 @@ class ContractResolver:
                 )
             if not layout.variables or not self._layout_is_exact(layout):
                 return None
-            if self.compiler_artifact_repo:
-                await self.compiler_artifact_repo.save(artifact)
         except Exception as exc:
             logger.info(
                 "Equivalent layout proof unavailable for %s: %s",

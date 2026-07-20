@@ -23,7 +23,14 @@ class CompilerArtifactRepository:
             "source_hashes": artifact.source_hashes,
         }
         stmt = insert(CompilerArtifact).values(**values)
-        stmt = stmt.on_conflict_do_nothing(index_elements=["fingerprint"])
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["fingerprint"],
+            set_={
+                key: value
+                for key, value in values.items()
+                if key != "fingerprint"
+            },
+        )
         await self.session.execute(stmt)
         await self.session.commit()
 

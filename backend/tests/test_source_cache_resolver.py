@@ -531,6 +531,7 @@ class ResolverSourceIdentityTests(unittest.IsolatedAsyncioTestCase):
             sources=verification.sources,
             compiler_version="0.3.10",
             entry_source="Equivalent.vy",
+            compiler_artifact_repo=None,
         )
 
     async def test_vyper_duplicate_rejects_runtime_mismatch(self):
