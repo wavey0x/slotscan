@@ -638,29 +638,41 @@ def _group_changes_by_slot(
                         # Also set the struct definition for display
                         struct_definition = _get_struct_definition(first.variable, layout)
 
-            # Handle dynamic array struct base slots (e.g., rewards[0] where RewardType is a struct)
+            # Handle static or dynamic array struct elements. The decoder
+            # returns only the members stored in this physical word, so use
+            # those exact names rather than assuming slot zero.
             if (
-                first.encoding == "dynamic_array"
-                and first.element_type_id
+                first.element_type_id
+                and first.array_index is not None
                 and first.variable_path
                 and "." not in first.variable_path
                 and packed_fields is None
             ):
-                # Get struct type from element_type_id
                 struct_type = layout.get_type(first.element_type_id) if layout else None
                 if struct_type and struct_type.members:
-                    # Find members in slot 0 of the struct (base slot)
-                    slot_0_members = _get_struct_members_in_slot(struct_type, 0)
-                    if len(slot_0_members) > 0:
-                        # Decode packed struct members
+                    decoded_member_names = {
+                        name
+                        for decoded in (
+                            summary_before_decoded,
+                            summary_after_decoded,
+                        )
+                        if isinstance(decoded, dict)
+                        for name in decoded
+                    }
+                    slot_members = [
+                        member
+                        for member in struct_type.members
+                        if member.name in decoded_member_names
+                    ]
+                    if slot_members:
                         packed_fields = []
                         initial_bytes = bytes.fromhex(summary_before[2:]) if summary_before.startswith("0x") else bytes.fromhex(summary_before)
                         final_bytes = bytes.fromhex(summary_after[2:]) if summary_after.startswith("0x") else bytes.fromhex(summary_after)
 
-                        initial_decoded = decoder.decode_packed_slot(initial_bytes, slot_0_members, layout.types)
-                        final_decoded = decoder.decode_packed_slot(final_bytes, slot_0_members, layout.types)
+                        initial_decoded = decoder.decode_packed_slot(initial_bytes, slot_members, layout.types)
+                        final_decoded = decoder.decode_packed_slot(final_bytes, slot_members, layout.types)
 
-                        for member in slot_0_members:
+                        for member in slot_members:
                             member_type = layout.get_type(member.type_id)
                             packed_fields.append(
                                 PackedFieldResponse(

@@ -7,7 +7,7 @@ import { SlotHistoryTable } from '@/components/diff/DiffTable';
 import { KeyedVariablePath } from '@/components/diff/KeyedVariablePath';
 import { slotVariablePath } from '@/components/diff/slotDisplay';
 import { StorageTable, StorageTableColumns, StorageTableHeader, storageCellClass } from '@/components/diff/StorageTable';
-import { CopyableValue, deriveStructuredValueFields, isStructuredDecodedValue, StructuredValueDiff, ValueDiff } from '@/components/diff/ValueDiff';
+import { CopyableValue, deriveStructuredValueFields, isStructuredDecodedValue, StructuredFieldNames, StructuredValueDiff, ValueDiff } from '@/components/diff/ValueDiff';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { HoverCell } from '@/components/ui/HoverCell';
 import { TimelineVariableDisclosure } from '@/components/transaction/TimelineVariableDisclosure';
@@ -210,6 +210,7 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
               )
             : null;
           const structMember = timelineStructMember(slot, structuredFields?.changedFields ?? []);
+          const structuredFieldNames = structuredFields?.displayedFields ?? [];
           const variablePath = slotVariablePath(slot, structMember?.name);
           const memberSuffix = structMember ? `.${structMember.name}` : null;
           const memberBasePath = memberSuffix && variablePath?.endsWith(memberSuffix)
@@ -218,6 +219,10 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
           const variableDetail = variablePath || slot.variable_name || slot.slot;
           const variableType = structMember?.type_label || slot.value_type || slot.type_label;
           const unchanged = event.effect === 'noop';
+          const hasStructuredChildren = !structMember && structuredFieldNames.length > 0;
+          const structuredHeaderClass = variablePath?.includes('[')
+            ? (showContract ? 'h-14 overflow-hidden sm:h-10' : 'h-10 overflow-hidden')
+            : (showContract ? 'h-10 overflow-hidden sm:h-5' : 'h-5 overflow-hidden');
 
           return (
             <tr key={`${contract.storage_address}:${slot.slot}:${event.step}:${ordinal}`} data-testid="timeline-event" className="border-b border-gray-200 text-xs hover:bg-gray-50">
@@ -235,44 +240,57 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                 </td>
               )}
               <td className={`${storageCellClass} min-w-0 overflow-hidden`} data-testid="timeline-variable">
-                {showContract && (
-                  <a href={getAddressExplorerUrl(chain, contract.storage_address)} target="_blank" rel="noopener noreferrer" className="block truncate text-[10px] text-gray-500 hover:underline sm:hidden" title={contract.storage_address}>
-                    {contractDisplayLabel(contract)}
-                  </a>
-                )}
-                <TimelineVariableDisclosure
-                  contract={contract}
-                  chain={chain}
-                  variable={variableDetail}
-                  typeLabel={variableType}
-                  isRawSlot={!variablePath && !slot.variable_name}
-                >
-                  {variablePath?.includes('[') ? (
-                    <KeyedVariablePath
-                      path={variablePath}
-                      typeLabel={variableType}
-                      chainId={chain}
-                      canonicalLeaf={Boolean(memberBasePath)}
-                      primaryClassName="font-normal"
-                    />
-                  ) : memberBasePath && structMember ? (
-                    <div className="flex min-w-0 font-mono text-gray-900">
-                      <span className="min-w-0 truncate">{memberBasePath}</span>
-                      <span className="shrink-0">.{structMember.name}</span>
-                    </div>
-                  ) : (
-                    <div className="truncate font-mono text-gray-900">{variablePath || truncateHash(slot.slot, 7)}</div>
+                <div className={hasStructuredChildren ? structuredHeaderClass : undefined}>
+                  {showContract && (
+                    <a href={getAddressExplorerUrl(chain, contract.storage_address)} target="_blank" rel="noopener noreferrer" className="block truncate text-[10px] text-gray-500 hover:underline sm:hidden" title={contract.storage_address}>
+                      {contractDisplayLabel(contract)}
+                    </a>
                   )}
-                </TimelineVariableDisclosure>
+                  <TimelineVariableDisclosure
+                    contract={contract}
+                    chain={chain}
+                    variable={variableDetail}
+                    typeLabel={variableType}
+                    isRawSlot={!variablePath && !slot.variable_name}
+                  >
+                    <div className="min-w-0">
+                      {variablePath?.includes('[') ? (
+                        <KeyedVariablePath
+                          path={variablePath}
+                          typeLabel={variableType}
+                          chainId={chain}
+                          canonicalLeaf={Boolean(memberBasePath)}
+                          primaryClassName="font-normal"
+                        />
+                      ) : memberBasePath && structMember ? (
+                        <div className="flex min-w-0 font-mono text-gray-900">
+                          <span className="min-w-0 truncate">{memberBasePath}</span>
+                          <span className="shrink-0">.{structMember.name}</span>
+                        </div>
+                      ) : (
+                        <div className="truncate font-mono text-gray-900">{variablePath || truncateHash(slot.slot, 7)}</div>
+                      )}
+                    </div>
+                  </TimelineVariableDisclosure>
+                </div>
+                {hasStructuredChildren && (
+                  <StructuredFieldNames
+                    fields={structuredFieldNames}
+                    members={slot.struct_definition?.members}
+                    className="mt-0"
+                  />
+                )}
               </td>
               <td className={`${storageCellClass} min-w-0 overflow-hidden font-mono`} data-testid="timeline-value">
                 {!showHex && structuredBefore && structuredAfter && structuredFields ? (
-                  <StructuredValueDiff
-                    before={structuredBefore}
-                    after={structuredAfter}
-                    showFieldNames={!structMember}
-                    displayedFields={structuredFields.displayedFields}
-                  />
+                  <>
+                    {hasStructuredChildren && <div aria-hidden="true" className={structuredHeaderClass} />}
+                    <StructuredValueDiff
+                      before={structuredBefore}
+                      after={structuredAfter}
+                      displayedFields={structuredFields.displayedFields}
+                    />
+                  </>
                 ) : (
                   <ValueDiff
                     unchanged={unchanged}

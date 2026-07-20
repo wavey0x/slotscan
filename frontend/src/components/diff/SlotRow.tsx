@@ -16,7 +16,13 @@ import {
 } from '@/lib/utils';
 import { HoverCell } from '@/components/ui/HoverCell';
 import { DetailPopover } from '@/components/ui/DetailPopover';
-import { isStructuredDecodedValue, StructuredValueDiff, ValueDiff } from './ValueDiff';
+import {
+  deriveStructuredValueFields,
+  isStructuredDecodedValue,
+  StructuredFieldNames,
+  StructuredValueDiff,
+  ValueDiff,
+} from './ValueDiff';
 import { KeyedVariablePath } from './KeyedVariablePath';
 import { StorageEvidenceDetail } from './StorageEvidenceDetail';
 import { InterimPackedChangeRows, PackedFieldRow } from './PackedFieldRows';
@@ -63,6 +69,22 @@ export function SlotRow({
     revertedWriteCount,
   } = deriveSlotDisplay(slot, showHex);
   const canExpand = hasInterimChanges;
+  const structuredBefore = !showHex
+    && !hasPacked
+    && isStructuredDecodedValue(slot.before.value_decoded)
+    ? slot.before.value_decoded
+    : null;
+  const structuredAfter = !showHex
+    && !hasPacked
+    && isStructuredDecodedValue(slot.after.value_decoded)
+    ? slot.after.value_decoded
+    : null;
+  const structuredFields = structuredBefore && structuredAfter
+    ? deriveStructuredValueFields(structuredBefore, structuredAfter)
+    : null;
+  const structuredHeaderClass = hasKeyedVariablePath
+    ? 'h-10 overflow-hidden'
+    : 'h-5 overflow-hidden';
 
   const revertedNotice = revertedWriteCount > 0 ? (
     <span className="inline-block mt-0.5 text-[9px] uppercase tracking-wide text-amber-600">
@@ -164,75 +186,90 @@ export function SlotRow({
             {canExpand ? expandButton : <span className="w-4 h-4 inline-block" />}
           </td>
 
-          <td className={cn('px-1 py-0.5 align-top w-48 whitespace-normal', isFirst && 'pt-1')}>
-            <DetailPopover content={variableDetail} delay={200} maxWidth="max-w-sm">
-              {hasKeyedVariablePath && displayVariablePath ? (
-                <KeyedVariablePath
-                  path={displayVariablePath}
-                  typeLabel={resolvedLeafType}
-                  chainId={chainId}
-                  canonicalLeaf={Boolean(singlePackedField && !showHex)}
-                />
-              ) : singlePackedField && !showHex && displayVariablePath ? (
-                <span className="block break-words font-mono text-xs font-medium leading-tight text-gray-900">
-                  {displayVariablePath}
-                </span>
-              ) : (
-                <span className="space-y-0 break-words block no-underline decoration-transparent">
-                  {/* Struct type + variable name */}
-                  {slot.struct_definition?.name && (
-                    <span className="text-xs font-mono leading-tight block">
-                      <span className="text-gray-400">{slot.struct_definition.name}</span>{' '}
-                      <span className="text-gray-900 font-medium">{slot.variable_name}</span>
-                    </span>
-                  )}
-                  {/* Simple mapping variable name */}
-                  {slot.is_mapping && !slot.struct_definition?.name && slot.variable_name && (
-                    <span className="text-xs font-mono leading-tight block">
-                      <span className="text-gray-900 font-medium">{variableDisplayName}</span>
-                    </span>
-                  )}
-                  {/* Struct field member */}
-                  {slot.struct_field && slot.struct_definition ? (
-                    <span className="text-xs font-mono leading-tight flex items-start">
-                      <span className="text-gray-300 mr-1 select-none">└</span>
-                      <span>
-                        <span className="text-gray-400">
-                          {slot.struct_definition.members.find(m => m.name === slot.struct_field)?.type_label
-                            || slot.value_type
-                            || slot.type_label}
-                        </span>{' '}
+          <td
+            className={cn('px-1 py-0.5 align-top w-48 whitespace-normal', isFirst && 'pt-1')}
+            data-testid="slot-variable"
+          >
+            <div className={structuredFields ? structuredHeaderClass : undefined}>
+              <DetailPopover content={variableDetail} delay={200} maxWidth="max-w-sm">
+                {hasKeyedVariablePath && displayVariablePath ? (
+                  <KeyedVariablePath
+                    path={displayVariablePath}
+                    typeLabel={resolvedLeafType}
+                    chainId={chainId}
+                    canonicalLeaf={Boolean(singlePackedField && !showHex)}
+                  />
+                ) : singlePackedField && !showHex && displayVariablePath ? (
+                  <span className="block break-words font-mono text-xs font-medium leading-tight text-gray-900">
+                    {displayVariablePath}
+                  </span>
+                ) : (
+                  <span className="space-y-0 break-words block no-underline decoration-transparent">
+                    {/* Struct type + variable name */}
+                    {slot.struct_definition?.name && (
+                      <span className="text-xs font-mono leading-tight block">
+                        <span className="text-gray-400">{slot.struct_definition.name}</span>{' '}
+                        <span className="text-gray-900 font-medium">{slot.variable_name}</span>
+                      </span>
+                    )}
+                    {/* Simple mapping variable name */}
+                    {slot.is_mapping && !slot.struct_definition?.name && slot.variable_name && (
+                      <span className="text-xs font-mono leading-tight block">
                         <span className="text-gray-900 font-medium">{variableDisplayName}</span>
                       </span>
-                    </span>
-                  ) : slot.is_mapping && !slot.struct_definition?.name && slot.value_type ? (
-                    <span className="text-xs font-mono leading-tight flex items-start">
-                      <span className="text-gray-300 mr-1 select-none">└</span>
-                      <span className="text-gray-400">{slot.value_type}</span>
-                    </span>
-                  ) : !slot.struct_definition?.name && !slot.is_mapping ? (
-                    <span className="text-xs font-mono leading-tight block">
-                      {/* For single packed field, prefer packed field's type; otherwise use slot's type */}
-                      {(singlePackedField?.type_label || slot.value_type || slot.type_label) && (
-                        <><span className="text-gray-400">{singlePackedField?.type_label || slot.value_type || slot.type_label}</span>{' '}</>
-                      )}
-                      <span className="text-gray-900 font-medium">{singlePackedField?.name || variableDisplayName}</span>
-                      {variableLabel && (
-                        <span className="text-gray-400 ml-1">({variableLabel})</span>
-                      )}
-                      {/* A collapsed multi-field slot still needs to disclose that it is packed. */}
-                      {(slot.packed_fields?.length ?? 0) > 1 && (
-                        <span data-testid="packed-slot-marker" className="ml-1.5 select-none text-[9px] uppercase tracking-wide text-gray-400">packed</span>
-                      )}
-                    </span>
-                  ) : null}
-                </span>
-              )}
-            </DetailPopover>
+                    )}
+                    {/* Struct field member */}
+                    {slot.struct_field && slot.struct_definition ? (
+                      <span className="text-xs font-mono leading-tight flex items-start">
+                        <span className="text-gray-300 mr-1 select-none">└</span>
+                        <span>
+                          <span className="text-gray-400">
+                            {slot.struct_definition.members.find(m => m.name === slot.struct_field)?.type_label
+                              || slot.value_type
+                              || slot.type_label}
+                          </span>{' '}
+                          <span className="text-gray-900 font-medium">{variableDisplayName}</span>
+                        </span>
+                      </span>
+                    ) : slot.is_mapping && !slot.struct_definition?.name && slot.value_type ? (
+                      <span className="text-xs font-mono leading-tight flex items-start">
+                        <span className="text-gray-300 mr-1 select-none">└</span>
+                        <span className="text-gray-400">{slot.value_type}</span>
+                      </span>
+                    ) : !slot.struct_definition?.name && !slot.is_mapping ? (
+                      <span className="text-xs font-mono leading-tight block">
+                        {/* For single packed field, prefer packed field's type; otherwise use slot's type */}
+                        {(singlePackedField?.type_label || slot.value_type || slot.type_label) && (
+                          <><span className="text-gray-400">{singlePackedField?.type_label || slot.value_type || slot.type_label}</span>{' '}</>
+                        )}
+                        <span className="text-gray-900 font-medium">{singlePackedField?.name || variableDisplayName}</span>
+                        {variableLabel && (
+                          <span className="text-gray-400 ml-1">({variableLabel})</span>
+                        )}
+                        {/* A collapsed multi-field slot still needs to disclose that it is packed. */}
+                        {(slot.packed_fields?.length ?? 0) > 1 && (
+                          <span data-testid="packed-slot-marker" className="ml-1.5 select-none text-[9px] uppercase tracking-wide text-gray-400">packed</span>
+                        )}
+                      </span>
+                    ) : null}
+                  </span>
+                )}
+              </DetailPopover>
+            </div>
+            {structuredFields && (
+              <StructuredFieldNames
+                fields={structuredFields.displayedFields}
+                members={slot.struct_definition?.members}
+                className="mt-0"
+              />
+            )}
             {revertedNotice && <div>{revertedNotice}</div>}
           </td>
 
-          <td className={cn('px-1 py-0.5 align-top', isFirst && 'pt-1')}>
+          <td
+            className={cn('px-1 py-0.5 align-top', isFirst && 'pt-1')}
+            data-testid="slot-value"
+          >
             {(() => {
               // Use packed field values if single packed field without struct
               const beforeDecoded = singlePackedField ? singlePackedField.before.value_decoded : slot.before.value_decoded;
@@ -242,12 +279,16 @@ export function SlotRow({
 
               if (!showHex && isStructuredDecodedValue(beforeDecoded) && isStructuredDecodedValue(afterDecoded)) {
                 return (
-                  <StructuredValueDiff
-                    before={beforeDecoded}
-                    after={afterDecoded}
-                    beforeClassName="text-gray-300"
-                    afterClassName={unchanged ? 'text-gray-300' : 'text-gray-900'}
-                  />
+                  <>
+                    {structuredFields && <div aria-hidden="true" className={structuredHeaderClass} />}
+                    <StructuredValueDiff
+                      before={beforeDecoded}
+                      after={afterDecoded}
+                      beforeClassName="text-gray-300"
+                      afterClassName={unchanged ? 'text-gray-300' : 'text-gray-900'}
+                      displayedFields={structuredFields?.displayedFields}
+                    />
+                  </>
                 );
               }
 
@@ -322,29 +363,54 @@ export function SlotRow({
         const newVal = storageDisplayValue(change.after.value_decoded, change.after.value_encoded, showHex);
         const unchanged = valuesEqual(change.before.value_decoded, change.after.value_decoded);
         const afterClassName = unchanged ? 'text-gray-400' : 'text-gray-900';
+        const interimStructuredBefore = !showHex
+          && isStructuredDecodedValue(change.before.value_decoded)
+          ? change.before.value_decoded
+          : null;
+        const interimStructuredAfter = !showHex
+          && isStructuredDecodedValue(change.after.value_decoded)
+          ? change.after.value_decoded
+          : null;
+        const interimStructuredFields = interimStructuredBefore && interimStructuredAfter
+          ? deriveStructuredValueFields(
+              interimStructuredBefore,
+              interimStructuredAfter,
+              unchanged,
+            )
+          : null;
 
         return (
           <tr key={idx} className={cn('bg-gray-100/80', !isFirstChange && 'border-t border-gray-300')}>
             <td className="pl-3 py-0.5 align-top" />
-            <td className="pl-3 py-0.5 align-top">
-              <div className="flex flex-col items-start gap-0.5">
-                <span className="text-[10px] text-gray-400">{idx + 1}/{slot.changes.length}</span>
-                {change.frame_outcome === 'reverted' && (
-                  <span className="text-[9px] uppercase tracking-wide text-amber-600">
-                    reverted
-                  </span>
+            <td className="pl-3 py-0.5 align-top" data-testid="interim-variable">
+              <div className="flex items-start gap-2">
+                <div className="w-8 shrink-0">
+                  <div className="flex flex-col items-start gap-0.5">
+                    <span className="text-[10px] text-gray-400">{idx + 1}/{slot.changes.length}</span>
+                    {change.frame_outcome === 'reverted' && (
+                      <span className="text-[9px] uppercase tracking-wide text-amber-600">
+                        reverted
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {interimStructuredFields && (
+                  <StructuredFieldNames
+                    fields={interimStructuredFields.displayedFields}
+                    members={slot.struct_definition?.members}
+                    className="mt-0 min-w-0 flex-1"
+                  />
                 )}
               </div>
             </td>
-            <td className="pl-3 py-0.5 align-top">
-              {!showHex
-                && isStructuredDecodedValue(change.before.value_decoded)
-                && isStructuredDecodedValue(change.after.value_decoded) ? (
+            <td className="pl-3 py-0.5 align-top" data-testid="interim-value">
+              {interimStructuredBefore && interimStructuredAfter && interimStructuredFields ? (
                 <StructuredValueDiff
-                  before={change.before.value_decoded}
-                  after={change.after.value_decoded}
+                  before={interimStructuredBefore}
+                  after={interimStructuredAfter}
                   beforeClassName="text-gray-300"
                   afterClassName={afterClassName}
+                  displayedFields={interimStructuredFields.displayedFields}
                 />
               ) : (
                 <ValueDiff

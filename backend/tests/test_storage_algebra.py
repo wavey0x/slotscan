@@ -10,6 +10,7 @@ from app.services.layout_index import LayoutIndex, array_packing
 from app.services.namespace_storage import NamespaceStorageParser
 from app.config import Settings
 from app.services.decoder import TypeDecoder
+from app.services.layout import LayoutParser
 from app.services.tracer.tracer import TransactionAnalysisService
 from app.services.tracer.slot_resolver import SlotPathResolver
 from app.services.tracer.preimage_resolver import PreimageResolver
@@ -982,6 +983,119 @@ class PackedArrayLayoutTests(unittest.TestCase):
         self.assertIsNotNone(index.first_at(5))
         self.assertIsNotNone(index.first_at(6))
         self.assertIsNone(index.first_at(7))
+
+    def test_nested_struct_array_uses_outer_length_and_decodes_element(self):
+        array_id = (
+            "t_array(t_struct(Observation)3633_storage)65535_storage"
+        )
+        struct_id = "t_struct(Observation)3633_storage"
+        raw_layout = {
+            "storage": [
+                {
+                    "label": "observations",
+                    "slot": "13",
+                    "offset": 0,
+                    "type": array_id,
+                }
+            ],
+            "types": {
+                "t_uint32": {
+                    "encoding": "inplace",
+                    "label": "uint32",
+                    "numberOfBytes": "4",
+                },
+                "t_uint216": {
+                    "encoding": "inplace",
+                    "label": "uint216",
+                    "numberOfBytes": "27",
+                },
+                "t_bool": {
+                    "encoding": "inplace",
+                    "label": "bool",
+                    "numberOfBytes": "1",
+                },
+                struct_id: {
+                    "encoding": "inplace",
+                    "label": "struct OracleLib.Observation",
+                    "numberOfBytes": "32",
+                    "members": [
+                        {
+                            "label": "blockTimestamp",
+                            "slot": "0",
+                            "offset": 0,
+                            "type": "t_uint32",
+                        },
+                        {
+                            "label": "lnImpliedRateCumulative",
+                            "slot": "0",
+                            "offset": 4,
+                            "type": "t_uint216",
+                        },
+                        {
+                            "label": "initialized",
+                            "slot": "0",
+                            "offset": 31,
+                            "type": "t_bool",
+                        },
+                    ],
+                },
+                array_id: {
+                    "encoding": "inplace",
+                    "label": "struct OracleLib.Observation[65535]",
+                    "numberOfBytes": "2097120",
+                    "base": struct_id,
+                },
+            },
+        }
+        layout = LayoutParser().parse_from_raw_layout(
+            "PendleMarket",
+            raw_layout,
+        )
+        array_type = layout.get_type(array_id)
+        self.assertIsNotNone(array_type)
+        self.assertEqual(array_type.array_length, 65535)
+
+        tracer = TransactionAnalysisService(
+            object(),
+            Settings(),
+            TypeDecoder(),
+        )
+        changes = tracer._decode_changes(
+            [
+                (
+                    f"0x{15:064x}",
+                    f"0x{1:064x}",
+                    "0x010000000000000000000000000000000000"
+                    "b86b37dbde24d2490b3865a19313",
+                    1744,
+                    34249,
+                )
+            ],
+            layout,
+        )
+
+        self.assertEqual(changes[0].variable_path, "observations[2]")
+        self.assertEqual(changes[0].array_index, 2)
+        self.assertEqual(changes[0].element_type_id, struct_id)
+        self.assertEqual(
+            changes[0].new_decoded.decoded,
+            {
+                "blockTimestamp": 1705087763,
+                "lnImpliedRateCumulative": 870893259518843355204408,
+                "initialized": True,
+            },
+        )
+
+        grouped = _group_changes_by_slot(changes, layout)
+        self.assertEqual(
+            [field.name for field in grouped[0].packed_fields],
+            [
+                "blockTimestamp",
+                "lnImpliedRateCumulative",
+                "initialized",
+            ],
+        )
+        self.assertEqual(grouped[0].struct_definition.name, "Observation")
 
     def test_every_element_in_packed_word_has_exact_offset(self):
         locations = self.layout.get_static_array_locations(self.variable, 5)

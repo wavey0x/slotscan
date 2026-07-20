@@ -182,7 +182,14 @@ function structuredValueSlot() {
     after,
     packed_fields: null,
     struct_field: null,
-    struct_definition: null,
+    struct_definition: {
+      name: 'Vest',
+      members: [
+        { name: 'duration', type_label: 'uint64', slot_offset: 0, byte_offset: 0, size: 8 },
+        { name: 'amount', type_label: 'uint128', slot_offset: 0, byte_offset: 8, size: 16 },
+        { name: 'claimed', type_label: 'uint64', slot_offset: 0, byte_offset: 24, size: 8 },
+      ],
+    },
     changes: [{
       before,
       after,
@@ -642,6 +649,11 @@ test('transaction histories disclose proven equivalent layout sources', async ({
 
 test('structured values show only changed fields without spilling', async ({ page }) => {
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  const slot = structuredValueSlot();
+  slot.changes = [
+    slot.changes[0],
+    { ...slot.changes[0], step: slot.changes[0].step + 1 },
+  ];
   const contract = resolutionContract({
     storage_address: '0x6666666666666666666666666666666666666666',
     code_addresses: ['0x6666666666666666666666666666666666666666'],
@@ -649,7 +661,7 @@ test('structured values show only changed fields without spilling', async ({ pag
     is_verified: true,
     layout_available: true,
     resolution: { resolved: 1, total: 1 },
-    slots: [structuredValueSlot()],
+    slots: [slot],
   });
   await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
     await route.fulfill({ json: resolutionResponse([contract]) });
@@ -658,12 +670,22 @@ test('structured values show only changed fields without spilling', async ({ pag
   await page.goto(`/1/tx/${RESOLUTION_TX}`);
   await page.getByTestId('contract-toggle').click();
 
+  const variable = page.getByTestId('slot-variable');
   const diff = page.getByTestId('structured-value-diff');
+  const fields = variable.getByTestId('structured-variable-fields');
+  await expect(fields).toContainText('uint64 claimed');
+  await expect(fields.getByText('duration', { exact: true })).toHaveCount(0);
+  await expect(fields.getByText('amount', { exact: true })).toHaveCount(0);
   await expect(diff).toBeVisible();
-  await expect(diff.getByText('claimed', { exact: true })).toBeVisible();
-  await expect(diff.getByText('duration', { exact: true })).toHaveCount(0);
-  await expect(diff.getByText('amount', { exact: true })).toHaveCount(0);
+  await expect(diff).not.toContainText('claimed');
+  await expect(diff).not.toContainText('duration');
+  await expect(diff).not.toContainText('amount');
   await expect(diff).toContainText('2e18');
+  const fieldBox = await fields.getByTestId('structured-variable-field').boundingBox();
+  const valueBox = await diff.getByTestId('structured-field-change').boundingBox();
+  expect(fieldBox).not.toBeNull();
+  expect(valueBox).not.toBeNull();
+  expect(Math.abs(fieldBox!.y - valueBox!.y)).toBeLessThan(2);
   expect(await diff.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   const beforeBox = await diff.getByTestId('value-before').boundingBox();
   const afterBox = await diff.getByTestId('value-after').boundingBox();
@@ -674,16 +696,35 @@ test('structured values show only changed fields without spilling', async ({ pag
 
   await diff.getByRole('button', { name: 'Copy new claimed' }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('2000000000000000000');
+
+  await page.getByRole('button', { name: 'Expand write history' }).click();
+  await expect(page.getByTestId('interim-variable')).toHaveCount(2);
+  await expect(page.getByTestId('interim-variable').first()).toContainText('uint64 claimed');
+  const interimFieldBox = await page.getByTestId('interim-variable').first()
+    .getByTestId('structured-variable-field').boundingBox();
+  const interimValueBox = await page.getByTestId('interim-value').first()
+    .getByTestId('structured-field-change').boundingBox();
+  expect(interimFieldBox).not.toBeNull();
+  expect(interimValueBox).not.toBeNull();
+  expect(Math.abs(interimFieldBox!.y - interimValueBox!.y)).toBeLessThan(2);
+  for (const valueCell of await page.getByTestId('interim-value').all()) {
+    await expect(valueCell).not.toContainText('claimed');
+  }
 });
 
 test('packed change detection uses full values rather than compact display text', async ({ page }) => {
+  const slot = packedStructSlot();
+  slot.changes = [
+    slot.changes[0],
+    { ...slot.changes[0], step: slot.changes[0].step + 1 },
+  ];
   const contract = resolutionContract({
     storage_address: '0x6666666666666666666666666666666666666666',
     code_addresses: ['0x6666666666666666666666666666666666666666'],
     name: 'PackedValues',
     is_verified: true,
     layout_available: true,
-    slots: [packedStructSlot()],
+    slots: [slot],
   });
   await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
     await route.fulfill({ json: resolutionResponse([contract]) });
@@ -697,6 +738,14 @@ test('packed change detection uses full values rather than compact display text'
   await expect(roundedRow.getByTestId('value-after')).toContainText('1.2345e15');
   await expect(roundedRow.getByTestId('value-arrow')).toBeVisible();
   await expect(page.getByText('anchor', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Expand write history' }).click();
+  await expect(page.getByTestId('interim-variable').filter({ hasText: 'rounded' })).toHaveCount(2);
+  await expect(page.getByTestId('interim-variable').filter({ hasText: 'anchor' })).toHaveCount(2);
+  for (const valueCell of await page.getByTestId('interim-value').all()) {
+    await expect(valueCell).not.toContainText('rounded');
+    await expect(valueCell).not.toContainText('anchor');
+  }
 });
 
 test('collapsed no-op packed slots retain their packed marker in hex mode', async ({ page }) => {
@@ -841,8 +890,15 @@ test('timeline keeps packed paths compact and exposes contract identity across v
 
   const multiRow = page.getByTestId('timeline-event').filter({ hasText: 'proposalData[21]' });
   await expect(multiRow.getByTestId('keyed-variable-leaf')).toHaveCount(0);
-  await expect(multiRow.getByTestId('timeline-value')).toContainText('processed');
-  await expect(multiRow.getByTestId('timeline-value')).toContainText('quorum');
+  await expect(multiRow.getByTestId('timeline-variable')).toContainText('bool processed');
+  await expect(multiRow.getByTestId('timeline-variable')).toContainText('uint16 quorum');
+  await expect(multiRow.getByTestId('timeline-value')).not.toContainText('processed');
+  await expect(multiRow.getByTestId('timeline-value')).not.toContainText('quorum');
+  const multiFieldBox = await multiRow.getByTestId('structured-variable-field').first().boundingBox();
+  const multiValueBox = await multiRow.getByTestId('structured-field-change').first().boundingBox();
+  expect(multiFieldBox).not.toBeNull();
+  expect(multiValueBox).not.toBeNull();
+  expect(Math.abs(multiFieldBox!.y - multiValueBox!.y)).toBeLessThan(2);
 
   const singleBox = await singleRow.boundingBox();
   const multiBox = await multiRow.boundingBox();
@@ -899,6 +955,7 @@ test('grouped view preserves keyed parents and compacts one changed packed membe
   const singleRow = singlePath.locator('xpath=ancestor::tr');
   await expect(singleRow.getByTestId('value-before')).toContainText('false');
   await expect(singleRow.getByTestId('value-after')).toContainText('true');
+  await expect(singleRow.getByTestId('structured-variable-fields')).toHaveCount(0);
   await expect(contractSection.getByTestId('keyed-variable-primary').filter({
     hasText: /^proposalData\[20\]$/,
   })).toHaveCount(0);

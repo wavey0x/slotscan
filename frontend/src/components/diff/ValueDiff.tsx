@@ -190,7 +190,6 @@ export function StructuredValueDiff({
   after,
   beforeClassName = 'text-gray-400',
   afterClassName = 'text-gray-900',
-  showFieldNames = true,
   showUnchanged = false,
   displayedFields,
 }: {
@@ -198,7 +197,6 @@ export function StructuredValueDiff({
   after: Record<string, unknown>;
   beforeClassName?: string;
   afterClassName?: string;
-  showFieldNames?: boolean;
   showUnchanged?: boolean;
   displayedFields?: string[];
 }) {
@@ -219,14 +217,8 @@ export function StructuredValueDiff({
           <div
             key={field}
             data-testid="structured-field-change"
-            className={cn(
-              'grid min-w-0 gap-x-2',
-              showFieldNames ? 'grid-cols-[minmax(3.5rem,7rem)_minmax(0,1fr)]' : 'grid-cols-1',
-            )}
+            className="grid min-h-7 min-w-0 grid-cols-1"
           >
-            {showFieldNames && (
-              <span className="min-w-0 break-words text-gray-500 [overflow-wrap:anywhere]">{field}</span>
-            )}
             <ValueDiff
               unchanged={unchanged}
               before={(
@@ -247,6 +239,48 @@ export function StructuredValueDiff({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+export function StructuredFieldNames({
+  fields,
+  members,
+  className,
+}: {
+  fields: string[];
+  members?: Array<{ name: string; type_label: string }>;
+  className?: string;
+}) {
+  const memberTypes = new Map(
+    (members ?? []).map((member) => [member.name, member.type_label]),
+  );
+
+  return (
+    <div
+      data-testid="structured-variable-fields"
+      className={cn(
+        'mt-0.5 space-y-0.5 font-mono text-xs leading-tight',
+        className,
+      )}
+    >
+      {fields.map((field, index) => (
+        <div
+          key={field}
+          data-testid="structured-variable-field"
+          className="flex min-h-7 min-w-0 items-start gap-1 pl-2"
+        >
+          <span className="shrink-0 select-none text-gray-300">
+            {index === fields.length - 1 ? '└' : '├'}
+          </span>
+          <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+            {memberTypes.get(field) && (
+              <span className="text-gray-400">{memberTypes.get(field)} </span>
+            )}
+            <span className="font-medium text-gray-700">{field}</span>
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

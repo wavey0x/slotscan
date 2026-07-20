@@ -120,23 +120,25 @@ export function InterimPackedChangeRows({
         return (
           <tr key={`${field.name}:${fieldIndex}`} className={cn('bg-gray-100/80', !isFirstChange && fieldIndex === 0 && 'border-t border-gray-300')}>
             <td className="py-0.5 pl-3 align-top" />
-            <td className="py-0.5 pl-3 align-top">
-              {fieldIndex === 0 && (
-                <div className="flex flex-col items-start gap-0.5">
-                  <span className="text-[10px] text-gray-400">{changeIndex + 1}/{totalChanges}</span>
-                  {change.frame_outcome === 'reverted' && <span className="text-[9px] uppercase tracking-wide text-amber-600">reverted</span>}
-                </div>
-              )}
-            </td>
-            <td className="py-0.5 pl-3 align-top">
+            <td className="py-0.5 pl-3 align-top" data-testid="interim-variable">
               <div className="flex items-start gap-2 font-mono text-xs">
+                <div className="w-8 shrink-0">
+                  {fieldIndex === 0 && (
+                    <div className="flex flex-col items-start gap-0.5">
+                      <span className="text-[10px] text-gray-400">{changeIndex + 1}/{totalChanges}</span>
+                      {change.frame_outcome === 'reverted' && <span className="text-[9px] uppercase tracking-wide text-amber-600">reverted</span>}
+                    </div>
+                  )}
+                </div>
                 <span className="shrink-0 select-none text-gray-300">{isLast ? '└' : '├'}</span>
-                <span className="shrink-0">
+                <span className="min-w-0">
                   <span className="text-gray-400">{field.type_label}</span>{' '}
                   <span className="text-gray-600">{field.name}</span>
                 </span>
-                <ValueDiff unchanged={unchanged} before={beforeDisplay} after={afterDisplay} beforeClassName="text-gray-300" afterClassName={unchanged ? 'text-gray-400' : 'text-gray-700'} />
               </div>
+            </td>
+            <td className="py-0.5 pl-3 align-top" data-testid="interim-value">
+              <ValueDiff unchanged={unchanged} before={beforeDisplay} after={afterDisplay} beforeClassName="text-gray-300" afterClassName={unchanged ? 'text-gray-400' : 'text-gray-700'} />
             </td>
             <td className="hidden px-1 py-0.5 align-top sm:table-cell" />
             {showStep && (

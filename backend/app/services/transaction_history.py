@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 
 from app.config import Settings
@@ -263,16 +264,29 @@ class TransactionHistoryService:
                 )
             }
 
-            layouts_by_code_address = {
-                target: layout
-                for target, resolved in direct_metadata.items()
-                if (layout := self._layout(resolved)) is not None and layout.variables
-            }
-            sources_by_code_address = {
-                target: resolved.sources
-                for target, resolved in direct_metadata.items()
-                if resolved.sources
-            }
+            owner_layout = self._layout(metadata)
+            layouts_by_code_address: dict[str, StorageLayout] = {}
+            sources_by_code_address: dict[str, dict[str, str]] = {}
+            for target, resolved in direct_metadata.items():
+                direct_layout = self._layout(resolved)
+                if direct_layout is not None and direct_layout.variables:
+                    layouts_by_code_address[target] = direct_layout
+                    if resolved.sources:
+                        sources_by_code_address[target] = resolved.sources
+                    continue
+
+                # External Solidity libraries execute with DELEGATECALL and
+                # receive caller-owned storage pointers. Their own compiler
+                # layout is correctly empty; the storage owner's exact layout
+                # is the only layout which can name those writes.
+                if (
+                    owner_layout is not None
+                    and owner_layout.variables
+                    and self._is_verified_solidity_library(resolved)
+                ):
+                    layouts_by_code_address[target] = owner_layout
+                    if metadata and metadata.sources:
+                        sources_by_code_address[target] = metadata.sources
 
             diff = self.tracer.project_trace_artifact(
                 artifact,
@@ -425,6 +439,25 @@ class TransactionHistoryService:
             )
 
         return normalize(left) == normalize(right)
+
+    @staticmethod
+    def _is_verified_solidity_library(
+        metadata: ContractMetadata | None,
+    ) -> bool:
+        if not (
+            metadata
+            and metadata.is_verified
+            and metadata.name
+            and metadata.sources
+        ):
+            return False
+        declaration = re.compile(
+            rf"\blibrary\s+{re.escape(metadata.name)}\b"
+        )
+        return any(
+            declaration.search(source) is not None
+            for source in metadata.sources.values()
+        )
 
     @staticmethod
     def _layout(metadata: ContractMetadata | None) -> StorageLayout | None:

@@ -1216,6 +1216,100 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
             "proxyValue",
         )
 
+    async def test_verified_library_uses_storage_owner_layout_only(self):
+        value_type = StorageType(
+            "t_uint256",
+            "uint256",
+            "value",
+            "inplace",
+            32,
+        )
+        owner_layout = StorageLayout(
+            "Owner",
+            [
+                StorageVariable(
+                    "ownerValue",
+                    1,
+                    0,
+                    32,
+                    value_type.id,
+                    value_type.label,
+                )
+            ],
+            {value_type.id: value_type},
+        )
+        empty_layout = StorageLayout("Helper", [], {})
+
+        class LibraryHistoryService(TransactionHistoryService):
+            def __init__(self, *args, library_source, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.library_source = library_source
+
+            async def _resolve_metadata(
+                self,
+                chain_id,
+                address,
+                block_number,
+                *,
+                follow_proxy=True,
+                follow_delegation=True,
+            ):
+                if address.lower() == ADDRESS_A:
+                    return ContractMetadata(
+                        chain_id=chain_id,
+                        address=address,
+                        name="Owner",
+                        is_verified=True,
+                        sources={"Owner.sol": "contract Owner {}"},
+                        storage_layout=owner_layout,
+                    )
+                return ContractMetadata(
+                    chain_id=chain_id,
+                    address=address,
+                    name="Helper",
+                    is_verified=True,
+                    sources={"Helper.sol": self.library_source},
+                    storage_layout=empty_layout,
+                )
+
+        for declaration, expected_paths in (
+            ("library Helper {}", ["ownerValue"] * 3),
+            ("contract Helper {}", [None] * 3),
+        ):
+            with self.subTest(declaration=declaration):
+                tracer = TransactionAnalysisService(
+                    _NoopProvider(),
+                    Settings(MAX_SSTORE_OPS=100),
+                    TypeDecoder(),
+                    trace_cache_repo=_CachedArtifactRepository(artifact()),
+                )
+                service = LibraryHistoryService(
+                    tracer=tracer,
+                    web3_provider=_NoopProvider(),
+                    settings=tracer.settings,
+                    layout_parser=None,
+                    verification_service=object(),
+                    library_source=declaration,
+                )
+
+                result = await service.analyze(
+                    1,
+                    artifact().tx_hash,
+                    storage_addresses=(ADDRESS_A,),
+                )
+
+                self.assertEqual(
+                    [
+                        change.variable_path
+                        for change in result.contracts[0].diff.changes
+                    ],
+                    expected_paths,
+                )
+                self.assertEqual(
+                    CODE_A in result.contracts[0].layouts_by_code_address,
+                    declaration.startswith("library"),
+                )
+
     async def test_non_proxy_self_code_reuses_owner_resolution(self):
         tracer = TransactionAnalysisService(
             _NoopProvider(),

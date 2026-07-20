@@ -943,6 +943,10 @@ class TransactionAnalysisService:
                                 value_type = var_type.value_type
                             mapping_base_slot = variable.slot if var_type and var_type.encoding == "mapping" else None
                             variable_path = variable.name
+                            decode_type = var_type
+                            decode_slot_offset = (
+                                slot_int - variable.slot if variable else 0
+                            )
 
                             if var_type and var_type.encoding == "inplace" and var_type.array_length:
                                 locations = layout.get_static_array_locations(
@@ -956,9 +960,15 @@ class TransactionAnalysisService:
                                     variable_path = f"{variable.name}[{static_arr_index}]"
                                     array_index = static_arr_index
                                     if var_type.element_type:
-                                        value_type = var_type.element_type
+                                        element_type_id = var_type.element_type
+                                        value_type = element_type_id
+                                        element_type = layout.get_type(element_type_id)
+                                        if element_type:
+                                            decode_type = element_type
+                                            decode_slot_offset = (
+                                                slot_int - locations[0][1].slot
+                                            )
 
-                            decode_type = var_type
                             if var_type and var_type.encoding == "mapping":
                                 if var_type.value_type:
                                     decode_type = layout.get_type(var_type.value_type)
@@ -998,9 +1008,18 @@ class TransactionAnalysisService:
                                         new_decoded = DecodedValue(raw=new_value, decoded=new_length, type_label="uint256")
                                         variable_path = f"{variable.name} (array length)"
                                     elif decode_type:
-                                        slot_offset = slot_int - variable.slot if variable else 0
-                                        old_decoded = decoder.decode(old_bytes, decode_type, variable.offset, slot_offset)
-                                        new_decoded = decoder.decode(new_bytes, decode_type, variable.offset, slot_offset)
+                                        old_decoded = decoder.decode(
+                                            old_bytes,
+                                            decode_type,
+                                            variable.offset,
+                                            decode_slot_offset,
+                                        )
+                                        new_decoded = decoder.decode(
+                                            new_bytes,
+                                            decode_type,
+                                            variable.offset,
+                                            decode_slot_offset,
+                                        )
                                 except Exception as e:
                                     logger.warning(f"Failed to decode change at slot {slot_hex}: {e}")
                         else:

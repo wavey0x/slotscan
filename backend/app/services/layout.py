@@ -820,7 +820,7 @@ class LayoutParser:
 
     def _parse_array_length(self, type_id: str) -> Optional[int]:
         """Extract array length from type ID like 't_array(t_uint256)10_storage'."""
-        match = re.search(r"\)(\d+)_", type_id)
+        match = re.search(r"\)(\d+)(?:_storage)?$", type_id)
         if match:
             return int(match.group(1))
         return None
