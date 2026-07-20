@@ -1061,6 +1061,57 @@ class ProxyDetectionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_supplied_vyper_layout_does_not_invoke_compiler(self):
+        class VyperResolver(_Resolver):
+            async def _fetch_verification(self, chain_id, address):
+                return VerificationResult(
+                    source="sourcify",
+                    match_type="full",
+                    name="Vault",
+                    compiler_version="0.3.10",
+                    compilation_target={"Vault.vy": "Vault"},
+                    sources={
+                        "Vault.vy": "# @version 0.3.10\nowner: public(address)\n"
+                    },
+                    storage_layout={"storage": [{"label": "owner"}], "types": {}},
+                    language="Vyper",
+                )
+
+        value_type = StorageType("address", "address", "value", "inplace", 20)
+        supplied_layout = StorageLayout(
+            contract_name="Vault",
+            variables=[
+                StorageVariable(
+                    "owner",
+                    0,
+                    0,
+                    20,
+                    value_type.id,
+                    value_type.label,
+                )
+            ],
+            types={value_type.id: value_type},
+        )
+        parser = SimpleNamespace(
+            parse_from_raw_layout=Mock(return_value=supplied_layout),
+            _make_artifact=Mock(
+                return_value=SimpleNamespace(fingerprint="supplied-vyper")
+            ),
+            parse_vyper_with_artifact=AsyncMock(
+                side_effect=AssertionError("supplied layout must not be compiled")
+            ),
+        )
+
+        metadata = await VyperResolver(
+            object(),
+            Settings(),
+            layout_parser=parser,
+        ).resolve(1, ADDRESS)
+
+        parser.parse_vyper_with_artifact.assert_not_awaited()
+        self.assertEqual(metadata.storage_layout.variables[0].name, "owner")
+        self.assertEqual(metadata.storage_layout.storage_scheme, SEQUENTIAL_STORAGE)
+
     async def test_vyper_0216_prefers_exact_compiler_layout(self):
         class VyperResolver(_Resolver):
             async def _fetch_verification(self, chain_id, address):

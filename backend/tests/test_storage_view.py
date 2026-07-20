@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from app.config import Settings
@@ -11,6 +12,7 @@ from app.models.domain import (
 from app.models.api import StorageViewResponse
 from app.services.compiled_layout import compile_layout
 from app.services.decoder import TypeDecoder
+from app.services.layout import LayoutParser
 from app.services.storage_view import StorageContext, StorageViewService
 from app.services.web3_provider import BlockRef, StorageAttempt
 
@@ -48,6 +50,19 @@ class _Web3:
     def __init__(self, fail=False, values=None):
         self.eth = _Eth()
         self.provider = _Provider(fail, values)
+
+
+class _MemoryArtifactRepository:
+    def __init__(self):
+        self.rows = {}
+        self.save_count = 0
+
+    async def get(self, fingerprint):
+        return self.rows.get(fingerprint)
+
+    async def save(self, artifact):
+        self.rows[artifact.fingerprint] = artifact
+        self.save_count += 1
 
 
 def _compiled_layout():
@@ -107,6 +122,64 @@ class _FailingDecoder:
 
 
 class StorageViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_source_layout_reuses_compiler_artifact_cache(self):
+        sources = {"C.sol": "contract C { uint256 value; }"}
+        parser = LayoutParser()
+        compiler_input = parser.build_solidity_standard_input(sources, None, None)
+        compiler_output = {
+            "contracts": {
+                "C.sol": {
+                    "C": {
+                        "storageLayout": {
+                            "storage": [
+                                {
+                                    "label": "value",
+                                    "slot": "0",
+                                    "offset": 0,
+                                    "type": "t_uint256",
+                                }
+                            ],
+                            "types": {
+                                "t_uint256": {
+                                    "encoding": "inplace",
+                                    "label": "uint256",
+                                    "numberOfBytes": "32",
+                                }
+                            },
+                        }
+                    }
+                }
+            }
+        }
+        parser._compile_with_layout = AsyncMock(
+            return_value=(compiler_output, compiler_input)
+        )
+        artifacts = _MemoryArtifactRepository()
+        service = StorageViewService(
+            web3_provider=object(),
+            resolver=SimpleNamespace(compiler_artifact_repo=artifacts),
+            layout_parser=parser,
+            settings=Settings(),
+            decoder=TypeDecoder(),
+        )
+        metadata = ContractMetadata(
+            chain_id=1,
+            address=ADDRESS,
+            is_verified=True,
+            name="C",
+            compiler_version="0.8.30",
+            compilation_target={"C.sol": "C"},
+            sources=sources,
+        )
+
+        first = await service._resolve_source_layout(metadata)
+        second = await service._resolve_source_layout(metadata)
+
+        self.assertEqual(first.to_dict(), second.to_dict())
+        self.assertEqual(first.variables[0].name, "value")
+        self.assertEqual(parser._compile_with_layout.await_count, 1)
+        self.assertEqual(artifacts.save_count, 1)
+
     async def test_every_packed_consumer_of_one_word_is_decoded(self):
         layout = compile_layout(
             StorageLayout(

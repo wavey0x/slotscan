@@ -207,6 +207,7 @@ class StorageViewService:
                 sources=metadata.sources,
                 compiler_version=metadata.compiler_version,
                 entry_source=entry_source,
+                compiler_artifact_repo=self.resolver.compiler_artifact_repo,
             )
 
         contract_fqname = None
@@ -219,6 +220,7 @@ class StorageViewService:
             compiler_settings=metadata.compiler_settings,
             metadata_settings=metadata.compiler_settings,
             contract_fqname=contract_fqname,
+            compiler_artifact_repo=self.resolver.compiler_artifact_repo,
         )
 
     async def prepare(

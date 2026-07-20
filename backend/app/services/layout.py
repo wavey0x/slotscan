@@ -204,6 +204,7 @@ class LayoutParser:
         compiler_settings: Optional[dict] = None,
         metadata_settings: Optional[dict] = None,
         contract_fqname: Optional[str] = None,
+        compiler_artifact_repo: CompilerArtifactRepository | None = None,
     ) -> StorageLayout:
         """
         Compile sources and extract storage layout.
@@ -225,6 +226,7 @@ class LayoutParser:
             compiler_settings=compiler_settings,
             metadata_settings=metadata_settings,
             contract_fqname=contract_fqname,
+            compiler_artifact_repo=compiler_artifact_repo,
         )
         return layout
 
@@ -876,6 +878,7 @@ class LayoutParser:
         sources: dict[str, str],
         compiler_version: str,
         entry_source: Optional[str] = None,
+        compiler_artifact_repo: CompilerArtifactRepository | None = None,
     ) -> StorageLayout:
         """
         Compile Vyper sources and extract storage layout.
@@ -893,6 +896,7 @@ class LayoutParser:
             sources,
             compiler_version,
             entry_source=entry_source,
+            compiler_artifact_repo=compiler_artifact_repo,
         )
         return layout
 
