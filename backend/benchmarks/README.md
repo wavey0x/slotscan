@@ -14,6 +14,13 @@ identity and ordering, SHA3 evidence, observed storage, step count, and
 transaction identity. Intermediate `oldValue` fields are intentionally excluded
 from parity because the legacy tracer did not provide them.
 
+The runner calls Reth directly, bypassing SlotScan's transaction-artifact
+database cache. It completes a parity preflight and runs both modes as warmups
+before measuring. Timed rounds alternate which mode runs first; use an even
+round count so each mode occupies the first and second position equally. This
+controls for Reth and operating-system page-cache warmth without restarting or
+disrupting the node between samples.
+
 ## Quick run
 
 Run from `backend/` against a SlotScan Reth endpoint:
@@ -21,7 +28,7 @@ Run from `backend/` against a SlotScan Reth endpoint:
 ```bash
 SLOTSCAN_BENCH_RPC_URL=http://127.0.0.1:8545 \
   venv/bin/python scripts/benchmark_native_trace.py \
-  --rounds 7 \
+  --rounds 8 \
   --output /tmp/slotscan-benchmark.json \
   --markdown-output /tmp/slotscan-benchmark.md
 ```
@@ -33,6 +40,7 @@ The default corpus contains:
 | `erc20_transfer` | Small transaction and fixed-overhead behavior |
 | `reverted_writes` | Large nested execution with persistent, transient, and reverted writes |
 | `proxy_voting` | Large proxy/delegatecall execution with mapping and packed-slot evidence |
+| `high_fanout_delegation` | Very large deep execution with 511 writes across 57 storage owners |
 
 Use `--case NAME` to run a subset. For example, a fast smoke run is:
 
@@ -50,7 +58,7 @@ interleaved rounds:
 ```bash
 SLOTSCAN_BENCH_RPC_URL=http://127.0.0.1:8545 \
   venv/bin/python scripts/benchmark_native_trace.py \
-  --rounds 15 \
+  --rounds 16 \
   --warmups 2 \
   --output /tmp/slotscan-benchmark.json \
   --markdown-output /tmp/slotscan-benchmark.md

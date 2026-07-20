@@ -433,9 +433,13 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"Generated: {report['generated_at']}",
         "",
         (
-            "Scope: uncached transaction-evidence extraction. Legacy performs "
-            "two EVM replays; native performs one. Both paths also fetch the "
-            "same receipt."
+            "Scope: application-cache-bypassed transaction-evidence extraction. "
+            "Legacy performs two EVM replays; native performs one. Both paths "
+            "also fetch the same receipt."
+        ),
+        (
+            "Both modes are warmed before measurement, and timed execution order "
+            "alternates by round to control for Reth/OS cache position."
         ),
         "",
         "| Case | Legacy p50 | Native p50 | Speedup | Latency reduction | "
@@ -516,6 +520,9 @@ async def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "rounds": args.rounds,
             "warmups": args.warmups,
             "interleaved": True,
+            "timed_order": "alternating_by_round",
+            "application_cache_bypassed": True,
+            "node_cache_state": "equally_warmed_before_measurement",
             "limits": limits,
         },
         "methodology": {
@@ -630,7 +637,7 @@ def parse_args() -> argparse.Namespace:
         action="append",
         help="run one named manifest case; repeat to select more than one",
     )
-    parser.add_argument("--rounds", type=int, default=7)
+    parser.add_argument("--rounds", type=int, default=8)
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument(
         "--output",

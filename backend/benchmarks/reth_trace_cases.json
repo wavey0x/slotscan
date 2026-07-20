@@ -63,6 +63,28 @@
         "reverted_writes": 0,
         "sha3_operations": 275
       }
+    },
+    {
+      "name": "high_fanout_delegation",
+      "transaction_hash": "0x0fe2542079644e107cbf13690eb9c2c65963ccb79089ff96bfaf8dced2331c92",
+      "description": "Very large, deep delegated execution spanning 57 storage owners.",
+      "semantic_tags": [
+        "very-large",
+        "delegatecall",
+        "deep-calls",
+        "high-fanout",
+        "many-storage-owners"
+      ],
+      "expected": {
+        "block_hash": "0x70cedfd3dc711ad0b051e80a60290a9654b3a37ea9979e342f176d09a89cf920",
+        "block_number": 13499798,
+        "gas_used": 14936857,
+        "step_count": 2324323,
+        "writes": 511,
+        "persistent_writes": 511,
+        "reverted_writes": 0,
+        "sha3_operations": 6194
+      }
     }
   ]
 }

@@ -22,9 +22,14 @@ class BenchmarkHelpersTests(unittest.TestCase):
         self.assertEqual(chain_id, 1)
         self.assertEqual(
             [case.name for case in cases],
-            ["erc20_transfer", "reverted_writes", "proxy_voting"],
+            [
+                "erc20_transfer",
+                "reverted_writes",
+                "proxy_voting",
+                "high_fanout_delegation",
+            ],
         )
-        self.assertEqual(len({case.transaction_hash for case in cases}), 3)
+        self.assertEqual(len({case.transaction_hash for case in cases}), 4)
         self.assertTrue(all(case.expected["step_count"] > 0 for case in cases))
 
     def test_manifest_case_filter_rejects_unknown_names(self):
@@ -78,7 +83,7 @@ class BenchmarkHelpersTests(unittest.TestCase):
         report = {
             "generated_at": "2026-07-20T00:00:00+00:00",
             "node": {"client_version": "reth/test"},
-            "configuration": {"rounds": 7, "warmups": 1},
+            "configuration": {"rounds": 8, "warmups": 1},
             "cases": [
                 {
                     "name": "example",
@@ -91,6 +96,7 @@ class BenchmarkHelpersTests(unittest.TestCase):
 
         self.assertIn("| example | 200.0 ms | 100.0 ms | 2.00x", markdown)
         self.assertIn("two EVM replays", markdown)
+        self.assertIn("execution order alternates", markdown)
         self.assertIn("exact parity checks", markdown)
 
 
