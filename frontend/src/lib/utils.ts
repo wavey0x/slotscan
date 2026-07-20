@@ -125,6 +125,27 @@ export function getRecentInspections(): RecentInspection[] {
   }
 }
 
+export function removeRecentInspection(
+  item: Pick<RecentInspection, 'chain' | 'kind' | 'value'>
+) {
+  try {
+    const updated = getRecentInspections().filter(
+      (candidate) => !(
+        candidate.chain === item.chain
+        && candidate.kind === item.kind
+        && candidate.value.toLowerCase() === item.value.toLowerCase()
+      )
+    );
+    if (updated.length > 0) {
+      localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated));
+    } else {
+      localStorage.removeItem(RECENT_SEARCHES_KEY);
+    }
+  } catch {
+    // localStorage not available
+  }
+}
+
 export function clearRecentInspections() {
   try {
     localStorage.removeItem(RECENT_SEARCHES_KEY);

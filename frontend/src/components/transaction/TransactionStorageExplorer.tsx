@@ -8,6 +8,7 @@ import { ContractSection, Timeline, TimelineEntry } from '@/components/transacti
 import { Input } from '@/components/ui/Input';
 import { Loading } from '@/components/ui/Loading';
 import { ViewSwitch } from '@/components/ui/ViewSwitch';
+import { APIError } from '@/lib/api';
 import { useTransactionStorageHistory } from '@/lib/hooks/useTransactionStorageHistory';
 import {
   ContractHistoryResponse,
@@ -17,7 +18,7 @@ import {
   contractDisplayLabel,
   hasRetryableContractResolution,
 } from '@/lib/contract-resolution';
-import { cn, saveRecentInspection } from '@/lib/utils';
+import { cn, removeRecentInspection, saveRecentInspection } from '@/lib/utils';
 
 type ViewMode = 'grouped' | 'timeline';
 type ValueMode = 'decoded' | 'hex';
@@ -71,6 +72,8 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
   const deferredValueMode = useDeferredValue(valueMode);
   const isViewPending = pendingView !== null || view !== deferredView;
   const showHex = deferredValueMode === 'hex';
+  const loadedTxHash = data?.tx_hash;
+  const transactionNotFound = error instanceof APIError && error.code === 'NOT_FOUND';
   const focusParam = searchParams.get('focus')?.toLowerCase() || null;
 
   useEffect(() => {
@@ -99,12 +102,22 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
   }, [pathname, pendingView]);
 
   useEffect(() => {
+    if (!loadedTxHash) return;
     saveRecentInspection({
+      chain,
+      kind: 'transaction',
+      value: loadedTxHash,
+    });
+  }, [chain, loadedTxHash]);
+
+  useEffect(() => {
+    if (!transactionNotFound) return;
+    removeRecentInspection({
       chain,
       kind: 'transaction',
       value: txHash,
     });
-  }, [chain, txHash]);
+  }, [chain, transactionNotFound, txHash]);
 
   useEffect(() => {
     if (!data || !focusParam) return;
