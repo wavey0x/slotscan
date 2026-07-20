@@ -187,8 +187,8 @@ class TransactionAnalysisService:
             trace_step_count=evidence.evm_step_count or None,
         )
 
-        # A failed struct-log trace returns an incomplete, useful net-state
-        # projection, but is not cached so a later request can retry tracing.
+        # A degraded trace returns an incomplete, useful net-state projection,
+        # but is not cached so a later request can retry tracing.
         if self.trace_cache_repo and write_history_complete:
             try:
                 await self.trace_cache_repo.save(artifact)

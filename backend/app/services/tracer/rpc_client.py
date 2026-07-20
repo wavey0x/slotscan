@@ -15,6 +15,7 @@ from app.services.web3_provider import Web3Provider
 logger = logging.getLogger(__name__)
 
 TRACE_METHOD = "slotscan_traceTransaction"
+TRACE_CAPABILITY_PROBE_HASH = "0x" + "00" * 32
 _TRACE_FIELDS = {
     "transactionHash",
     "blockHash",
@@ -109,6 +110,16 @@ class TraceRPCClient:
         if receipt is None:
             raise TransactionNotFoundError(tx_hash)
         return receipt
+
+    async def check_support(self, chain_id: int) -> None:
+        """Require the native method without replaying a real transaction."""
+        try:
+            await self.execute_slotscan_trace(
+                chain_id,
+                TRACE_CAPABILITY_PROBE_HASH,
+            )
+        except TransactionNotFoundError:
+            return
 
     async def execute_slotscan_trace(
         self,

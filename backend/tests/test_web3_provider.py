@@ -21,7 +21,7 @@ class Web3ProviderTests(unittest.IsolatedAsyncioTestCase):
         rpc = _RPC({"error": {"message": "method not supported"}})
         manager._instances[1] = rpc
 
-        result = await manager.make_request(1, "debug_traceTransaction", ["0x1"])
+        result = await manager.make_request(1, "slotscan_traceTransaction", ["0x1"])
 
         self.assertEqual(result, {"error": {"message": "method not supported"}})
         self.assertEqual(rpc.calls, 1)

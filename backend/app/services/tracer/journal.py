@@ -203,8 +203,8 @@ class StorageJournalBuilder:
                 final_value = initial_value
                 net_changed = False
             elif key not in net_changed_keys:
-                # prestateTracer diff mode omits restored/no-op slots. Once the
-                # trace gives us their initial word, their final word is equal.
+                # A prestate diff omits restored/no-op slots. Once the trace
+                # gives us their initial word, their final word is equal.
                 final_value = initial_value
                 net_changed = False
             else:

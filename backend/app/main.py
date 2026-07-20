@@ -13,6 +13,7 @@ from app.config import get_settings
 from app.db import engine
 from app.models.database import Base
 from app.api.dependencies import get_verification_http_client, get_web3_provider
+from app.services.tracer.rpc_client import TraceRPCClient
 
 logging.basicConfig(
     level=logging.INFO,
@@ -82,7 +83,7 @@ def create_app() -> FastAPI:
     # Health check
     @app.get("/health")
     async def health():
-        checks = {"database": False, "rpc": False}
+        checks = {"database": False, "rpc": False, "native_trace": False}
         try:
             async with engine.connect() as connection:
                 await connection.execute(text("SELECT 1"))
@@ -96,6 +97,8 @@ def create_app() -> FastAPI:
                 chain_id = next(iter(settings.rpc_urls))
                 await provider.get_block_number(chain_id)
                 checks["rpc"] = True
+                await TraceRPCClient(provider, settings).check_support(chain_id)
+                checks["native_trace"] = True
         except Exception as exc:
             logger.warning("RPC readiness check failed: %s", exc)
 

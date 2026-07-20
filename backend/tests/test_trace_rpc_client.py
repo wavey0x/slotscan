@@ -3,7 +3,11 @@ import unittest
 
 from app.config import Settings
 from app.models.errors import RPCError, TraceNotAvailableError, TransactionNotFoundError
-from app.services.tracer.rpc_client import TRACE_METHOD, TraceRPCClient
+from app.services.tracer.rpc_client import (
+    TRACE_CAPABILITY_PROBE_HASH,
+    TRACE_METHOD,
+    TraceRPCClient,
+)
 
 
 TX_HASH = "0x" + "ab" * 32
@@ -89,6 +93,33 @@ class _Provider:
 
 
 class NativeTraceRPCClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_support_probe_requires_the_native_method(self):
+        provider = _Provider(
+            {
+                "error": {
+                    "code": -32000,
+                    "message": "transaction not found",
+                }
+            }
+        )
+
+        await TraceRPCClient(provider).check_support(1)
+
+        self.assertEqual(provider.calls[0][1], TRACE_METHOD)
+        self.assertEqual(provider.calls[0][2][0], TRACE_CAPABILITY_PROBE_HASH)
+
+        with self.assertRaises(TraceNotAvailableError):
+            await TraceRPCClient(
+                _Provider(
+                    {
+                        "error": {
+                            "code": -32601,
+                            "message": "method not found",
+                        }
+                    }
+                )
+            ).check_support(1)
+
     async def test_calls_one_native_method_with_all_limits_and_decodes_evidence(self):
         provider = _Provider(
             {"jsonrpc": "2.0", "id": 7, "result": valid_result()}

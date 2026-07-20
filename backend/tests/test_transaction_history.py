@@ -169,7 +169,7 @@ class _SharedArtifactRepository:
 class _FailingHistoryService:
     async def analyze(self, chain_id, tx_hash):
         raise RPCError(
-            "debug_traceTransaction",
+            "slotscan_traceTransaction",
             "https://user:secret@rpc.example/key?token=abc",
         )
 
