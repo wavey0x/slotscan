@@ -10,7 +10,9 @@ const storageTableHeadCellClass = cn(
 interface StorageTableProps {
   children: ReactNode;
   className?: string;
+  containerClassName?: string;
   minWidth?: string;
+  mobileMinWidth?: string;
 }
 
 interface StorageTableColumnsProps {
@@ -18,11 +20,25 @@ interface StorageTableColumnsProps {
   showExpand?: boolean;
   showSlotOnMobile?: boolean;
   showStep?: boolean;
+  mobileScrollable?: boolean;
 }
 
-export function StorageTable({ children, className, minWidth }: StorageTableProps) {
+export function StorageTable({
+  children,
+  className,
+  containerClassName,
+  minWidth,
+  mobileMinWidth,
+}: StorageTableProps) {
   return (
-    <DataTable className={className} minWidth={minWidth}>{children}</DataTable>
+    <DataTable
+      className={className}
+      containerClassName={containerClassName}
+      minWidth={minWidth}
+      mobileMinWidth={mobileMinWidth}
+    >
+      {children}
+    </DataTable>
   );
 }
 
@@ -31,17 +47,26 @@ export function StorageTableColumns({
   showExpand = false,
   showSlotOnMobile = false,
   showStep = true,
+  mobileScrollable = false,
 }: StorageTableColumnsProps) {
   return (
     <colgroup>
       {showExpand && <col className="w-6" />}
-      {showContract && <col className="hidden w-[21%] sm:table-column" />}
+      {showContract && (
+        <col className={mobileScrollable ? 'w-28 sm:w-[21%]' : 'hidden w-[21%] sm:table-column'} />
+      )}
       <col className={showSlotOnMobile
-        ? (showContract ? 'w-[38%] sm:w-[29%]' : 'w-[42%] sm:w-[38%]')
+        ? (mobileScrollable
+          ? (showContract ? 'w-[calc(50%_-_8rem)] sm:w-[29%]' : 'w-[calc(50%_-_4.5rem)] sm:w-[38%]')
+          : (showContract ? 'w-[38%] sm:w-[29%]' : 'w-[42%] sm:w-[38%]'))
         : (showContract ? 'w-[30%]' : 'w-[38%]')} />
-      <col />
+      <col className={mobileScrollable
+        ? (showContract ? 'w-[calc(50%_-_8rem)] sm:w-auto' : 'w-[calc(50%_-_4.5rem)] sm:w-auto')
+        : undefined} />
       <col className={showSlotOnMobile ? 'w-20 sm:w-24' : 'hidden w-28 sm:table-column'} />
-      {showStep && <col className="hidden w-16 sm:table-column" />}
+      {showStep && (
+        <col className={mobileScrollable ? 'w-16' : 'hidden w-16 sm:table-column'} />
+      )}
     </colgroup>
   );
 }
@@ -51,19 +76,24 @@ export function StorageTableHeader({
   showExpand = false,
   showSlotOnMobile = false,
   showStep = true,
+  mobileScrollable = false,
 }: StorageTableColumnsProps) {
   return (
     <thead>
       <tr>
         {showExpand && <th aria-label="Row actions" className={cn(storageTableHeadCellClass, 'w-6 px-1')} />}
-        {showContract && <th className={cn(storageTableHeadCellClass, 'hidden sm:table-cell')}>Contract</th>}
+        {showContract && (
+          <th className={cn(storageTableHeadCellClass, !mobileScrollable && 'hidden sm:table-cell')}>Contract</th>
+        )}
         <th className={storageTableHeadCellClass}>Variable</th>
         <th className={storageTableHeadCellClass}>Value diff</th>
         <th className={cn(
           storageTableHeadCellClass,
           showSlotOnMobile ? 'px-1 sm:px-2' : 'hidden sm:table-cell',
         )}>Slot</th>
-        {showStep && <th className={cn(storageTableHeadCellClass, 'hidden sm:table-cell')}>Step</th>}
+        {showStep && (
+          <th className={cn(storageTableHeadCellClass, !mobileScrollable && 'hidden sm:table-cell')}>Step</th>
+        )}
       </tr>
     </thead>
   );

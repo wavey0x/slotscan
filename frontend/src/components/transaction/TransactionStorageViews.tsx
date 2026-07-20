@@ -191,9 +191,13 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
   if (entries.length === 0) return <div className="border border-gray-300 p-8 text-center text-gray-500">No writes match the search</div>;
 
   return (
-    <StorageTable minWidth="56rem">
-      <StorageTableColumns showContract={showContract} showSlotOnMobile />
-      <StorageTableHeader showContract={showContract} showSlotOnMobile />
+    <StorageTable
+      containerClassName="-mx-4 w-auto max-w-none sm:mx-0 sm:w-full sm:max-w-full"
+      minWidth="56rem"
+      mobileMinWidth="calc(100% + 9rem)"
+    >
+      <StorageTableColumns showContract={showContract} showSlotOnMobile mobileScrollable />
+      <StorageTableHeader showContract={showContract} showSlotOnMobile mobileScrollable />
       <tbody>
         {entries.map(({ contract, slot, event, ordinal }) => {
           const structuredBefore = isStructuredDecodedValue(event.before.value_decoded)
@@ -221,13 +225,13 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
           const unchanged = event.effect === 'noop';
           const hasStructuredChildren = !structMember && structuredFieldNames.length > 0;
           const structuredHeaderClass = variablePath?.includes('[')
-            ? (showContract ? 'h-14 overflow-hidden sm:h-10' : 'h-10 overflow-hidden')
-            : (showContract ? 'h-10 overflow-hidden sm:h-5' : 'h-5 overflow-hidden');
+            ? 'h-10 overflow-hidden'
+            : 'h-5 overflow-hidden';
 
           return (
             <tr key={`${contract.storage_address}:${slot.slot}:${event.step}:${ordinal}`} data-testid="timeline-event" className="border-b border-gray-200 text-xs hover:bg-gray-50">
               {showContract && (
-                <td className={`${storageCellClass} hidden sm:table-cell`}>
+                <td className={`${storageCellClass} min-w-0 overflow-hidden`} data-testid="timeline-contract">
                   <a href={getAddressExplorerUrl(chain, contract.storage_address)} target="_blank" rel="noopener noreferrer" className="block truncate text-gray-500 hover:underline" title={contract.storage_address}>
                     {contractDisplayLabel(contract)}
                   </a>
@@ -241,11 +245,6 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
               )}
               <td className={`${storageCellClass} min-w-0 overflow-hidden`} data-testid="timeline-variable">
                 <div className={hasStructuredChildren ? structuredHeaderClass : undefined}>
-                  {showContract && (
-                    <a href={getAddressExplorerUrl(chain, contract.storage_address)} target="_blank" rel="noopener noreferrer" className="block truncate text-[10px] text-gray-500 hover:underline sm:hidden" title={contract.storage_address}>
-                      {contractDisplayLabel(contract)}
-                    </a>
-                  )}
                   <TimelineVariableDisclosure
                     contract={contract}
                     chain={chain}
@@ -327,7 +326,7 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                   />
                 </div>
               </td>
-              <td className={`${storageCellClass} hidden overflow-hidden whitespace-nowrap font-mono text-gray-400 sm:table-cell`} data-testid="step-reference">
+              <td className={`${storageCellClass} overflow-hidden whitespace-nowrap font-mono text-gray-400`} data-testid="step-reference">
                 {event.step ?? '—'}
               </td>
             </tr>

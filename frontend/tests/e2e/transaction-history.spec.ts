@@ -872,6 +872,8 @@ test('timeline keeps packed paths compact and exposes contract identity across v
   await expect(singleRow.getByTestId('timeline-value')).not.toContainText('processed');
   await expect(singleRow.getByTestId('timeline-value')).toContainText('false');
   await expect(singleRow.getByTestId('timeline-value')).toContainText('true');
+  await expect(singleRow.getByTestId('timeline-contract')).toContainText('Voter');
+  await expect(singleRow.getByTestId('timeline-variable')).not.toContainText('Voter');
   const slotReference = singleRow.getByTestId('slot-reference');
   const slotDisplay = slotReference.getByText('0xb1..b1', { exact: true });
   await expect(slotDisplay).toBeVisible();
@@ -906,9 +908,62 @@ test('timeline keeps packed paths compact and exposes contract identity across v
   expect(multiBox).not.toBeNull();
   expect(singleBox!.height).toBeLessThan(multiBox!.height);
   const scroll = page.getByTestId('data-table-scroll');
-  expect(await scroll.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  const assertMobileColumnBudget = async (width: number) => {
+    await page.setViewportSize({ width, height: 844 });
+    await scroll.evaluate((element) => { element.scrollLeft = 0; });
+    const trailingColumnWidth = await page.evaluate(() => (
+      Number.parseFloat(getComputedStyle(document.documentElement).fontSize) * 9
+    ));
+    await expect.poll(() => scroll.evaluate(
+      (element) => element.scrollWidth - element.clientWidth,
+    )).toBeGreaterThanOrEqual(trailingColumnWidth - 1);
+
+    const scrollBox = await scroll.boundingBox();
+    const contractBox = await page.getByRole('columnheader', { name: 'Contract' }).boundingBox();
+    const slotBox = await page.getByRole('columnheader', { name: 'Slot' }).boundingBox();
+    const stepBox = await page.getByRole('columnheader', { name: 'Step' }).boundingBox();
+    expect(scrollBox).not.toBeNull();
+    expect(contractBox).not.toBeNull();
+    expect(slotBox).not.toBeNull();
+    expect(stepBox).not.toBeNull();
+    expect(Math.abs(scrollBox!.x)).toBeLessThan(2);
+    expect(Math.abs(scrollBox!.width - width)).toBeLessThan(2);
+    expect(contractBox!.x).toBeGreaterThanOrEqual(scrollBox!.x - 1);
+    expect(contractBox!.x + contractBox!.width).toBeLessThanOrEqual(
+      scrollBox!.x + scrollBox!.width + 1,
+    );
+    expect(slotBox!.x).toBeGreaterThanOrEqual(scrollBox!.x + scrollBox!.width - 1);
+    expect(stepBox!.x).toBeGreaterThanOrEqual(slotBox!.x + slotBox!.width - 1);
+
+    const outsideTableOverflow = await page.evaluate(() => Array.from(
+      document.querySelectorAll<HTMLElement>('body *'),
+    ).filter((element) => (
+      !element.closest('[data-testid="data-table-scroll"]')
+      && element.getBoundingClientRect().right > window.innerWidth + 1
+    )).map((element) => `${element.tagName.toLowerCase()}.${element.className}`));
+    expect(outsideTableOverflow).toEqual([]);
+
+    await scroll.evaluate((element) => {
+      element.scrollLeft = element.scrollWidth - element.clientWidth;
+    });
+    await expect.poll(() => scroll.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+    const revealedSlotBox = await page.getByRole('columnheader', { name: 'Slot' }).boundingBox();
+    const revealedStepBox = await page.getByRole('columnheader', { name: 'Step' }).boundingBox();
+    expect(revealedSlotBox).not.toBeNull();
+    expect(revealedStepBox).not.toBeNull();
+    expect(revealedSlotBox!.x).toBeGreaterThanOrEqual(scrollBox!.x - 1);
+    expect(revealedStepBox!.x + revealedStepBox!.width).toBeLessThanOrEqual(
+      scrollBox!.x + scrollBox!.width + 1,
+    );
+  };
+
+  await assertMobileColumnBudget(390);
+  await assertMobileColumnBudget(320);
 
   await page.setViewportSize({ width: 1280, height: 800 });
+  await expect.poll(() => scroll.evaluate(
+    (element) => element.scrollWidth - element.clientWidth,
+  )).toBeLessThanOrEqual(1);
   const contractAddress = singleRow.getByRole('link', { name: '0x6666...6666' });
   await expect(contractAddress).toBeVisible();
   await expect(contractAddress).toHaveAttribute('href', `/1/${contract.storage_address}`);
@@ -1135,15 +1190,31 @@ test('timeline names struct members and stays readable on mobile', async ({ page
   expect(changedRowBox).not.toBeNull();
   expect(changedRowBox!.height).toBeLessThan(120);
 
-  // The mobile timeline keeps a compact, fully disclosable slot column,
-  // hides step, folds contract into variable, and avoids horizontal panning.
-  await expect(page.getByRole('columnheader', { name: 'Slot' })).toBeVisible();
-  await expect(page.getByRole('columnheader', { name: 'Step' })).toBeHidden();
+  // Contract stays in the initial viewport; horizontal panning reveals the
+  // lower-priority Slot and Step columns together.
+  const scroll = page.getByTestId('data-table-scroll');
+  const initialScrollBox = await scroll.boundingBox();
+  const initialContractBox = await page.getByRole('columnheader', { name: 'Contract' }).boundingBox();
+  const initialSlotBox = await page.getByRole('columnheader', { name: 'Slot' }).boundingBox();
+  const initialStepBox = await page.getByRole('columnheader', { name: 'Step' }).boundingBox();
+  expect(initialScrollBox).not.toBeNull();
+  expect(initialContractBox).not.toBeNull();
+  expect(initialSlotBox).not.toBeNull();
+  expect(initialStepBox).not.toBeNull();
+  expect(initialContractBox!.x + initialContractBox!.width).toBeLessThanOrEqual(
+    initialScrollBox!.x + initialScrollBox!.width + 1,
+  );
+  expect(initialSlotBox!.x).toBeGreaterThanOrEqual(initialScrollBox!.x + initialScrollBox!.width - 1);
+  expect(initialStepBox!.x).toBeGreaterThanOrEqual(initialSlotBox!.x + initialSlotBox!.width - 1);
+  await expect(changedRow.getByTestId('timeline-contract')).toContainText('ResupplyPairDeployer');
+  await scroll.evaluate((element) => {
+    element.scrollLeft = element.scrollWidth - element.clientWidth;
+  });
+  await expect.poll(() => scroll.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
   const slotReference = changedRow.getByTestId('slot-reference');
   await expect(slotReference).toBeVisible();
   await expect(slotReference).toContainText('7');
-  await expect(page.getByTestId('step-reference').first()).toBeHidden();
-  await expect(changedRow.getByRole('link', { name: 'ResupplyPairDeployer' })).toBeVisible();
+  await expect(changedRow.getByTestId('step-reference')).toContainText('1425');
   await slotReference.getByText('7', { exact: true }).click();
   const slotDetail = page.getByRole('dialog');
   await expect(slotDetail).toContainText(slots[1].slot);
@@ -1158,12 +1229,11 @@ test('timeline names struct members and stays readable on mobile', async ({ page
   await expect(scalarDetail.getByRole('button', { name: /Copy (full path|mapping key)/ })).toHaveCount(0);
   await page.keyboard.press('Escape');
 
-  const scroll = page.getByTestId('data-table-scroll');
   const scrollState = await scroll.evaluate((element) => ({
     clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth,
   }));
-  expect(scrollState.scrollWidth).toBeLessThanOrEqual(scrollState.clientWidth + 1);
+  expect(scrollState.scrollWidth).toBeGreaterThan(scrollState.clientWidth);
 
   // Value mode also controls the numeric slot representation.
   await page.getByRole('button', { name: 'Hex' }).click();

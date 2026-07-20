@@ -20,11 +20,15 @@ interface ScrollState {
 export function DataTable({
   children,
   minWidth = '44rem',
+  mobileMinWidth,
   className,
+  containerClassName,
 }: {
   children: ReactNode;
   minWidth?: string;
+  mobileMinWidth?: string;
   className?: string;
+  containerClassName?: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [{ overflowing, atStart, atEnd }, setScrollState] = useState<ScrollState>({
@@ -65,7 +69,7 @@ export function DataTable({
   }, [updateScrollState]);
 
   return (
-    <div className="relative w-full min-w-0 max-w-full">
+    <div className={cn('relative w-full min-w-0 max-w-full', containerClassName)}>
       <div
         ref={scrollRef}
         className={cn(
@@ -75,8 +79,15 @@ export function DataTable({
         data-testid="data-table-scroll"
       >
         <table
-          className={cn('w-full table-fixed border-collapse sm:min-w-[var(--table-min-width)]', className)}
-          style={{ '--table-min-width': minWidth } as CSSProperties}
+          className={cn(
+            'w-full table-fixed border-collapse sm:min-w-[var(--table-min-width)]',
+            mobileMinWidth && 'min-w-[var(--table-mobile-min-width)]',
+            className,
+          )}
+          style={{
+            '--table-min-width': minWidth,
+            '--table-mobile-min-width': mobileMinWidth,
+          } as CSSProperties}
         >
           {children}
         </table>
