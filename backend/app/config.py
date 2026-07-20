@@ -19,6 +19,10 @@ class Settings(BaseSettings):
         default=64 * 1024 * 1024,
         alias="TRANSACTION_RESPONSE_CACHE_BYTES",
     )
+    terminal_response_cache_ttl_seconds: float = Field(
+        default=60,
+        alias="TERMINAL_RESPONSE_CACHE_TTL_SECONDS",
+    )
 
     # Server
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")

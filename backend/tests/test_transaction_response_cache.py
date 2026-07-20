@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi import Response
 
 from app.api.routes.transactions import (
-    _is_response_cacheable,
+    _response_cache_policy,
     get_transaction_storage_history,
 )
 from app.models.api import (
@@ -93,6 +93,15 @@ def contract(**updates):
     }
     values.update(updates)
     return ContractHistoryResponse(**values)
+
+
+def no_source_contract(**updates):
+    return contract(
+        is_verified=False,
+        layout_available=False,
+        resolution_status="no_verified_source",
+        **updates,
+    )
 
 
 def history_service(receipts):
@@ -232,7 +241,10 @@ class TransactionResponseCacheTests(unittest.IsolatedAsyncioTestCase):
 
     def test_only_final_resolved_responses_are_cacheable(self):
         complete = response().model_copy(update={"contracts": [contract()]})
-        self.assertTrue(_is_response_cacheable(complete))
+        self.assertEqual(
+            _response_cache_policy(complete, 60),
+            (True, None),
+        )
 
         for unsafe_contract in (
             contract(is_verified=False),
@@ -243,7 +255,145 @@ class TransactionResponseCacheTests(unittest.IsolatedAsyncioTestCase):
             candidate = complete.model_copy(
                 update={"contracts": [unsafe_contract]},
             )
-            self.assertFalse(_is_response_cacheable(candidate))
+            self.assertEqual(
+                _response_cache_policy(candidate, 60),
+                (False, None),
+            )
+
+    def test_terminal_no_source_response_has_short_cache_lifetime(self):
+        candidate = response().model_copy(
+            update={"contracts": [contract(), no_source_contract()]},
+        )
+
+        self.assertEqual(
+            _response_cache_policy(candidate, 60),
+            (True, 60),
+        )
+        self.assertEqual(
+            _response_cache_policy(candidate, 0),
+            (False, None),
+        )
+
+    def test_retryable_or_degraded_responses_are_not_cached(self):
+        complete = response()
+        candidates = (
+            complete.model_copy(
+                update={
+                    "contracts": [
+                        no_source_contract(errors=["source request failed"]),
+                    ],
+                },
+            ),
+            complete.model_copy(
+                update={
+                    "contracts": [contract(resolution_status="timed_out")],
+                },
+            ),
+            complete.model_copy(
+                update={
+                    "contracts": [contract(resolution_status="failed")],
+                },
+            ),
+            complete.model_copy(
+                update={
+                    "contracts": [contract(resolution_status="not_resolved")],
+                },
+            ),
+            response(complete=False).model_copy(
+                update={"contracts": [no_source_contract()]},
+            ),
+            complete.model_copy(
+                update={
+                    "contracts": [no_source_contract()],
+                    "trace_unavailable": True,
+                },
+            ),
+        )
+
+        for candidate in candidates:
+            with self.subTest(candidate=candidate):
+                self.assertEqual(
+                    _response_cache_policy(candidate, 60),
+                    (False, None),
+                )
+
+    async def test_terminal_response_expires_and_is_rebuilt(self):
+        now = 1000.0
+        cache = TransactionResponseCache(
+            1024 * 1024,
+            terminal_response_ttl_seconds=60,
+            clock=lambda: now,
+        )
+        service = history_service([receipt()] * 3)
+        terminal = response().model_copy(
+            update={"contracts": [no_source_contract()]},
+        )
+
+        with patch(
+            "app.api.routes.transactions._build_transaction_storage_history",
+            AsyncMock(return_value=terminal),
+        ) as builder:
+            first = await get_transaction_storage_history(
+                1,
+                TX_HASH,
+                False,
+                service,
+                cache,
+            )
+            now += 59
+            cached = await get_transaction_storage_history(
+                1,
+                TX_HASH,
+                False,
+                service,
+                cache,
+            )
+            now += 1
+            rebuilt = await get_transaction_storage_history(
+                1,
+                TX_HASH,
+                False,
+                service,
+                cache,
+            )
+
+        expected_body = terminal.model_dump_json().encode()
+        self.assertEqual(builder.await_count, 2)
+        self.assertEqual(first.body, expected_body)
+        self.assertEqual(cached.body, expected_body)
+        self.assertEqual(rebuilt.body, expected_body)
+        self.assertEqual(cache.entry_count, 1)
+        self.assertEqual(cache.expirations, 1)
+
+    def test_fully_resolved_response_does_not_expire(self):
+        now = 1000.0
+        cache = TransactionResponseCache(1024, clock=lambda: now)
+        cache_key = key()
+
+        self.assertTrue(cache.put(cache_key, b"complete"))
+        now += 24 * 60 * 60
+
+        self.assertEqual(cache.get(cache_key), b"complete")
+        self.assertEqual(cache.expirations, 0)
+
+    def test_expiry_reclaims_bytes_without_evicting_live_entries(self):
+        now = 1000.0
+        cache = TransactionResponseCache(6, clock=lambda: now)
+        expiring = key()
+        live = key(include_global_order=True)
+        added = key(block_hash="0x" + "ef" * 32)
+
+        self.assertTrue(cache.put(expiring, b"aaa", ttl_seconds=1))
+        self.assertTrue(cache.put(live, b"bb"))
+        now += 1
+        self.assertTrue(cache.put(added, b"cccc"))
+
+        self.assertIsNone(cache.peek(expiring))
+        self.assertEqual(cache.peek(live), b"bb")
+        self.assertEqual(cache.peek(added), b"cccc")
+        self.assertEqual(cache.size_bytes, 6)
+        self.assertEqual(cache.expirations, 1)
+        self.assertEqual(cache.evictions, 0)
 
     async def test_byte_bound_is_lru_and_rejects_oversized_entries(self):
         cache = TransactionResponseCache(6)
@@ -262,7 +412,8 @@ class TransactionResponseCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cache.size_bytes, 6)
         self.assertEqual(cache.evictions, 1)
         self.assertFalse(cache.put(second, b"1234567"))
-        self.assertEqual(cache.rejections, 1)
+        self.assertFalse(cache.put(second, b"ok", ttl_seconds=0))
+        self.assertEqual(cache.rejections, 2)
 
     async def test_cancelled_waiter_does_not_leak_singleflight_entry(self):
         cache = TransactionResponseCache(1024)

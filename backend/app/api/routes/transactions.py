@@ -1094,21 +1094,46 @@ async def _build_transaction_storage_history(
     )
 
 
-def _is_response_cacheable(
+def _response_cache_policy(
     response: TransactionStorageHistoryResponse,
-) -> bool:
-    return (
-        response.is_complete
-        and not response.trace_unavailable
-        and response.degraded_reason is None
-        and all(
+    terminal_ttl_seconds: float,
+) -> tuple[bool, float | None]:
+    if (
+        not response.is_complete
+        or response.trace_unavailable
+        or response.degraded_reason is not None
+    ):
+        return False, None
+
+    if all(
+        contract.resolution_status == "resolved"
+        and contract.is_verified
+        and contract.layout_available
+        and not contract.errors
+        for contract in response.contracts
+    ):
+        return True, None
+    if (
+        terminal_ttl_seconds <= 0
+        or not any(
+            contract.resolution_status == "no_verified_source"
+            for contract in response.contracts
+        )
+    ):
+        return False, None
+
+    for contract in response.contracts:
+        if contract.errors:
+            return False, None
+        if contract.resolution_status == "no_verified_source":
+            continue
+        if not (
             contract.resolution_status == "resolved"
             and contract.is_verified
             and contract.layout_available
-            and not contract.errors
-            for contract in response.contracts
-        )
-    )
+        ):
+            return False, None
+    return True, terminal_ttl_seconds
 
 
 def _serialized_response(
@@ -1179,9 +1204,13 @@ async def get_transaction_storage_history(
             history_service=history_service,
             receipt=receipt,
         )
-        if not _is_response_cacheable(response):
+        cacheable, ttl_seconds = _response_cache_policy(
+            response,
+            response_cache.terminal_response_ttl_seconds,
+        )
+        if not cacheable:
             return response
 
         body = _serialized_response(response)
-        response_cache.put(key, body)
+        response_cache.put(key, body, ttl_seconds=ttl_seconds)
         return Response(content=body, media_type="application/json")

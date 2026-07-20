@@ -92,8 +92,12 @@ def get_trace_single_flight() -> TraceSingleFlight:
 
 @lru_cache()
 def get_transaction_response_cache() -> TransactionResponseCache:
+    settings = get_settings()
     return TransactionResponseCache(
-        get_settings().transaction_response_cache_bytes,
+        settings.transaction_response_cache_bytes,
+        terminal_response_ttl_seconds=(
+            settings.terminal_response_cache_ttl_seconds
+        ),
     )
 
 
