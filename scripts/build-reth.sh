@@ -32,14 +32,15 @@ version="$(sed -nE 's/^version = "([^"]+)"$/\1/p' "$crate/Cargo.toml" | head -n1
   exit 1
 }
 
-cargo fmt --manifest-path "$crate/Cargo.toml" --check
-cargo check --locked --manifest-path "$crate/Cargo.toml" --features production
-cargo test --locked --manifest-path "$crate/Cargo.toml" --features production
-cargo clippy --locked --manifest-path "$crate/Cargo.toml" \
-  --all-targets --features production -- -D warnings
-SLOTSCAN_BUILD_COMMIT="$commit" \
-  cargo build --locked --manifest-path "$crate/Cargo.toml" \
-  --profile maxperf --features production
+(
+  cd "$crate"
+  cargo fmt --check
+  cargo check --locked --features production
+  cargo test --locked --features production
+  cargo clippy --locked --all-targets --features production -- -D warnings
+  SLOTSCAN_BUILD_COMMIT="$commit" \
+    cargo build --locked --profile maxperf --features production
+)
 
 binary="$crate/target/maxperf/reth-slotscan"
 version_output="$("$binary" --version)"

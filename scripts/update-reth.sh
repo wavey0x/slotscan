@@ -17,9 +17,10 @@ reth_version="${reth_tag#v}"
 slotscan_version="${reth_version}-slotscan.1"
 repo_url="https://github.com/paradigmxyz/reth"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-manifest="$root/reth-slotscan/Cargo.toml"
-lockfile="$root/reth-slotscan/Cargo.lock"
-toolchain="$root/reth-slotscan/rust-toolchain.toml"
+crate="$root/reth-slotscan"
+manifest="$crate/Cargo.toml"
+lockfile="$crate/Cargo.lock"
+toolchain="$crate/rust-toolchain.toml"
 
 tag_refs="$(git ls-remote --tags "$repo_url" \
   "refs/tags/${reth_tag}" "refs/tags/${reth_tag}^{}")"
@@ -176,9 +177,11 @@ if count != 1:
 toolchain_path.write_text(toolchain)
 PY
 
-cargo update --manifest-path "$manifest" --package reth-ethereum
-cargo metadata --locked --manifest-path "$manifest" --format-version 1 \
-  >"$tmp/metadata.json"
+(
+  cd "$crate"
+  cargo update --package reth-ethereum
+  cargo metadata --locked --format-version 1 >"$tmp/metadata.json"
+)
 
 RETH_COMMIT="$reth_commit" \
 RETH_VERSION="$reth_version" \
