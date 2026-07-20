@@ -52,7 +52,6 @@
   body {
     @apply bg-white text-gray-700 font-mono antialiased;
     max-width: 100%;
-    transition: background-color 150ms ease, color 150ms ease;
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -118,10 +117,6 @@
     .touch-hitbox::after {
       inset: 0;
     }
-  }
-
-  .theme-logo {
-    transition: filter 150ms ease;
   }
 
   .dark .theme-logo {

@@ -12,7 +12,7 @@ test('theme toggle switches modes and keeps the explicit preference', async ({ p
   await toggle.click();
   await expect(page.locator('html')).toHaveClass(/dark/);
   await expect(page.getByRole('button', { name: 'Switch to light mode' })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(17, 17, 17)');
+  await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(38, 38, 38)');
   expect(await page.evaluate(() => localStorage.getItem('slotscan-theme'))).toBe('dark');
 
   await page.reload();
