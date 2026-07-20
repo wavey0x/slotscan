@@ -1,0 +1,68 @@
+{
+  "chain_id": 1,
+  "cases": [
+    {
+      "name": "erc20_transfer",
+      "transaction_hash": "0x711899730951bad9b5b29d16c0ffd0be3a7aefcd96b9e1d376619f02bdd9c1d3",
+      "description": "Small successful token transfer with two persistent writes.",
+      "semantic_tags": [
+        "small",
+        "erc20",
+        "direct-storage"
+      ],
+      "expected": {
+        "block_hash": "0xbbfac9dd093a18a0ed301d5274cf9979e31c6e42c31598bec07f7a40e5fc35f3",
+        "block_number": 23997202,
+        "gas_used": 63209,
+        "step_count": 571,
+        "writes": 2,
+        "persistent_writes": 2,
+        "reverted_writes": 0,
+        "sha3_operations": 5
+      }
+    },
+    {
+      "name": "reverted_writes",
+      "transaction_hash": "0x561dd631cb9eabc2ba595ca4410fd26ca3e6183d2b8ba4f55bbf4c4b9c742ae2",
+      "description": "Large successful transaction containing nested reverted writes.",
+      "semantic_tags": [
+        "large",
+        "nested-calls",
+        "reverted-writes",
+        "transient-storage"
+      ],
+      "expected": {
+        "block_hash": "0xe3b717ae8cb01cf5cec22d8171d33d45b2f8d2c9ba295c013cfb69c5f0b8cd7e",
+        "block_number": 24187344,
+        "gas_used": 3363903,
+        "step_count": 318375,
+        "writes": 468,
+        "persistent_writes": 386,
+        "reverted_writes": 128,
+        "sha3_operations": 678
+      }
+    },
+    {
+      "name": "proxy_voting",
+      "transaction_hash": "0xa1fc48efe579dde86c1b46ced4d5a2cb589c95609be976539eb4d5b3513e2f56",
+      "description": "Large proxy/delegatecall voting transaction with mapping and packed-slot evidence.",
+      "semantic_tags": [
+        "large",
+        "proxy",
+        "delegatecall",
+        "mapping",
+        "packed-storage"
+      ],
+      "expected": {
+        "block_hash": "0x27de3826a6f6585327fde1caa3827dbf7b54c6c90448aaa6d58e5c3b65b76546",
+        "block_number": 25278134,
+        "gas_used": 4144197,
+        "step_count": 167759,
+        "writes": 99,
+        "persistent_writes": 99,
+        "reverted_writes": 0,
+        "sha3_operations": 275
+      }
+    }
+  ]
+}

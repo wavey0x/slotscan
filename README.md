@@ -62,6 +62,11 @@ binary, not stock Reth. The custom executable replaces the stock executable
 against the existing compatible Reth data directory; it is not a sidecar and
 does not require a second sync. See [`reth-slotscan/README.md`](reth-slotscan/README.md).
 
+The manual legacy-versus-native performance benchmark is documented in
+[`backend/benchmarks/README.md`](backend/benchmarks/README.md). It uses pinned
+mainnet transactions, interleaved samples, and semantic parity checks; it does
+not run in CI.
+
 ## Notes
 
 - **alembic**: Database migration tool. `alembic upgrade head` applies schema changes.
