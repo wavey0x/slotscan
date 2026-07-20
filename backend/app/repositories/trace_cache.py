@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import TransactionTraceArtifact
+from app.services.transaction_receipt import ReceiptIdentity
 
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,9 @@ logger = logging.getLogger(__name__)
 class TransactionTraceArtifactData:
     chain_id: int
     tx_hash: str
+    block_hash: str
     block_number: int
+    transaction_index: int
     root_succeeded: bool
     write_events: list[dict]
     prestate_diff: dict
@@ -40,11 +43,18 @@ class TraceCacheRepository:
         self,
         chain_id: int,
         tx_hash: str,
+        receipt: ReceiptIdentity,
     ) -> TransactionTraceArtifactData | None:
         tx_hash_lower = tx_hash.lower()
         stmt = select(TransactionTraceArtifact).where(
             TransactionTraceArtifact.chain_id == chain_id,
             TransactionTraceArtifact.tx_hash == tx_hash_lower,
+            TransactionTraceArtifact.block_hash == receipt.block_hash,
+            TransactionTraceArtifact.block_number == receipt.block_number,
+            TransactionTraceArtifact.transaction_index
+            == receipt.transaction_index,
+            TransactionTraceArtifact.root_succeeded
+            == receipt.root_succeeded,
         )
         result = await self.session.execute(stmt)
         row = result.scalar_one_or_none()
@@ -59,7 +69,9 @@ class TraceCacheRepository:
         return TransactionTraceArtifactData(
             chain_id=row.chain_id,
             tx_hash=row.tx_hash,
+            block_hash=row.block_hash,
             block_number=row.block_number,
+            transaction_index=row.transaction_index,
             root_succeeded=row.root_succeeded,
             transaction_from=row.transaction_from,
             transaction_to=row.transaction_to,
@@ -76,7 +88,9 @@ class TraceCacheRepository:
         values = {
             "chain_id": data.chain_id,
             "tx_hash": tx_hash_lower,
+            "block_hash": data.block_hash,
             "block_number": data.block_number,
+            "transaction_index": data.transaction_index,
             "root_succeeded": data.root_succeeded,
             "transaction_from": data.transaction_from,
             "transaction_to": data.transaction_to,

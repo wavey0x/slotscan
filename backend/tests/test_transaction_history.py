@@ -31,7 +31,9 @@ from app.services.tracer.extractor import (
     TransactionTraceExtractor,
 )
 from app.services.tracer.rpc_client import SlotScanTraceEvidence
+from app.services.transaction_receipt import ReceiptIdentity
 from app.services.transaction_history import TransactionHistoryService
+from app.services.transaction_response_cache import TransactionResponseCache
 
 
 ADDRESS_A = "0x" + "11" * 20
@@ -44,13 +46,17 @@ ONE = "0x" + "00" * 31 + "01"
 FIVE = "0x" + "00" * 31 + "05"
 SIX = "0x" + "00" * 31 + "06"
 SLOT_1 = "0x" + "00" * 31 + "01"
+BLOCK_HASH = "0x" + "cd" * 32
+TRANSACTION_INDEX = 7
 
 
 def artifact() -> TransactionTraceArtifactData:
     return TransactionTraceArtifactData(
         chain_id=1,
         tx_hash="0x" + "ab" * 32,
+        block_hash=BLOCK_HASH,
         block_number=24_566_937,
+        transaction_index=TRANSACTION_INDEX,
         root_succeeded=True,
         transaction_from="0x" + "44" * 20,
         transaction_to=ADDRESS_A,
@@ -139,7 +145,31 @@ def artifact() -> TransactionTraceArtifactData:
 
 
 class _NoopProvider:
-    pass
+    def __init__(
+        self,
+        *,
+        block_hash=BLOCK_HASH,
+        block_number=None,
+        transaction_index=TRANSACTION_INDEX,
+        root_succeeded=True,
+    ):
+        self.block_hash = block_hash
+        self.block_number = block_number or artifact().block_number
+        self.transaction_index = transaction_index
+        self.root_succeeded = root_succeeded
+        self.receipt_calls = 0
+
+    async def get_transaction_receipt(self, chain_id, tx_hash):
+        self.receipt_calls += 1
+        return {
+            "blockHash": self.block_hash,
+            "blockNumber": self.block_number,
+            "transactionIndex": self.transaction_index,
+            "status": 1 if self.root_succeeded else 0,
+            "from": artifact().transaction_from,
+            "to": artifact().transaction_to,
+            "contractAddress": artifact().created_contract,
+        }
 
 
 class _CachedArtifactRepository:
@@ -147,9 +177,16 @@ class _CachedArtifactRepository:
         self.value = value
         self.get_count = 0
 
-    async def get(self, chain_id, tx_hash):
+    async def get(self, chain_id, tx_hash, receipt):
         self.get_count += 1
-        return self.value
+        if (
+            self.value.block_hash == receipt.block_hash
+            and self.value.block_number == receipt.block_number
+            and self.value.transaction_index == receipt.transaction_index
+            and self.value.root_succeeded == receipt.root_succeeded
+        ):
+            return self.value
+        return None
 
 
 class _SharedArtifactRepository:
@@ -157,9 +194,18 @@ class _SharedArtifactRepository:
         self.value = None
         self.save_count = 0
 
-    async def get(self, chain_id, tx_hash):
+    async def get(self, chain_id, tx_hash, receipt):
         await asyncio.sleep(0)
-        return self.value
+        if self.value is None:
+            return None
+        if (
+            self.value.block_hash == receipt.block_hash
+            and self.value.block_number == receipt.block_number
+            and self.value.transaction_index == receipt.transaction_index
+            and self.value.root_succeeded == receipt.root_succeeded
+        ):
+            return self.value
+        return None
 
     async def save(self, value):
         self.save_count += 1
@@ -167,11 +213,29 @@ class _SharedArtifactRepository:
 
 
 class _FailingHistoryService:
-    async def analyze(self, chain_id, tx_hash):
+    def __init__(self):
+        self.tracer = SimpleNamespace(
+            rpc_client=SimpleNamespace(
+                get_receipt=AsyncMock(
+                    return_value=receipt_fixture(),
+                )
+            )
+        )
+
+    async def analyze(self, chain_id, tx_hash, *, receipt=None):
         raise RPCError(
             "slotscan_traceTransaction",
             "https://user:secret@rpc.example/key?token=abc",
         )
+
+
+def receipt_fixture():
+    return {
+        "blockHash": BLOCK_HASH,
+        "blockNumber": artifact().block_number,
+        "transactionIndex": TRANSACTION_INDEX,
+        "status": 1,
+    }
 
 
 class _HistoryService(TransactionHistoryService):
@@ -509,6 +573,7 @@ class Eip7702TraceTests(IsolatedAsyncioTestCase):
             chain_id=1,
             tx_hash=raw_artifact.tx_hash,
             history_service=service,
+            response_cache=TransactionResponseCache(0),
         )
 
         self.assertFalse(response.capabilities.code_attribution_complete)
@@ -649,6 +714,7 @@ class TraceExtractorTests(IsolatedAsyncioTestCase):
             async def get_receipt(self, chain_id, tx_hash):
                 return {
                     "blockHash": "0x" + "dd" * 32,
+                    "blockNumber": artifact().block_number,
                     "transactionIndex": 2,
                     "status": 1,
                 }
@@ -697,6 +763,7 @@ class TraceExtractorTests(IsolatedAsyncioTestCase):
             async def get_receipt(self, chain_id, tx_hash):
                 return {
                     "blockHash": "0x" + "ee" * 32,
+                    "blockNumber": artifact().block_number,
                     "transactionIndex": 3,
                     "status": 1,
                 }
@@ -725,6 +792,7 @@ class TraceExtractorTests(IsolatedAsyncioTestCase):
         )
         valid_receipt = {
             "blockHash": native.block_hash,
+            "blockNumber": artifact().block_number,
             "transactionIndex": native.transaction_index,
             "status": 1,
         }
@@ -753,6 +821,46 @@ class TraceExtractorTests(IsolatedAsyncioTestCase):
 
 
 class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
+    async def test_changed_receipt_identity_retraces_and_replaces_artifact(self):
+        old_artifact = artifact()
+        new_block_hash = "0x" + "ef" * 32
+        provider = _NoopProvider(
+            block_hash=new_block_hash,
+            transaction_index=old_artifact.transaction_index + 1,
+        )
+        repository = _SharedArtifactRepository()
+        repository.value = old_artifact
+        tracer = TransactionAnalysisService(
+            provider,
+            Settings(),
+            TypeDecoder(),
+            trace_cache_repo=repository,
+        )
+        evidence = TransactionTraceEvidence(
+            receipt=receipt_fixture(),
+            prestate_diff={"pre": {}, "post": {}},
+            writes=[],
+            sha3_operations=[],
+            evm_step_count=1,
+        )
+        tracer.trace_extractor.extract = AsyncMock(return_value=evidence)
+
+        replaced = await tracer.load_trace_artifact(
+            1,
+            old_artifact.tx_hash,
+        )
+
+        self.assertEqual(replaced.block_hash, new_block_hash)
+        self.assertEqual(
+            replaced.transaction_index,
+            old_artifact.transaction_index + 1,
+        )
+        self.assertEqual(provider.receipt_calls, 1)
+        self.assertEqual(repository.save_count, 1)
+        self.assertIs(repository.value, replaced)
+        supplied_receipt = tracer.trace_extractor.extract.await_args.args[2]
+        self.assertEqual(supplied_receipt["blockHash"], new_block_hash)
+
     async def test_multiple_resolution_targets_are_not_rejected_by_count(self):
         one_owner = replace(
             artifact(),
@@ -824,7 +932,7 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
         single_flight = TraceSingleFlight()
         extraction_count = 0
 
-        async def extract(chain_id, tx_hash):
+        async def extract(chain_id, tx_hash, receipt):
             nonlocal extraction_count
             extraction_count += 1
             await asyncio.sleep(0.01)
@@ -869,7 +977,11 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
         release = asyncio.Event()
 
         async def hold():
-            async with single_flight.hold(1, artifact().tx_hash):
+            async with single_flight.hold(
+                1,
+                artifact().tx_hash,
+                ReceiptIdentity.from_receipt(receipt_fixture()),
+            ):
                 entered.set()
                 await release.wait()
 
@@ -976,6 +1088,7 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
             chain_id=1,
             tx_hash=degraded.tx_hash,
             history_service=service,
+            response_cache=TransactionResponseCache(0),
         )
 
         self.assertFalse(response.trace_unavailable)
@@ -991,6 +1104,7 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
                 chain_id=1,
                 tx_hash=artifact().tx_hash,
                 history_service=_FailingHistoryService(),
+                response_cache=TransactionResponseCache(0),
             )
 
         self.assertEqual(raised.exception.status_code, 502)
@@ -1294,6 +1408,7 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
             tx_hash=artifact().tx_hash,
             include_global_order=True,
             history_service=service,
+            response_cache=TransactionResponseCache(0),
         )
 
         self.assertEqual(response.summary.storage_owners, 2)
@@ -1322,13 +1437,14 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
             tx_hash=artifact().tx_hash,
             include_global_order=False,
             history_service=service,
+            response_cache=TransactionResponseCache(0),
         )
         self.assertIsNone(without_timeline.global_order)
 
     async def test_reverted_root_retains_attempted_writes_without_net_effects(self):
         reverted_artifact = replace(artifact(), root_succeeded=False)
         tracer = TransactionAnalysisService(
-            _NoopProvider(),
+            _NoopProvider(root_succeeded=False),
             Settings(MAX_SSTORE_OPS=100),
             TypeDecoder(),
             trace_cache_repo=_CachedArtifactRepository(reverted_artifact),
@@ -1346,6 +1462,7 @@ class TransactionHistoryServiceTests(IsolatedAsyncioTestCase):
             tx_hash=reverted_artifact.tx_hash,
             include_global_order=True,
             history_service=service,
+            response_cache=TransactionResponseCache(0),
         )
 
         self.assertEqual(response.status, "reverted")

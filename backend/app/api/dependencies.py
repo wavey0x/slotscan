@@ -22,6 +22,7 @@ from app.services.storage_view import StorageViewService
 from app.services.tracer import TransactionAnalysisService
 from app.services.tracer.tracer import TraceSingleFlight
 from app.services.transaction_history import TransactionHistoryService
+from app.services.transaction_response_cache import TransactionResponseCache
 from app.services.verification import VerificationService
 from app.services.web3_provider import Web3Provider
 
@@ -87,6 +88,13 @@ async def get_trace_cache_repository(
 @lru_cache()
 def get_trace_single_flight() -> TraceSingleFlight:
     return TraceSingleFlight()
+
+
+@lru_cache()
+def get_transaction_response_cache() -> TransactionResponseCache:
+    return TransactionResponseCache(
+        get_settings().transaction_response_cache_bytes,
+    )
 
 
 async def get_contract_resolver(

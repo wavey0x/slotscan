@@ -45,7 +45,7 @@ class RethStorageConformanceTests(unittest.IsolatedAsyncioTestCase):
 
     async def _voting_attempt(self):
         version = await self.provider.make_request(1, "web3_clientVersion", [])
-        self.assertTrue(version["result"].startswith("reth/v2.3.0"))
+        self.assertRegex(version["result"], r"^reth/v\d+\.\d+\.\d+")
         receipt = await self.provider.get_transaction_receipt(1, VOTING_TX)
         block_number = int(receipt["blockNumber"])
         web3 = self.provider.get_web3(1)

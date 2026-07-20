@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     )
     db_pool_size: int = Field(default=5, alias="DB_POOL_SIZE")
     db_max_overflow: int = Field(default=10, alias="DB_MAX_OVERFLOW")
+    transaction_response_cache_bytes: int = Field(
+        default=64 * 1024 * 1024,
+        alias="TRANSACTION_RESPONSE_CACHE_BYTES",
+    )
 
     # Server
     api_host: str = Field(default="0.0.0.0", alias="API_HOST")

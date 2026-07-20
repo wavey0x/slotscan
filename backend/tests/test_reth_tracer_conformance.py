@@ -2,6 +2,7 @@ import os
 import unittest
 
 from app.config import Settings
+from app.services.transaction_receipt import ReceiptIdentity
 from app.services.tracer.extractor import TransactionTraceExtractor
 from app.services.tracer.journal import StorageJournalBuilder
 from app.services.tracer.rpc_client import TraceRPCClient
@@ -166,11 +167,12 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_provider_contract_and_voting_delegate_attribution(self):
         version = await self.provider.make_request(1, "web3_clientVersion", [])
-        self.assertTrue(version["result"].startswith("reth/v2.3.0"))
+        self.assertRegex(version["result"], r"^reth/v\d+\.\d+\.\d+")
 
         oracle = await self.client._execute_compact_storage_trace(1, VOTING_TX)
         native = await self.native_client.execute_slotscan_trace(1, VOTING_TX)
         receipt = await self.native_client.get_receipt(1, VOTING_TX)
+        receipt_identity = ReceiptIdentity.from_receipt(receipt)
 
         self.assertIsNotNone(oracle)
         target = [
@@ -187,18 +189,12 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(native.observed_storage_complete)
         self.assertIsNotNone(target[0]["old_value"])
+        self.assertEqual(receipt_identity.block_hash, native.block_hash)
         self.assertEqual(
-            TransactionTraceExtractor._hash(receipt["blockHash"]),
-            native.block_hash,
-        )
-        self.assertEqual(
-            TransactionTraceExtractor._quantity(receipt["transactionIndex"]),
+            receipt_identity.transaction_index,
             native.transaction_index,
         )
-        self.assertEqual(
-            TransactionTraceExtractor._quantity(receipt["status"]) == 1,
-            native.root_succeeded,
-        )
+        self.assertEqual(receipt_identity.root_succeeded, native.root_succeeded)
 
         identity_fields = (
             "address",

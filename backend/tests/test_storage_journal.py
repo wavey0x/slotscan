@@ -15,6 +15,7 @@ from app.api.routes.transactions import _group_changes_by_slot
 
 ADDRESS = "0x" + "11" * 20
 SLOT = "0x" + "00" * 31 + "01"
+BLOCK_HASH = "0x" + "bb" * 32
 
 
 def word(value: int) -> str:
@@ -191,7 +192,7 @@ class _ArtifactRepository:
     def __init__(self, artifact):
         self.artifact = artifact
 
-    async def get(self, chain_id, tx_hash):
+    async def get(self, chain_id, tx_hash, receipt):
         return self.artifact
 
 
@@ -204,7 +205,9 @@ class TraceArtifactIntegrationTests(unittest.IsolatedAsyncioTestCase):
         artifact = TransactionTraceArtifactData(
             chain_id=1,
             tx_hash="0x" + "aa" * 32,
+            block_hash=BLOCK_HASH,
             block_number=100,
+            transaction_index=2,
             root_succeeded=True,
             write_events=writes,
             prestate_diff={"pre": {}, "post": {}},
@@ -218,7 +221,16 @@ class TraceArtifactIntegrationTests(unittest.IsolatedAsyncioTestCase):
             TypeDecoder(),
             trace_cache_repo=_ArtifactRepository(artifact),
         )
-        cached = await tracer.load_trace_artifact(1, artifact.tx_hash)
+        cached = await tracer.load_trace_artifact(
+            1,
+            artifact.tx_hash,
+            {
+                "blockHash": BLOCK_HASH,
+                "blockNumber": artifact.block_number,
+                "transactionIndex": artifact.transaction_index,
+                "status": 1,
+            },
+        )
         diff = tracer.project_trace_artifact(
             cached,
             ADDRESS,

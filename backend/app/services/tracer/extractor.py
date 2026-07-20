@@ -1,9 +1,11 @@
 """Transaction-level RPC evidence extraction, independent of decoding/layouts."""
 
 from dataclasses import dataclass
+import asyncio
 import logging
 
 from app.models.errors import RPCError
+from app.services.transaction_receipt import ReceiptIdentity
 from app.services.tracer.rpc_client import TRACE_METHOD, TraceRPCClient
 
 
@@ -26,16 +28,23 @@ class TransactionTraceExtractor:
     def __init__(self, rpc_client: TraceRPCClient):
         self.rpc_client = rpc_client
 
-    async def extract(self, chain_id: int, tx_hash: str) -> TransactionTraceEvidence:
-        # The receipt is independent network I/O, so overlap it with the one
-        # native replay while keeping all trace evidence in that single replay.
-        import asyncio
-
-        native, receipt = await asyncio.gather(
-            self.rpc_client.execute_slotscan_trace(chain_id, tx_hash),
-            self.rpc_client.get_receipt(chain_id, tx_hash),
-        )
-        self._validate_receipt_identity(native, receipt)
+    async def extract(
+        self,
+        chain_id: int,
+        tx_hash: str,
+        receipt: dict | None = None,
+    ) -> TransactionTraceEvidence:
+        if receipt is None:
+            # The receipt is independent network I/O, so overlap it with the
+            # one native replay when no caller has already acquired it.
+            native, receipt = await asyncio.gather(
+                self.rpc_client.execute_slotscan_trace(chain_id, tx_hash),
+                self.rpc_client.get_receipt(chain_id, tx_hash),
+            )
+        else:
+            native = await self.rpc_client.execute_slotscan_trace(chain_id, tx_hash)
+        receipt_identity = ReceiptIdentity.from_receipt(receipt)
+        self._validate_receipt_identity(native, receipt_identity)
         prestate_diff = native.prestate_diff
         self._normalize_diff(prestate_diff)
         self._merge_observed_prestate(
@@ -56,45 +65,17 @@ class TransactionTraceExtractor:
             degraded_reason=native.degraded_reason,
         )
 
-    @classmethod
-    def _validate_receipt_identity(cls, native, receipt: dict) -> None:
-        try:
-            receipt_block_hash = cls._hash(receipt["blockHash"])
-            receipt_index = cls._quantity(receipt["transactionIndex"])
-            receipt_status = cls._quantity(receipt["status"]) == 1
-        except (KeyError, TypeError, ValueError):
-            raise RPCError(TRACE_METHOD, "receipt identity is malformed") from None
+    @staticmethod
+    def _validate_receipt_identity(
+        native,
+        receipt: ReceiptIdentity,
+    ) -> None:
         if (
-            receipt_block_hash != native.block_hash
-            or receipt_index != native.transaction_index
-            or receipt_status != native.root_succeeded
+            receipt.block_hash != native.block_hash
+            or receipt.transaction_index != native.transaction_index
+            or receipt.root_succeeded != native.root_succeeded
         ):
             raise RPCError(TRACE_METHOD, "receipt identity does not match trace")
-
-    @staticmethod
-    def _hash(value) -> str:
-        if isinstance(value, bytes):
-            value = "0x" + value.hex()
-        elif not isinstance(value, str) and hasattr(value, "hex"):
-            value = value.hex()
-        if (
-            not isinstance(value, str)
-            or len(value) != 66
-            or not value.startswith("0x")
-        ):
-            raise ValueError("invalid hash")
-        bytes.fromhex(value[2:])
-        return value.lower()
-
-    @staticmethod
-    def _quantity(value) -> int:
-        if isinstance(value, bool):
-            raise ValueError("invalid quantity")
-        if isinstance(value, int):
-            return value
-        if isinstance(value, str):
-            return int(value, 16)
-        raise TypeError("invalid quantity")
 
     @staticmethod
     def _word(value: str | int) -> str:

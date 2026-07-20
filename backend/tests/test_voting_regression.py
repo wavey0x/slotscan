@@ -187,7 +187,9 @@ class VotingRethAttributionRegressionTests(unittest.TestCase):
         artifact = TransactionTraceArtifactData(
             chain_id=1,
             tx_hash=fixture["transaction_hash"],
+            block_hash="0x" + "cc" * 32,
             block_number=fixture["block_number"],
+            transaction_index=0,
             root_succeeded=True,
             transaction_from=None,
             transaction_to=fixture["storage_address"],

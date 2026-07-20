@@ -74,8 +74,13 @@ class TransactionHistoryService:
         tx_hash: str,
         *,
         storage_addresses: tuple[str, ...] | None = None,
+        receipt: dict | None = None,
     ) -> TransactionHistoryAnalysis:
-        artifact = await self.tracer.load_trace_artifact(chain_id, tx_hash)
+        artifact = await self.tracer.load_trace_artifact(
+            chain_id,
+            tx_hash,
+            receipt,
+        )
         journal = self.tracer.build_journal(artifact)
         discovered_owners = storage_addresses or self.tracer.persistent_storage_owners(
             artifact,

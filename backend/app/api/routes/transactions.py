@@ -3,10 +3,11 @@
 from collections import defaultdict
 from typing import Optional, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.api.dependencies import (
     get_transaction_history_service,
+    get_transaction_response_cache,
 )
 from app.models.api import (
     ContractHistoryCountsResponse,
@@ -38,7 +39,12 @@ from app.models.errors import (
 )
 from app.services.decoder import TypeDecoder
 from app.services.layout_index import LayoutIndex
+from app.services.transaction_receipt import ReceiptIdentity
 from app.services.transaction_history import TransactionHistoryService
+from app.services.transaction_response_cache import (
+    TransactionResponseCache,
+    TransactionResponseKey,
+)
 from app.utils.type_labels import (
     clean_type_label,
     normalize_contract_label,
@@ -890,37 +896,25 @@ def _empty_transaction_history(
     )
 
 
-@router.get(
-    "/{chain_id}/{tx_hash}",
-    response_model=TransactionStorageHistoryResponse,
-)
-async def get_transaction_storage_history(
+async def _build_transaction_storage_history(
     chain_id: int,
     tx_hash: str,
-    include_global_order: bool = False,
-    history_service: TransactionHistoryService = Depends(
-        get_transaction_history_service
-    ),
-):
-    """Analyze persistent writes across every storage owner in a transaction."""
-    if not re.fullmatch(r"0x[a-fA-F0-9]{64}", tx_hash):
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "Invalid transaction hash", "code": "INVALID_TX_HASH"},
-        )
-
+    include_global_order: bool,
+    history_service: TransactionHistoryService,
+    receipt: dict,
+) -> TransactionStorageHistoryResponse:
     try:
-        analysis = await history_service.analyze(chain_id, tx_hash)
+        analysis = await history_service.analyze(
+            chain_id,
+            tx_hash,
+            receipt=receipt,
+        )
     except TransactionNotFoundError:
         raise HTTPException(
             status_code=404,
             detail={"error": "Transaction not found", "code": "TX_NOT_FOUND"},
         )
     except TraceNotAvailableError as exc:
-        receipt = await history_service.tracer.rpc_client.get_receipt(
-            chain_id,
-            tx_hash,
-        )
         degraded_reason = (
             "trace_limit"
             if any(
@@ -1086,3 +1080,96 @@ async def get_transaction_storage_history(
         trace_unavailable=False,
         degraded_reason=capabilities.get("degraded_reason"),
     )
+
+
+def _is_response_cacheable(
+    response: TransactionStorageHistoryResponse,
+) -> bool:
+    return (
+        response.is_complete
+        and not response.trace_unavailable
+        and response.degraded_reason is None
+        and all(
+            contract.resolution_status == "resolved"
+            and contract.is_verified
+            and contract.layout_available
+            and not contract.errors
+            for contract in response.contracts
+        )
+    )
+
+
+def _serialized_response(
+    response: TransactionStorageHistoryResponse,
+) -> bytes:
+    return response.model_dump_json().encode()
+
+
+@router.get(
+    "/{chain_id}/{tx_hash}",
+    response_model=TransactionStorageHistoryResponse,
+)
+async def get_transaction_storage_history(
+    chain_id: int,
+    tx_hash: str,
+    include_global_order: bool = False,
+    history_service: TransactionHistoryService = Depends(
+        get_transaction_history_service
+    ),
+    response_cache: TransactionResponseCache = Depends(
+        get_transaction_response_cache
+    ),
+):
+    """Analyze persistent writes across every storage owner in a transaction."""
+    if not re.fullmatch(r"0x[a-fA-F0-9]{64}", tx_hash):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid transaction hash", "code": "INVALID_TX_HASH"},
+        )
+
+    try:
+        receipt = await history_service.tracer.rpc_client.get_receipt(
+            chain_id,
+            tx_hash,
+        )
+        receipt_identity = ReceiptIdentity.from_receipt(receipt)
+    except TransactionNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "Transaction not found", "code": "TX_NOT_FOUND"},
+        )
+    except RPCError:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "Upstream RPC request failed", "code": "RPC_ERROR"},
+        )
+
+    key = TransactionResponseKey(
+        chain_id=chain_id,
+        tx_hash=tx_hash.lower(),
+        receipt=receipt_identity,
+        include_global_order=include_global_order,
+    )
+    cached = response_cache.get(key)
+    if cached is not None:
+        return Response(content=cached, media_type="application/json")
+
+    async with response_cache.hold(key):
+        cached = response_cache.peek(key)
+        if cached is not None:
+            response_cache.coalesced_hits += 1
+            return Response(content=cached, media_type="application/json")
+
+        response = await _build_transaction_storage_history(
+            chain_id=chain_id,
+            tx_hash=tx_hash,
+            include_global_order=include_global_order,
+            history_service=history_service,
+            receipt=receipt,
+        )
+        if not _is_response_cacheable(response):
+            return response
+
+        body = _serialized_response(response)
+        response_cache.put(key, body)
+        return Response(content=body, media_type="application/json")

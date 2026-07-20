@@ -37,6 +37,7 @@ from app.services.tracer.extractor import (
     TransactionTraceEvidence,
     TransactionTraceExtractor,
 )
+from app.services.transaction_receipt import ReceiptIdentity
 from app.models.errors import TraceNotAvailableError
 from app.utils.vyper import LEGACY_HASHED_STORAGE
 
@@ -53,11 +54,19 @@ class TraceSingleFlight:
     """Application-scoped per-transaction lock registry."""
 
     def __init__(self):
-        self._entries: dict[tuple[int, str], _TraceLockEntry] = {}
+        self._entries: dict[
+            tuple[int, str, ReceiptIdentity],
+            _TraceLockEntry,
+        ] = {}
 
     @asynccontextmanager
-    async def hold(self, chain_id: int, tx_hash: str) -> AsyncIterator[None]:
-        key = (chain_id, tx_hash.lower())
+    async def hold(
+        self,
+        chain_id: int,
+        tx_hash: str,
+        receipt: ReceiptIdentity,
+    ) -> AsyncIterator[None]:
+        key = (chain_id, tx_hash.lower(), receipt)
         entry = self._entries.get(key)
         if entry is None:
             entry = _TraceLockEntry(asyncio.Lock())
@@ -102,28 +111,60 @@ class TransactionAnalysisService:
         self,
         chain_id: int,
         tx_hash: str,
+        receipt: dict | None = None,
     ) -> TransactionTraceArtifactData:
         """Load or extract the one contract-agnostic artifact for a transaction."""
+        if receipt is None:
+            receipt = await self.rpc_client.get_receipt(chain_id, tx_hash)
+        receipt_identity = ReceiptIdentity.from_receipt(receipt)
         if self.trace_cache_repo:
-            cached = await self.trace_cache_repo.get(chain_id, tx_hash)
+            cached = await self.trace_cache_repo.get(
+                chain_id,
+                tx_hash,
+                receipt_identity,
+            )
             if cached:
                 return cached
 
-            async with self.single_flight.hold(chain_id, tx_hash):
-                cached = await self.trace_cache_repo.get(chain_id, tx_hash)
+            async with self.single_flight.hold(
+                chain_id,
+                tx_hash,
+                receipt_identity,
+            ):
+                cached = await self.trace_cache_repo.get(
+                    chain_id,
+                    tx_hash,
+                    receipt_identity,
+                )
                 if cached:
                     return cached
-                return await self._extract_trace_artifact(chain_id, tx_hash)
+                return await self._extract_trace_artifact(
+                    chain_id,
+                    tx_hash,
+                    receipt,
+                    receipt_identity,
+                )
 
-        return await self._extract_trace_artifact(chain_id, tx_hash)
+        return await self._extract_trace_artifact(
+            chain_id,
+            tx_hash,
+            receipt,
+            receipt_identity,
+        )
 
     async def _extract_trace_artifact(
         self,
         chain_id: int,
         tx_hash: str,
+        receipt: dict,
+        receipt_identity: ReceiptIdentity,
     ) -> TransactionTraceArtifactData:
         logger.info("Trace artifact MISS for %s - executing RPC calls", tx_hash[:10])
-        evidence = await self.trace_extractor.extract(chain_id, tx_hash)
+        evidence = await self.trace_extractor.extract(
+            chain_id,
+            tx_hash,
+            receipt,
+        )
         try:
             self._enforce_trace_limits(evidence)
         except TraceNotAvailableError as exc:
@@ -140,12 +181,10 @@ class TransactionAnalysisService:
                 evm_step_count=0,
                 degraded_reason="trace_limit",
             )
-        receipt = evidence.receipt
-        root_succeeded = self._quantity(receipt.get("status", 1)) == 1
         journal = self.journal_builder.build(
             evidence.writes,
             evidence.prestate_diff,
-            root_succeeded=root_succeeded,
+            root_succeeded=receipt_identity.root_succeeded,
             evm_step_count=evidence.evm_step_count or None,
         )
         write_history_complete = evidence.evm_step_count > 0
@@ -173,8 +212,10 @@ class TransactionAnalysisService:
         artifact = TransactionTraceArtifactData(
             chain_id=chain_id,
             tx_hash=tx_hash.lower(),
-            block_number=self._quantity(receipt["blockNumber"]),
-            root_succeeded=root_succeeded,
+            block_hash=receipt_identity.block_hash,
+            block_number=receipt_identity.block_number,
+            transaction_index=receipt_identity.transaction_index,
+            root_succeeded=receipt_identity.root_succeeded,
             transaction_from=self._optional_address(receipt.get("from")),
             transaction_to=self._optional_address(receipt.get("to")),
             created_contract=self._optional_address(receipt.get("contractAddress")),
