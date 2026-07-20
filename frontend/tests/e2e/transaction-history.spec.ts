@@ -538,6 +538,14 @@ test('view switch shimmers the retained layout during deferred rendering', async
       documentElement.dataset.pendingViewGlimmer = String(
         Boolean(element.parentElement?.querySelector('[data-testid="view-loading-glimmer"]')),
       );
+      if (!documentElement.dataset.pendingViewFrameScheduled) {
+        documentElement.dataset.pendingViewFrameScheduled = 'true';
+        requestAnimationFrame(() => {
+          documentElement.dataset.pendingViewHeldForFrame = String(
+            element.getAttribute('aria-busy') === 'true',
+          );
+        });
+      }
     };
     new MutationObserver(capturePendingState).observe(element, {
       attributes: true,
@@ -560,6 +568,9 @@ test('view switch shimmers the retained layout during deferred rendering', async
   )).toBe('true');
   await expect.poll(() => page.evaluate(
     () => document.documentElement.dataset.pendingViewGlimmer,
+  )).toBe('true');
+  await expect.poll(() => page.evaluate(
+    () => document.documentElement.dataset.pendingViewHeldForFrame,
   )).toBe('true');
 });
 

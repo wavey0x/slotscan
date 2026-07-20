@@ -60,14 +60,16 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
   const urlView: ViewMode = viewParam === 'timeline' ? 'timeline' : 'grouped';
   const urlValueMode: ValueMode = searchParams.get('values') === 'hex' ? 'hex' : 'decoded';
   const [requestedView, setRequestedView] = useState<ViewMode>(urlView);
+  const [pendingView, setPendingView] = useState<ViewMode | null>(null);
   const [valueMode, setValueMode] = useState<ValueMode>(urlValueMode);
   const deferredSearch = useDeferredValue(search);
   const view: ViewMode = requestedView === 'timeline' && data?.capabilities.execution_order_available
     ? 'timeline'
     : 'grouped';
+  const selectedView = pendingView ?? view;
   const deferredView = useDeferredValue(view);
   const deferredValueMode = useDeferredValue(valueMode);
-  const isViewPending = view !== deferredView;
+  const isViewPending = pendingView !== null || view !== deferredView;
   const showHex = deferredValueMode === 'hex';
   const focusParam = searchParams.get('focus')?.toLowerCase() || null;
 
@@ -75,6 +77,26 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
     setRequestedView(urlView);
     setValueMode(urlValueMode);
   }, [urlValueMode, urlView]);
+
+  useEffect(() => {
+    if (!pendingView) return;
+
+    let renderFrame: number | null = null;
+    const paintFrame = window.requestAnimationFrame(() => {
+      renderFrame = window.requestAnimationFrame(() => {
+        setRequestedView(pendingView);
+        setPendingView(null);
+        const next = new URLSearchParams(window.location.search);
+        next.set('view', pendingView);
+        window.history.replaceState(null, '', `${pathname}?${next.toString()}`);
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(paintFrame);
+      if (renderFrame !== null) window.cancelAnimationFrame(renderFrame);
+    };
+  }, [pathname, pendingView]);
 
   useEffect(() => {
     saveRecentInspection({
@@ -96,10 +118,11 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
   }, [data, focusParam]);
 
   const selectView = (mode: ViewMode) => {
-    setRequestedView(mode);
-    const next = new URLSearchParams(window.location.search);
-    next.set('view', mode);
-    window.history.replaceState(null, '', `${pathname}?${next.toString()}`);
+    if (mode === view) {
+      setPendingView(null);
+      return;
+    }
+    setPendingView(mode);
   };
 
   const selectValueMode = (mode: ValueMode) => {
@@ -206,7 +229,7 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
           <ViewSwitch
             label="View"
             showLabel={false}
-            value={view}
+            value={selectedView}
             options={[
               { value: 'grouped', label: 'Grouped' },
               { value: 'timeline', label: 'Timeline', disabled: !data.capabilities.execution_order_available },
@@ -242,7 +265,7 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
               data-testid="view-loading-status"
               role="status"
             >
-              Loading {view} view
+              Loading {selectedView} view
             </span>
             <div
               className="view-loading-glimmer pointer-events-none z-10"
