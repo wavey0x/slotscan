@@ -86,7 +86,7 @@ function tryParseBigInt(value: string): bigint | null {
 }
 
 const RECENT_SEARCHES_KEY = 'slotscan_recent_inspections';
-const MAX_RECENT = 5;
+const MAX_RECENT = 10;
 
 export interface RecentInspection {
   chain: string;

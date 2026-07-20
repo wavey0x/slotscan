@@ -497,6 +497,65 @@ test('home search accepts a transaction hash and opens transaction-wide history'
   await expect(page.getByRole('button', { name: 'Restored' })).toHaveCount(0);
 });
 
+test('view switch exposes deferred rendering while retaining the current layout', async ({ page }) => {
+  const slot = structuredValueSlot();
+  const contract = resolutionContract({
+    storage_address: slot.changes[0].storage_address,
+    code_addresses: [slot.changes[0].code_address],
+    name: 'DeferredViewContract',
+    is_verified: true,
+    layout_available: true,
+    slots: [slot],
+  });
+  const response = resolutionResponse([contract]);
+  response.global_order = [{
+    ordinal: 0,
+    step: slot.changes[0].step,
+    storage_address: contract.storage_address,
+    slot: slot.slot,
+    event_index: 0,
+  }];
+  await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
+    await route.fulfill({ json: response });
+  });
+
+  await page.goto(`/1/tx/${RESOLUTION_TX}`);
+  const results = page.getByTestId('transaction-results');
+  await expect(results).toHaveAttribute('aria-busy', 'false');
+  await expect(results.getByTestId('contract-toggle')).toBeVisible();
+
+  await results.evaluate((element) => {
+    const documentElement = document.documentElement;
+    const capturePendingState = () => {
+      if (element.getAttribute('aria-busy') !== 'true') return;
+      documentElement.dataset.pendingViewStatus = (
+        element.parentElement?.querySelector('[data-testid="view-loading-status"]')
+          ?.textContent?.trim() ?? ''
+      );
+      documentElement.dataset.pendingViewRetained = String(
+        Boolean(element.querySelector('[data-testid="contract-toggle"]')),
+      );
+    };
+    new MutationObserver(capturePendingState).observe(element, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+    });
+  });
+
+  await page.getByRole('button', { name: 'Timeline' }).click();
+
+  await expect(page.getByTestId('timeline-event')).toHaveCount(1);
+  await expect(results).toHaveAttribute('aria-busy', 'false');
+  await expect(page.getByTestId('view-loading-status')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(
+    () => document.documentElement.dataset.pendingViewStatus,
+  )).toBe('Preparing timeline…');
+  await expect.poll(() => page.evaluate(
+    () => document.documentElement.dataset.pendingViewRetained,
+  )).toBe('true');
+});
+
 test('unnamed contracts distinguish layout, source, and raw-slot states', async ({ page }) => {
   const contracts = [
     resolutionContract({

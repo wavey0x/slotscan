@@ -17,7 +17,7 @@ import {
   contractDisplayLabel,
   hasRetryableContractResolution,
 } from '@/lib/contract-resolution';
-import { saveRecentInspection } from '@/lib/utils';
+import { cn, saveRecentInspection } from '@/lib/utils';
 
 type ViewMode = 'grouped' | 'timeline';
 type ValueMode = 'decoded' | 'hex';
@@ -67,6 +67,7 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
     : 'grouped';
   const deferredView = useDeferredValue(view);
   const deferredValueMode = useDeferredValue(valueMode);
+  const isViewPending = view !== deferredView;
   const showHex = deferredValueMode === 'hex';
   const focusParam = searchParams.get('focus')?.toLowerCase() || null;
 
@@ -233,25 +234,48 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
         )}
       </div>
 
-      {deferredView === 'grouped' ? (
-        <div>
-          {filteredContracts.map((contract) => (
-            <MemoizedContractSection
-              key={contract.storage_address}
-              contract={contract}
-              chain={chain}
-              forceOpen={Boolean(deferredSearch.trim())}
-              defaultOpen={focusParam === contract.storage_address.toLowerCase()}
-              executionOrderAvailable={data.capabilities.execution_order_available}
-              isComplete={data.is_complete}
-              showHex={showHex}
-            />
-          ))}
-          {filteredContracts.length === 0 && <div className="border border-gray-300 p-8 text-center text-gray-500">No writes match the search</div>}
+      <div className="relative">
+        {isViewPending && (
+          <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center px-3">
+            <div
+              className="border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-700"
+              data-testid="view-loading-status"
+              role="status"
+            >
+              Preparing {view}…
+            </div>
+          </div>
+        )}
+        <div
+          className={cn(
+            'min-w-0',
+            isViewPending && 'pointer-events-none select-none opacity-40',
+          )}
+          data-testid="transaction-results"
+          aria-busy={isViewPending}
+          aria-hidden={isViewPending}
+        >
+          {deferredView === 'grouped' ? (
+            <div>
+              {filteredContracts.map((contract) => (
+                <MemoizedContractSection
+                  key={contract.storage_address}
+                  contract={contract}
+                  chain={chain}
+                  forceOpen={Boolean(deferredSearch.trim())}
+                  defaultOpen={focusParam === contract.storage_address.toLowerCase()}
+                  executionOrderAvailable={data.capabilities.execution_order_available}
+                  isComplete={data.is_complete}
+                  showHex={showHex}
+                />
+              ))}
+              {filteredContracts.length === 0 && <div className="border border-gray-300 p-8 text-center text-gray-500">No writes match the search</div>}
+            </div>
+          ) : (
+            <MemoizedTimeline entries={timeline} chain={chain} showContract={!singleContract} showHex={showHex} />
+          )}
         </div>
-      ) : (
-        <MemoizedTimeline entries={timeline} chain={chain} showContract={!singleContract} showHex={showHex} />
-      )}
+      </div>
     </div>
   );
 }
