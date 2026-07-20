@@ -18,29 +18,44 @@ trap cleanup EXIT
 printf '%064d\n' 0 >"$tmp/jwt.hex"
 "$binary" node \
   --dev \
+  --with-unused-ports \
+  --ipcdisable \
   --datadir "$tmp/data" \
   --chain dev \
-  --port 30308 \
   --storage.v2 \
   --authrpc.jwtsecret "$tmp/jwt.hex" \
   --authrpc.addr 127.0.0.1 \
-  --authrpc.port 18551 \
   --http \
   --http.addr 127.0.0.1 \
-  --http.port 18545 \
   --http.api eth,net,web3,debug,trace,txpool \
   --rpc.max-blocks-per-filter 0 \
-  --ws \
-  --ws.addr 127.0.0.1 \
-  --ws.port 18546 \
-  --ws.api eth,net,web3 \
   --log.file.directory "$tmp/logs" \
-  --metrics 127.0.0.1:19001 \
   >"$tmp/reth.log" 2>&1 &
 pid=$!
 
-rpc_url="http://127.0.0.1:18545"
 deadline=$((SECONDS + 120))
+rpc_address=""
+until [[ -n "$rpc_address" ]]; do
+  rpc_address="$(
+    grep -F "RPC HTTP server started" "$tmp/reth.log" 2>/dev/null \
+      | grep -oE '127\.0\.0\.1:[0-9]+' \
+      | tail -n1 \
+      || true
+  )"
+  [[ -n "$rpc_address" ]] && break
+  if ! kill -0 "$pid" 2>/dev/null; then
+    cat "$tmp/reth.log" >&2
+    exit 1
+  fi
+  (( SECONDS < deadline )) || {
+    cat "$tmp/reth.log" >&2
+    echo "Reth RPC did not publish its listening address" >&2
+    exit 1
+  }
+  sleep 1
+done
+
+rpc_url="http://$rpc_address"
 until chain_response="$(curl --max-time 3 -fsS -X POST "$rpc_url" \
   -H 'content-type: application/json' \
   --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' 2>/dev/null)"; do
