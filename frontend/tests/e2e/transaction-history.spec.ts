@@ -497,7 +497,7 @@ test('home search accepts a transaction hash and opens transaction-wide history'
   await expect(page.getByRole('button', { name: 'Restored' })).toHaveCount(0);
 });
 
-test('view switch exposes deferred rendering while retaining the current layout', async ({ page }) => {
+test('view switch shimmers the retained layout during deferred rendering', async ({ page }) => {
   const slot = structuredValueSlot();
   const contract = resolutionContract({
     storage_address: slot.changes[0].storage_address,
@@ -535,6 +535,9 @@ test('view switch exposes deferred rendering while retaining the current layout'
       documentElement.dataset.pendingViewRetained = String(
         Boolean(element.querySelector('[data-testid="contract-toggle"]')),
       );
+      documentElement.dataset.pendingViewGlimmer = String(
+        Boolean(element.parentElement?.querySelector('[data-testid="view-loading-glimmer"]')),
+      );
     };
     new MutationObserver(capturePendingState).observe(element, {
       attributes: true,
@@ -548,11 +551,15 @@ test('view switch exposes deferred rendering while retaining the current layout'
   await expect(page.getByTestId('timeline-event')).toHaveCount(1);
   await expect(results).toHaveAttribute('aria-busy', 'false');
   await expect(page.getByTestId('view-loading-status')).toHaveCount(0);
+  await expect(page.getByTestId('view-loading-glimmer')).toHaveCount(0);
   await expect.poll(() => page.evaluate(
     () => document.documentElement.dataset.pendingViewStatus,
-  )).toBe('Preparing timeline…');
+  )).toBe('Loading timeline view');
   await expect.poll(() => page.evaluate(
     () => document.documentElement.dataset.pendingViewRetained,
+  )).toBe('true');
+  await expect.poll(() => page.evaluate(
+    () => document.documentElement.dataset.pendingViewGlimmer,
   )).toBe('true');
 });
 

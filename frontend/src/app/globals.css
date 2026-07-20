@@ -122,6 +122,44 @@
   .dark .theme-logo {
     filter: invert(1);
   }
+
+  .view-loading-glimmer {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    background: rgb(var(--color-gray-100) / 0.6);
+  }
+
+  .view-loading-glimmer::after {
+    content: '';
+    position: absolute;
+    inset-block: 0;
+    left: -40%;
+    width: 40%;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgb(255 255 255 / 0.72),
+      transparent
+    );
+    animation: view-loading-glimmer 1.2s ease-in-out infinite;
+    will-change: transform;
+  }
+
+  .dark .view-loading-glimmer::after {
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgb(var(--color-gray-200) / 0.72),
+      transparent
+    );
+  }
+}
+
+@keyframes view-loading-glimmer {
+  to {
+    transform: translateX(350%);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

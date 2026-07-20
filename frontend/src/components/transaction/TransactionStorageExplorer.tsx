@@ -236,15 +236,20 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
 
       <div className="relative">
         {isViewPending && (
-          <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center px-3">
-            <div
-              className="border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-700"
+          <>
+            <span
+              className="sr-only"
               data-testid="view-loading-status"
               role="status"
             >
-              Preparing {view}…
-            </div>
-          </div>
+              Loading {view} view
+            </span>
+            <div
+              className="view-loading-glimmer pointer-events-none z-10"
+              data-testid="view-loading-glimmer"
+              aria-hidden="true"
+            />
+          </>
         )}
         <div
           className={cn(

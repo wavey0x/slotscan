@@ -104,7 +104,7 @@ export function ContractSection({
             className="col-span-2 row-start-1 flex min-w-0 items-center gap-1 text-left"
           >
             <span aria-hidden="true" className={cn('text-[10px] text-gray-400 transition-transform', expanded && 'rotate-90')}>▶</span>
-            <h2 className="truncate text-sm font-medium text-gray-900">{displayLabel}</h2>
+            <h2 className="truncate text-sm font-normal text-gray-900">{displayLabel}</h2>
           </button>
           <span className="col-start-2 row-start-2 flex min-w-0 items-center font-mono text-[10px] text-gray-500" title={contract.storage_address}>
             <Link href={`/${chain}/${contract.storage_address}`} className="truncate hover:underline">
