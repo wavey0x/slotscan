@@ -1,73 +1,86 @@
 # SlotScan
 
-Ethereum smart contract storage analyzer. View storage layouts, decode values, and trace transaction storage changes.
+Ethereum storage inspection and transaction forensics.
 
-SlotScan is in pre-launch development. Application-owned APIs and caches use
-hard cutovers rather than backwards-compatibility layers; compiler and chain
-version handling remains part of the analysis domain.
+**Production:** [slotscan.info](https://slotscan.info)
 
-## Components
+SlotScan turns raw EVM storage into readable contract state. It resolves
+verified layouts, decodes values, traces transaction-wide storage activity,
+and compares layouts across contracts or historical blocks.
 
-- **Backend** (`/backend`): FastAPI API for fetching sources, parsing layouts, reading storage, and tracing txs.
-- **Frontend** (`/frontend`): Next.js UI for browsing storage and diffs.
-- **Custom Reth node** (`/reth-slotscan`): Normal Reth plus SlotScan's native
-  single-replay transaction-trace RPC.
-- **PostgreSQL**: Caches contract metadata and results.
+## Features
 
-Transaction-wide history is available at
-`GET /api/slotscan/tx/{chain_id}/{tx_hash}`. Add
-`?include_global_order=true` for execution-ordered event references. The API
-groups every persistent write owner and retains restored, no-op, and reverted
-slot histories. Storage layouts are fetched from Sourcify when available;
-missing layouts degrade to raw slots without request-time compilation.
+- Decode Solidity and Vyper storage layouts, including packed values,
+  mappings, arrays, structs, and namespaced storage.
+- Trace ordered `SSTORE` and `TSTORE` activity with immediate values, reverted
+  writes, mapping preimages, and authoritative final state.
+- Resolve proxies and EIP-7702 delegation at the selected historical block
+  while keeping code identity separate from storage ownership.
+- Compare exact compiler layouts by physical storage shape, packing, and
+  encoding—not variable names.
+- Run performance-critical analysis through a custom Reth binary with
+  single-replay tracing and native vector storage reads.
+- Preserve raw evidence and report incomplete analysis explicitly when source,
+  layout, or trace detail is unavailable.
 
-## Quick Start
+## Architecture
 
-### 1. Database (skip if you have postgres running)
+| Component | Purpose |
+| --- | --- |
+| [`frontend/`](frontend/) | Next.js application |
+| [`backend/`](backend/) | FastAPI analysis API and PostgreSQL-backed caches |
+| [`reth-slotscan/`](reth-slotscan/) | Downstream Reth binary with native SlotScan RPC extensions |
+
+The custom Reth node collects the state diff, ordered writes, call-frame
+outcomes, storage reads, and SHA3 preimages in one canonical replay. Native
+vector storage reads are pinned to one exact block hash for coherent results.
+
+See [backend architecture](backend/ARCHITECTURE.md),
+[Reth integration](reth-slotscan/README.md), and
+[benchmark methodology](backend/benchmarks/README.md) for implementation
+details.
+
+## Local Development
+
+Prerequisites:
+
+- PostgreSQL
+- Python 3 with `venv`
+- Node.js and npm
+- A synced Ethereum mainnet node running the
+  [`reth-slotscan`](reth-slotscan/README.md) binary
+
+Copy the environment template and configure the database, RPC endpoint, and
+Etherscan API key:
 
 ```bash
-createdb slotscan_dev
+cp .env.example .env
 ```
 
-### 2. Backend
+Start the backend:
 
 ```bash
 cd backend
-python3 -m venv venv && source venv/bin/activate
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
-alembic upgrade head  # creates tables (only needed once)
-python -m app.main    # starts server on :8000
+alembic upgrade head
+python -m app.main
 ```
 
-### 3. Frontend
+Start the frontend in a second terminal:
 
 ```bash
 cd frontend
 npm install
-npm run dev  # starts on :3000
+npm run dev
 ```
 
-## Configuration
+The frontend runs at [localhost:3000](http://localhost:3000) and the API at
+[localhost:8000](http://localhost:8000).
 
-Copy `.env` to project root and edit:
+## Development
 
-```
-DATABASE_URL=postgresql+asyncpg://wavey@localhost:5432/slotscan_dev
-RPC_URL_1=http://your-rpc:8545
-ETHERSCAN_API_KEY_1=your-key
-```
-
-Transaction tracing requires `RPC_URL_1` to point at the `reth-slotscan`
-binary, not stock Reth. The custom executable replaces the stock executable
-against the existing compatible Reth data directory; it is not a sidecar and
-does not require a second sync. See [`reth-slotscan/README.md`](reth-slotscan/README.md).
-
-The manual legacy-versus-native performance benchmark is documented in
-[`backend/benchmarks/README.md`](backend/benchmarks/README.md). It uses pinned
-mainnet transactions, interleaved samples, and semantic parity checks; it does
-not run in CI.
-
-## Notes
-
-- **alembic**: Database migration tool. `alembic upgrade head` applies schema changes.
-- **uvicorn**: ASGI server. Used internally by `python -m app.main`. Add `--reload` for auto-reload during dev.
+Product behavior and invariants are defined in
+[`REQUIREMENTS.md`](REQUIREMENTS.md). Repository conventions and proportional
+validation requirements are defined in [`AGENTS.md`](AGENTS.md).
