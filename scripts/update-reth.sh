@@ -51,11 +51,46 @@ else
   rust_channel="$rust_version"
 fi
 
+workspace_dependency_version() {
+  local dependency="$1"
+  local declaration
+  local version
+
+  declaration="$(
+    grep -E "^${dependency}[[:space:]]*=" "$upstream_manifest" | head -n1
+  )"
+  version="$(
+    sed -nE 's/.*version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' \
+      <<<"$declaration"
+  )"
+  if [[ -z "$version" ]]; then
+    version="$(
+      sed -nE 's/^[^=]+=[[:space:]]*"([^"]+)".*/\1/p' <<<"$declaration"
+    )"
+  fi
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+.-][0-9A-Za-z.-]+)?$ ]] || {
+    echo "could not read Reth's ${dependency} version at ${reth_commit}" >&2
+    exit 1
+  }
+  printf '%s\n' "$version"
+}
+
+# These crates cross the SlotScan/Reth API boundary. Keep one exact version in
+# the graph so RPC, primitive, and inspector types cannot silently diverge.
+alloy_primitives_version="$(workspace_dependency_version alloy-primitives)"
+alloy_trace_version="$(workspace_dependency_version alloy-rpc-types-trace)"
+jsonrpsee_version="$(workspace_dependency_version jsonrpsee)"
+revm_inspectors_version="$(workspace_dependency_version revm-inspectors)"
+
 RETH_COMMIT="$reth_commit" \
 RETH_VERSION="$reth_version" \
 SLOTSCAN_VERSION="$slotscan_version" \
 RUST_CHANNEL="$rust_channel" \
 RUST_VERSION="$rust_version" \
+ALLOY_PRIMITIVES_VERSION="$alloy_primitives_version" \
+ALLOY_TRACE_VERSION="$alloy_trace_version" \
+JSONRPSEE_VERSION="$jsonrpsee_version" \
+REVM_INSPECTORS_VERSION="$revm_inspectors_version" \
 MANIFEST="$manifest" \
 TOOLCHAIN="$toolchain" \
 python3 <<'PY'
@@ -104,6 +139,28 @@ manifest = reth_dependency.sub(
     lambda match: f"{match.group(1)}{os.environ['RETH_COMMIT']}{match.group(3)}",
     manifest,
 )
+
+interface_dependencies = {
+    "alloy-primitives": os.environ["ALLOY_PRIMITIVES_VERSION"],
+    "alloy-rpc-types-trace": os.environ["ALLOY_TRACE_VERSION"],
+    "jsonrpsee": os.environ["JSONRPSEE_VERSION"],
+    "revm-inspectors": os.environ["REVM_INSPECTORS_VERSION"],
+}
+for dependency, version in interface_dependencies.items():
+    pattern = re.compile(
+        rf'(?m)^({re.escape(dependency)}\s*=\s*'
+        rf'(?:\{{\s*version\s*=\s*)?")=[^"]+(".*)$'
+    )
+    manifest, count = pattern.subn(
+        lambda match: f"{match.group(1)}={version}{match.group(2)}",
+        manifest,
+        count=1,
+    )
+    if count != 1:
+        raise SystemExit(
+            f"Cargo.toml {dependency} dependency did not match the expected shape"
+        )
+
 manifest_path.write_text(manifest)
 
 toolchain_path = pathlib.Path(os.environ["TOOLCHAIN"])
@@ -126,6 +183,10 @@ cargo metadata --locked --manifest-path "$manifest" --format-version 1 \
 RETH_COMMIT="$reth_commit" \
 RETH_VERSION="$reth_version" \
 SLOTSCAN_VERSION="$slotscan_version" \
+ALLOY_PRIMITIVES_VERSION="$alloy_primitives_version" \
+ALLOY_TRACE_VERSION="$alloy_trace_version" \
+JSONRPSEE_VERSION="$jsonrpsee_version" \
+REVM_INSPECTORS_VERSION="$revm_inspectors_version" \
 METADATA="$tmp/metadata.json" \
 python3 <<'PY'
 import json
@@ -144,6 +205,20 @@ if reth["version"] != os.environ["RETH_VERSION"]:
 source = reth.get("source") or ""
 if os.environ["RETH_COMMIT"] not in source:
     raise SystemExit("Cargo metadata did not resolve the exact Reth tag commit")
+
+expected_dependencies = {
+    "alloy-primitives": os.environ["ALLOY_PRIMITIVES_VERSION"],
+    "alloy-rpc-types-trace": os.environ["ALLOY_TRACE_VERSION"],
+    "jsonrpsee": os.environ["JSONRPSEE_VERSION"],
+    "revm-inspectors": os.environ["REVM_INSPECTORS_VERSION"],
+}
+dependencies = {dependency["name"]: dependency for dependency in root["dependencies"]}
+for name, version in expected_dependencies.items():
+    requirement = dependencies.get(name, {}).get("req")
+    if requirement != f"={version}":
+        raise SystemExit(
+            f"Cargo metadata contains the wrong {name} requirement: {requirement}"
+        )
 PY
 
 [[ -s "$lockfile" ]] || { echo "Cargo.lock was not generated" >&2; exit 1; }
