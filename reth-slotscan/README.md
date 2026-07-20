@@ -35,10 +35,23 @@ intermediary, no-op, restored, transient, or reverted writes.
 The declared Rust toolchain is installed automatically by `rustup`:
 
 ```sh
-cargo build --release
+cargo build --locked --profile maxperf --features production
 ```
 
-The resulting executable is `target/release/reth-slotscan`.
+The resulting executable is `target/maxperf/reth-slotscan`. Production builds
+set `SLOTSCAN_BUILD_COMMIT` to the source commit and use Reth's public version
+metadata hook to report the SlotScan release, SlotScan commit, embedded Reth
+release and commit, build profile, and enabled features.
+
+Releases are built natively on GitHub's Ubuntu runner without Docker and
+package this executable as a single top-level file named `reth`. The tag and
+artifact use the downstream version derived from the embedded Reth release, for
+example:
+
+```text
+reth-v2.3.0-slotscan.1
+reth-v2.3.0-slotscan.1-x86_64-unknown-linux-gnu.tar.gz
+```
 
 ## RPC
 
@@ -106,18 +119,28 @@ run in CI.
 ## Reth upgrades
 
 Reth-facing calls are isolated in `src/reth_adapter.rs` and node wiring in
-`src/main.rs`. To upgrade:
+`src/main.rs`. The manually dispatched `Build SlotScan Reth` workflow accepts
+one stable upstream tag such as `v2.4.0`. It then:
 
-1. Update the identical pinned Reth revisions in `Cargo.toml`.
-2. Update `rust-toolchain.toml` to Reth's declared minimum.
-3. Regenerate and commit `Cargo.lock`.
-4. Run `cargo check`, `cargo test`, Clippy, the backend native differential
-   suite, and a smoke check for both `eth_chainId` and
-   `slotscan_traceTransaction`.
-5. Review upstream changes only around
-   `spawn_trace_transaction_in_block_with_inspector`, REVM inspector/journal
-   hooks, and `GethTraceBuilder::geth_prestate_traces`.
-6. Re-run the manual interleaved performance benchmark before deployment.
+1. Runs `scripts/update-reth.sh` to resolve the official tag to its exact
+   commit, update all Reth pins and Rust metadata, and regenerate `Cargo.lock`.
+2. Commits that deterministic source update only after validating its shape.
+3. Runs `scripts/build-reth.sh`, which checks, tests, lints, builds with the
+   `maxperf` profile, verifies embedded identity, and smoke-tests both ordinary
+   Reth RPC and `slotscan_traceTransaction`.
+4. Pushes the source commit and immutable release tag, then publishes the
+   drop-in `reth` archive. An existing release is a successful no-op.
+
+These scripts are the supported release interface. `server-setup update check`
+can detect that upstream Reth is newer and offer to dispatch this workflow; it
+does not compile on the node or deploy automatically. Once the release exists,
+the normal `server-setup update apply` path installs it into the existing
+binary location and service.
+
+Before adopting a new upstream release, review changes around
+`spawn_trace_transaction_in_block_with_inspector`, REVM inspector/journal
+hooks, and `GethTraceBuilder::geth_prestate_traces`, then re-run the manual
+interleaved performance benchmark.
 
 Do not support multiple Reth releases in one build. If one of those public
 seams changes, adapt `src/main.rs` or `src/reth_adapter.rs`. If a required seam

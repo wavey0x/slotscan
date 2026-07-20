@@ -1,16 +1,16 @@
 mod inspector;
 mod reth_adapter;
 mod rpc;
+mod version;
 
 use clap::Parser;
 use reth_adapter::RethTraceAdapter;
-use reth_ethereum::{
-    cli::{chainspec::EthereumChainSpecParser, interface::Cli},
-    node::EthereumNode,
-};
+use reth_ethereum::node::EthereumNode;
+use reth_ethereum_cli::{chainspec::EthereumChainSpecParser, interface::Cli};
 use rpc::{SlotScanApiServer, SlotScanRpc};
 
 fn main() {
+    version::init();
     Cli::<EthereumChainSpecParser, Args>::parse()
         .run(async move |builder, _args| {
             let handle = builder

@@ -1,6 +1,6 @@
 [package]
 name = "reth-slotscan"
-version = "0.1.0"
+version = "2.3.0-slotscan.1"
 edition = "2024"
 rust-version = "1.93"
 publish = false
@@ -11,7 +11,9 @@ alloy-rpc-types-trace = { version = "=2.0.5", default-features = false }
 async-trait = "0.1.89"
 clap = { version = "4", features = ["derive"] }
 jsonrpsee = { version = "=0.26.0", features = ["server", "macros"] }
-reth-ethereum = { git = "https://github.com/paradigmxyz/reth", rev = "9384bc53d8c0c77e59cac83fdaaf3b372c6d2216", features = ["node", "cli"] }
+reth-ethereum = { git = "https://github.com/paradigmxyz/reth", rev = "9384bc53d8c0c77e59cac83fdaaf3b372c6d2216", features = ["node"] }
+reth-ethereum-cli = { git = "https://github.com/paradigmxyz/reth", rev = "9384bc53d8c0c77e59cac83fdaaf3b372c6d2216" }
+reth-node-core = { git = "https://github.com/paradigmxyz/reth", rev = "9384bc53d8c0c77e59cac83fdaaf3b372c6d2216" }
 reth-rpc-eth-api = { git = "https://github.com/paradigmxyz/reth", rev = "9384bc53d8c0c77e59cac83fdaaf3b372c6d2216" }
 revm-inspectors = "=0.40.1"
 serde = { version = "1.0", features = ["derive"] }
@@ -20,6 +22,38 @@ serde_json = "1.0"
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
 
+[features]
+default = []
+production = [
+    "alloy-primitives/asm-keccak",
+    "alloy-primitives/keccak-cache-global",
+    "reth-ethereum/jemalloc",
+    "reth-ethereum/js-tracer",
+    "reth-ethereum/keccak-cache-global",
+    "reth-ethereum/otlp",
+    "reth-ethereum/portable",
+    "reth-ethereum-cli/asm-keccak",
+    "reth-ethereum-cli/jemalloc",
+    "reth-ethereum-cli/min-trace-logs",
+    "reth-ethereum-cli/otlp",
+    "reth-ethereum-cli/otlp-logs",
+    "reth-node-core/asm-keccak",
+    "reth-node-core/jemalloc",
+    "reth-node-core/keccak-cache-global",
+    "reth-node-core/min-trace-logs",
+    "reth-node-core/otlp",
+    "reth-node-core/otlp-logs",
+]
+
 [profile.release]
-codegen-units = 1
+opt-level = 3
 lto = "thin"
+debug = "none"
+strip = "symbols"
+panic = "unwind"
+codegen-units = 16
+
+[profile.maxperf]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
