@@ -61,6 +61,29 @@ function timelineStructMember(slot: SlotChangeResponse, changedFields: string[])
     ?? null;
 }
 
+function StructuredTimelineHeader({
+  variable,
+  typeLabel,
+}: {
+  variable: string;
+  typeLabel?: string | null;
+}) {
+  return (
+    <div
+      className="flex min-w-0 items-baseline gap-1 overflow-hidden whitespace-nowrap font-mono leading-tight"
+      data-testid="timeline-structured-header"
+    >
+      <span className="min-w-0 flex-1 truncate text-gray-900">{variable}</span>
+      {typeLabel && (
+        <>
+          <span aria-hidden="true" className="shrink-0 text-gray-400">·</span>
+          <span className="max-w-[40%] truncate text-[10px] text-gray-400">{typeLabel}</span>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function ContractSection({
   contract,
   chain,
@@ -224,9 +247,7 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
           const variableType = structMember?.type_label || slot.value_type || slot.type_label;
           const unchanged = event.effect === 'noop';
           const hasStructuredChildren = !structMember && structuredFieldNames.length > 0;
-          const structuredHeaderClass = variablePath?.includes('[')
-            ? 'h-10 overflow-hidden'
-            : 'h-5 overflow-hidden';
+          const structuredHeaderClass = 'h-5 overflow-hidden';
 
           return (
             <tr key={`${contract.storage_address}:${slot.slot}:${event.step}:${ordinal}`} data-testid="timeline-event" className="border-b border-gray-200 text-xs hover:bg-gray-50">
@@ -244,7 +265,10 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                 </td>
               )}
               <td className={`${storageCellClass} min-w-0 overflow-hidden`} data-testid="timeline-variable">
-                <div className={hasStructuredChildren ? structuredHeaderClass : undefined}>
+                <div
+                  className={hasStructuredChildren ? structuredHeaderClass : undefined}
+                  data-testid={hasStructuredChildren ? 'timeline-structured-header-frame' : undefined}
+                >
                   <TimelineVariableDisclosure
                     contract={contract}
                     chain={chain}
@@ -253,7 +277,12 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                     isRawSlot={!variablePath && !slot.variable_name}
                   >
                     <div className="min-w-0">
-                      {variablePath?.includes('[') ? (
+                      {hasStructuredChildren ? (
+                        <StructuredTimelineHeader
+                          variable={variableDetail}
+                          typeLabel={variableType}
+                        />
+                      ) : variablePath?.includes('[') ? (
                         <KeyedVariablePath
                           path={variablePath}
                           typeLabel={variableType}

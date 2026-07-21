@@ -479,6 +479,61 @@ function packedDynamicArrayStructSlot({
   };
 }
 
+function nestedPackedNoopSlot() {
+  const base = packedMappingStructSlot({ index: 23, changeBoth: true });
+  const stash = '0x2F2A43a5Bf50fb973F7a32444Cbd4fa64D0dc517';
+  const before = {
+    ...base.before,
+    value_decoded: { stash, shutdown: false },
+  };
+  const after = {
+    ...base.after,
+    value_decoded: { stash, shutdown: false },
+  };
+
+  return {
+    ...base,
+    variable_name: 'poolInfo',
+    variable_path: 'poolInfo[570][+4]',
+    type_label: 'struct PoolInfo[]',
+    value_type: 'packed',
+    before,
+    after,
+    packed_fields: [
+      {
+        name: 'stash',
+        type_label: 'address',
+        offset: 0,
+        size: 20,
+        before: { value_decoded: stash },
+        after: { value_decoded: stash },
+      },
+      {
+        name: 'shutdown',
+        type_label: 'bool',
+        offset: 20,
+        size: 1,
+        before: { value_decoded: false },
+        after: { value_decoded: false },
+      },
+    ],
+    struct_definition: {
+      name: 'PoolInfo',
+      members: [
+        { name: 'stash', type_label: 'address', slot_offset: 4, byte_offset: 0, size: 20 },
+        { name: 'shutdown', type_label: 'bool', slot_offset: 4, byte_offset: 20, size: 1 },
+      ],
+    },
+    changes: base.changes.map((change) => ({
+      ...change,
+      before,
+      after,
+      effect: 'noop',
+      changed_value: false,
+    })),
+  };
+}
+
 test('home search accepts a transaction hash and opens transaction-wide history', async ({ page }) => {
   await page.goto('/');
   await page.getByPlaceholder('Contract address or transaction hash (0x...)').fill(SIMPLE_TX);
@@ -821,6 +876,7 @@ test('timeline keeps packed paths compact and exposes contract identity across v
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   const singleMemberSlot = packedMappingStructSlot({ index: 20 });
   const multiMemberSlot = packedMappingStructSlot({ index: 21, changeBoth: true });
+  const nestedNoopSlot = nestedPackedNoopSlot();
   const contract = resolutionContract({
     storage_address: '0x6666666666666666666666666666666666666666',
     code_addresses: ['0x6666666666666666666666666666666666666666'],
@@ -828,16 +884,16 @@ test('timeline keeps packed paths compact and exposes contract identity across v
     is_verified: true,
     layout_available: true,
     counts: {
-      slots_written: 2,
-      sstore_events: 2,
+      slots_written: 3,
+      sstore_events: 3,
       net_changed_slots: 2,
       restored_slots: 0,
       reverted_only_slots: 0,
-      noop_only_slots: 0,
+      noop_only_slots: 1,
       reverted_writes: 0,
-      noop_writes: 0,
+      noop_writes: 1,
     },
-    slots: [singleMemberSlot, multiMemberSlot],
+    slots: [singleMemberSlot, multiMemberSlot, nestedNoopSlot],
   });
   const response = resolutionResponse([
     contract,
@@ -847,7 +903,7 @@ test('timeline keeps packed paths compact and exposes contract identity across v
       name: 'OtherContract',
     }),
   ]);
-  response.global_order = [singleMemberSlot, multiMemberSlot].map((slot, ordinal) => ({
+  response.global_order = [singleMemberSlot, multiMemberSlot, nestedNoopSlot].map((slot, ordinal) => ({
     ordinal,
     step: slot.changes[0].step,
     storage_address: contract.storage_address,
@@ -907,6 +963,31 @@ test('timeline keeps packed paths compact and exposes contract identity across v
   expect(singleBox).not.toBeNull();
   expect(multiBox).not.toBeNull();
   expect(singleBox!.height).toBeLessThan(multiBox!.height);
+
+  const nestedRow = page.getByTestId('timeline-event').filter({ hasText: 'poolInfo[570][+4]' });
+  const nestedHeaderFrame = nestedRow.getByTestId('timeline-structured-header-frame');
+  const nestedHeader = nestedRow.getByTestId('timeline-structured-header');
+  await expect(nestedHeader).toContainText('poolInfo[570][+4]');
+  await expect(nestedHeader).toContainText('packed');
+  await expect(nestedRow.getByTestId('keyed-variable-context')).toHaveCount(0);
+  expect(await nestedHeaderFrame.evaluate(
+    (element) => element.scrollHeight <= element.clientHeight,
+  )).toBe(true);
+  const nestedHeaderBox = await nestedHeader.boundingBox();
+  const nestedFieldBox = await nestedRow.getByTestId('structured-variable-field').first().boundingBox();
+  const nestedValueBox = await nestedRow.getByTestId('structured-field-change').first().boundingBox();
+  expect(nestedHeaderBox).not.toBeNull();
+  expect(nestedFieldBox).not.toBeNull();
+  expect(nestedValueBox).not.toBeNull();
+  expect(nestedHeaderBox!.y + nestedHeaderBox!.height).toBeLessThanOrEqual(nestedFieldBox!.y + 1);
+  expect(Math.abs(nestedFieldBox!.y - nestedValueBox!.y)).toBeLessThan(2);
+
+  await nestedHeader.click();
+  const nestedDetail = page.getByRole('dialog', { name: 'Variable details: poolInfo[570][+4]' });
+  await expect(nestedDetail).toContainText('poolInfo[570][+4]');
+  await expect(nestedDetail).toContainText('packed');
+  await page.keyboard.press('Escape');
+
   const scroll = page.getByTestId('data-table-scroll');
   const assertMobileColumnBudget = async (width: number) => {
     await page.setViewportSize({ width, height: 844 });
