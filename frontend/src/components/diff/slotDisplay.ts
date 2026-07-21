@@ -1,34 +1,12 @@
 import { PackedFieldResponse, SlotChangeResponse } from '@/lib/types';
 import {
-  formatDecodedValue,
-  getCopyValue,
-  getTooltipValue,
   truncateAddress,
   truncateHash,
   valuesEqual,
 } from '@/lib/utils';
 
-export function storageHoverProps(decoded: unknown, encoded: string | null) {
-  const fallback = encoded ?? 'unknown';
-  return {
-    value: decoded !== null && decoded !== undefined ? getCopyValue(decoded, fallback) : fallback,
-    copyActionValue: decoded ?? fallback,
-    tooltip: getTooltipValue(decoded, fallback),
-  };
-}
-
 export function packedFieldChanged(field: PackedFieldResponse): boolean {
   return !valuesEqual(field.before.value_decoded, field.after.value_decoded);
-}
-
-export function storageDisplayValue(
-  decoded: unknown,
-  encoded: string | null,
-  showHex: boolean,
-): string {
-  if (showHex) return encoded ?? 'unknown';
-  if (decoded !== null && decoded !== undefined) return formatDecodedValue(decoded);
-  return encoded ?? 'unknown';
 }
 
 export function storageKeyDisplay(key: string | null): { display: string; full: string } | null {
@@ -38,7 +16,7 @@ export function storageKeyDisplay(key: string | null): { display: string; full: 
   return { display: key, full: key };
 }
 
-export function deriveSlotDisplay(slot: SlotChangeResponse, showHex: boolean) {
+export function deriveSlotDisplay(slot: SlotChangeResponse) {
   const packedFields = slot.packed_fields ?? [];
   const hasPacked = packedFields.length > 0;
   const changedPackedFields = hasPacked
@@ -60,12 +38,6 @@ export function deriveSlotDisplay(slot: SlotChangeResponse, showHex: boolean) {
     displayedPackedFields,
     showPackedAsTree,
     singlePackedField,
-    initialValue: singlePackedField && !showHex
-      ? formatDecodedValue(singlePackedField.before.value_decoded)
-      : storageDisplayValue(slot.before.value_decoded, slot.before.value_encoded, showHex),
-    finalValue: singlePackedField && !showHex
-      ? formatDecodedValue(singlePackedField.after.value_decoded)
-      : storageDisplayValue(slot.after.value_decoded, slot.after.value_encoded, showHex),
     revertedWriteCount: slot.changes.filter((change) => change.frame_outcome === 'reverted').length,
   };
 }

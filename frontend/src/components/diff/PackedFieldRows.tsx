@@ -1,11 +1,10 @@
 import { PackedFieldResponse, StorageChangeResponse } from '@/lib/types';
-import { cn, formatDecodedValue, valuesEqual } from '@/lib/utils';
-import { HoverCell } from '@/components/ui/HoverCell';
+import { cn, valuesEqual } from '@/lib/utils';
+import { CompactValue } from '@/components/ui/CompactValue';
 import { StorageLocationCell } from '@/components/ui/StorageLocationCell';
 import { DetailPopover } from '@/components/ui/DetailPopover';
 import type { FormattedStorageLocation } from '@/lib/storage-location';
 import { ValueDiff } from './ValueDiff';
-import { storageHoverProps } from './slotDisplay';
 
 export function PackedFieldRow({
   field,
@@ -38,8 +37,6 @@ export function PackedFieldRow({
   // Without a struct header there is no parent row, so the trunk starts at the
   // first branch instead of dangling above it.
   const treeTop = isFirst && !hasHeader ? '50%' : 0;
-  const initialDisplay = formatDecodedValue(field.before.value_decoded);
-  const finalDisplay = formatDecodedValue(field.after.value_decoded);
   const unchanged = valuesEqual(field.before.value_decoded, field.after.value_decoded);
   const afterClassName = unchanged ? 'text-gray-300' : 'text-gray-900';
 
@@ -63,8 +60,24 @@ export function PackedFieldRow({
           unchanged={unchanged}
           beforeClassName="text-gray-300"
           afterClassName={afterClassName}
-          before={<HoverCell display={initialDisplay} {...storageHoverProps(field.before.value_decoded, initialEncoded)} chainId={chainId} colorClass="font-mono text-xs text-gray-300" />}
-          after={<HoverCell display={finalDisplay} {...storageHoverProps(field.after.value_decoded, finalEncoded)} chainId={chainId} colorClass={cn('font-mono text-xs', afterClassName)} />}
+          before={(
+            <CompactValue
+              decoded={field.before.value_decoded}
+              encoded={initialEncoded}
+              chainId={chainId}
+              copyLabel="Copy previous value"
+              colorClass="font-mono text-xs text-gray-300"
+            />
+          )}
+          after={(
+            <CompactValue
+              decoded={field.after.value_decoded}
+              encoded={finalEncoded}
+              chainId={chainId}
+              copyLabel={unchanged ? 'Copy value' : 'Copy new value'}
+              colorClass={cn('font-mono text-xs', afterClassName)}
+            />
+          )}
         />
       </td>
       <td className="hidden w-8 px-1 py-0 align-top sm:table-cell">
@@ -90,6 +103,7 @@ export function InterimPackedChangeRows({
   changeIndex,
   totalChanges,
   packedFields,
+  chainId,
   showStep,
   isFirstChange,
 }: {
@@ -111,12 +125,12 @@ export function InterimPackedChangeRows({
   return (
     <>
       {packedFields.map((field, fieldIndex) => {
-        const beforeDisplay = formatDecodedValue(fieldValue(change.before.value_decoded, field.name));
-        const afterDisplay = formatDecodedValue(fieldValue(change.after.value_decoded, field.name));
+        const beforeValue = fieldValue(change.before.value_decoded, field.name);
+        const afterValue = fieldValue(change.after.value_decoded, field.name);
         const isLast = fieldIndex === packedFields.length - 1;
         const unchanged = valuesEqual(
-          fieldValue(change.before.value_decoded, field.name),
-          fieldValue(change.after.value_decoded, field.name),
+          beforeValue,
+          afterValue,
         );
 
         return (
@@ -140,7 +154,30 @@ export function InterimPackedChangeRows({
               </div>
             </td>
             <td className="py-0.5 pl-3 align-top" data-testid="interim-value">
-              <ValueDiff unchanged={unchanged} before={beforeDisplay} after={afterDisplay} beforeClassName="text-gray-300" afterClassName={unchanged ? 'text-gray-400' : 'text-gray-700'} />
+              <ValueDiff
+                unchanged={unchanged}
+                before={(
+                  <CompactValue
+                    decoded={beforeValue}
+                    chainId={chainId}
+                    copyLabel="Copy previous value"
+                    colorClass="font-mono text-xs text-gray-300"
+                  />
+                )}
+                after={(
+                  <CompactValue
+                    decoded={afterValue}
+                    chainId={chainId}
+                    copyLabel={unchanged ? 'Copy value' : 'Copy new value'}
+                    colorClass={cn(
+                      'font-mono text-xs',
+                      unchanged ? 'text-gray-400' : 'text-gray-700',
+                    )}
+                  />
+                )}
+                beforeClassName="text-gray-300"
+                afterClassName={unchanged ? 'text-gray-400' : 'text-gray-700'}
+              />
             </td>
             <td className="hidden px-1 py-0.5 align-top sm:table-cell" />
             {showStep && (

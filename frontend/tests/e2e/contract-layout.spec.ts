@@ -351,7 +351,9 @@ test('struct values expand into semantic member rows', async ({ page }) => {
   });
   await expect(oracleRow).toContainText('address');
   await expect(oracleRow).toContainText('6 · bytes 0–19');
-  await expect(oracleRow).toContainText('0xff12b7B0dF9a2A96CBc09b3822B4Db43a575cCEE');
+  await expect(oracleRow).toContainText('0xff12...cCEE');
+  await oracleRow.getByTestId('compact-value').hover();
+  await expect(page.getByRole('dialog')).toHaveText('0xff12b7B0dF9a2A96CBc09b3822B4Db43a575cCEE');
   await expect(oracleRow.locator('td').nth(4)).not.toContainText('config.oracle');
 
   const maxLtvRow = page.getByRole('row').filter({
@@ -519,7 +521,7 @@ test('packed struct mappings expand and render decoded members', async ({ page }
   await expect(protocolRow).toContainText('7');
   const deployTimeRow = history.getByRole('row').filter({ hasText: 'deployTime' });
   await expect(deployTimeRow).toContainText('uint40');
-  await expect(deployTimeRow).toContainText('0xabc +5B');
+  await expect(deployTimeRow).toContainText('0xabc · bytes 5–9');
   await expect(deployTimeRow).toContainText('1,725,000,000');
   await expect(history.getByRole('button', { name: 'Copy raw storage value' })).toBeVisible();
   expect(requestBody!.access.steps).toEqual([

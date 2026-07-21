@@ -6,15 +6,16 @@ import { ExternalLink } from 'lucide-react';
 import { SlotHistoryTable } from '@/components/diff/DiffTable';
 import { StorageTable, StorageTableColumns, StorageTableHeader, storageCellClass } from '@/components/diff/StorageTable';
 import { StorageVariableCell } from '@/components/diff/StorageVariableCell';
-import { CopyableValue, deriveStructuredValueFields, isStructuredDecodedValue, StructuredFieldNames, StructuredValueDiff, ValueDiff } from '@/components/diff/ValueDiff';
+import { deriveStructuredValueFields, isStructuredDecodedValue, StructuredFieldNames, StructuredValueDiff, ValueDiff } from '@/components/diff/ValueDiff';
 import { deriveStorageIdentity, storageIdentityMetadata } from '@/components/diff/storageIdentity';
+import { CompactValue } from '@/components/ui/CompactValue';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { StorageLocationCell } from '@/components/ui/StorageLocationCell';
 import { TimelineVariableDisclosure } from '@/components/transaction/TimelineVariableDisclosure';
 import { getAddressExplorerUrl } from '@/lib/constants';
 import { formatStorageLocation } from '@/lib/storage-location';
 import { ContractHistoryResponse, SlotChangeResponse, StorageChangeResponse } from '@/lib/types';
-import { cn, formatDecodedValue, getCopyValue, truncateAddress } from '@/lib/utils';
+import { cn, truncateAddress } from '@/lib/utils';
 import {
   contractActivityStatus,
   contractDisplayLabel,
@@ -27,25 +28,6 @@ export interface TimelineEntry {
   slot: SlotChangeResponse;
   event: StorageChangeResponse;
   ordinal: number;
-}
-
-function eventValue(event: StorageChangeResponse, side: 'before' | 'after', showHex: boolean) {
-  const pair = event[side];
-  if (showHex) return pair.value_encoded ?? 'unknown';
-  return pair.value_decoded === null || pair.value_decoded === undefined
-    ? pair.value_encoded ?? 'unknown'
-    : formatDecodedValue(pair.value_decoded);
-}
-
-function eventCopyValue(event: StorageChangeResponse, side: 'before' | 'after', showHex: boolean) {
-  const pair = event[side];
-  const encoded = pair.value_encoded ?? 'unknown';
-  return showHex ? encoded : getCopyValue(pair.value_decoded, encoded);
-}
-
-function eventRawValue(event: StorageChangeResponse, side: 'before' | 'after', showHex: boolean) {
-  const pair = event[side];
-  return showHex ? pair.value_encoded : pair.value_decoded ?? pair.value_encoded;
 }
 
 function timelineStructMember(slot: SlotChangeResponse, changedFields: string[]) {
@@ -283,19 +265,23 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                   <ValueDiff
                     unchanged={unchanged}
                     before={(
-                      <CopyableValue
-                        value={eventRawValue(event, 'before', showHex)}
-                        display={eventValue(event, 'before', showHex)}
-                        copyValue={eventCopyValue(event, 'before', showHex)}
-                        label="Copy previous value"
+                      <CompactValue
+                        decoded={event.before.value_decoded}
+                        encoded={event.before.value_encoded}
+                        mode={showHex ? 'hex' : 'decoded'}
+                        chainId={chain}
+                        copyLabel="Copy previous value"
+                        colorClass="font-mono text-xs text-gray-400"
                       />
                     )}
                     after={(
-                      <CopyableValue
-                        value={eventRawValue(event, 'after', showHex)}
-                        display={eventValue(event, 'after', showHex)}
-                        copyValue={eventCopyValue(event, 'after', showHex)}
-                        label={unchanged ? 'Copy value' : 'Copy new value'}
+                      <CompactValue
+                        decoded={event.after.value_decoded}
+                        encoded={event.after.value_encoded}
+                        mode={showHex ? 'hex' : 'decoded'}
+                        chainId={chain}
+                        copyLabel={unchanged ? 'Copy value' : 'Copy new value'}
+                        colorClass={unchanged ? 'font-mono text-xs text-gray-400' : 'font-mono text-xs text-gray-900'}
                       />
                     )}
                     beforeClassName="text-gray-400"

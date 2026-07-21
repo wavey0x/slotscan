@@ -1,21 +1,20 @@
 import { Fragment } from 'react';
 import { StorageQueryLookup, StorageViewType } from '@/lib/types';
-import { cn, formatDecodedValue } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { formatStorageLocation } from '@/lib/storage-location';
+import { CompactValue } from '@/components/ui/CompactValue';
 import { CopyButton } from '@/components/ui/CopyButton';
-import { HoverCell } from '@/components/ui/HoverCell';
 import { StorageLocationCell } from '@/components/ui/StorageLocationCell';
 import { DataTable, dataTableCellClass, dataTableHeadCellClass } from '@/components/ui/DataTable';
 
-function lookupValue(lookup: StorageQueryLookup): string {
+function lookupDecodedValue(lookup: StorageQueryLookup): unknown {
   if (lookup.decodedValue !== null && lookup.decodedValue !== undefined) {
-    return formatDecodedValue(lookup.decodedValue, { fullAddresses: true });
+    return lookup.decodedValue;
   }
-  if (lookup.rawValue === `0x${'0'.repeat(64)}`) return '0';
   try {
     return BigInt(lookup.rawValue).toString();
   } catch {
-    return lookup.rawValue || '—';
+    return undefined;
   }
 }
 
@@ -47,10 +46,12 @@ function ScalarLookupValue({
   chainId: string;
 }) {
   return (
-    <HoverCell
-      display={lookupValue(lookup)}
-      value={lookup.rawValue}
+    <CompactValue
+      decoded={lookupDecodedValue(lookup)}
+      encoded={lookup.rawValue || null}
+      missing="—"
       chainId={chainId}
+      copyLabel="Copy lookup value"
       colorClass={cn(
         'font-mono',
         lookupIsZero(lookup) ? 'text-gray-300' : 'text-gray-900',
@@ -177,7 +178,6 @@ export function LookupResultsTable({
                     byteOffset: member?.byte_offset,
                     byteSize: member?.byte_size,
                   });
-                  const display = formatDecodedValue(value);
                   return (
                     <tr
                       key={`${lookup.slot}:${lookupIndex}:${name}`}
@@ -210,9 +210,8 @@ export function LookupResultsTable({
                         />
                       </td>
                       <td className={`${dataTableCellClass} py-1.5`}>
-                        <HoverCell
-                          display={display}
-                          value={String(value ?? '')}
+                        <CompactValue
+                          decoded={value}
                           chainId={chainId}
                           copyLabel={`Copy ${name} value`}
                           colorClass="font-mono text-gray-900"

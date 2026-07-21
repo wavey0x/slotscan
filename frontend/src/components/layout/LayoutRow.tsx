@@ -8,13 +8,13 @@ import {
   StorageViewValueItem,
   StorageViewVariable,
 } from '@/lib/types';
-import { CopyButton } from '@/components/ui/CopyButton';
+import { CompactValue } from '@/components/ui/CompactValue';
 import { DetailPopover } from '@/components/ui/DetailPopover';
 import { StorageLocationCell } from '@/components/ui/StorageLocationCell';
 import { formatStorageLocation } from '@/lib/storage-location';
 import { MappingKeyInput } from './MappingKeyInput';
 import { ArrayIndexInput } from './ArrayIndexInput';
-import { cn, formatDecodedValue, shouldShowCopyAction, truncateHash } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 
 interface LayoutRowProps {
   variable: StorageViewVariable;
@@ -68,56 +68,6 @@ function resolveStructField(
     typeLabel: currentType?.label ?? label,
     byteSize: currentType?.num_bytes ?? byteSize,
   };
-}
-
-function ValueDisplay({
-  value,
-  showHex,
-}: {
-  value: StorageViewValueItem;
-  showHex: boolean;
-}) {
-  if (value.status === 'on_demand') {
-    return <span className="text-[10px] text-gray-400">query required</span>;
-  }
-  if (value.status === 'deferred_budget') {
-    return <span className="text-[10px] text-gray-400">deferred by read limit</span>;
-  }
-  if (value.status !== 'ok' || !value.value_encoded) {
-    return <span className="text-xs text-gray-400">—</span>;
-  }
-
-  const rendered = showHex
-    ? value.value_encoded
-    : formatDecodedValue(value.value_decoded, { fullAddresses: true });
-  const compact = showHex
-    ? truncateHash(value.value_encoded, 6)
-    : formatDecodedValue(value.value_decoded);
-  const copyValue = showHex
-    ? value.value_encoded
-    : String(value.value_decoded ?? value.value_encoded);
-
-  return (
-    <div className="flex min-w-0 items-center gap-1">
-      <span className={cn(
-        'font-mono leading-tight text-gray-900',
-        showHex ? 'text-[10px]' : 'text-xs',
-      )}>
-        {compact === rendered ? rendered : (
-          <>
-            <span className="sm:hidden">{compact}</span>
-            <span className="hidden break-all sm:inline">{rendered}</span>
-          </>
-        )}
-      </span>
-      {shouldShowCopyAction(value.value_decoded ?? value.value_encoded, compact) && (
-        <CopyButton
-          label={`Copy ${value.path} value`}
-          value={copyValue}
-        />
-      )}
-    </div>
-  );
 }
 
 export const LayoutRow = memo(function LayoutRow({
@@ -243,10 +193,18 @@ export const LayoutRow = memo(function LayoutRow({
           ) : successfulValues.length > 0 ? (
             <div className="space-y-1">
               {successfulValues.map((value) => (
-                <ValueDisplay
+                <CompactValue
                   key={`${value.declaration_id}:${value.path}`}
-                  value={value}
-                  showHex={showHex}
+                  decoded={value.value_decoded}
+                  encoded={value.value_encoded}
+                  mode={showHex ? 'hex' : 'decoded'}
+                  status={value.status === 'ok' && !value.value_encoded ? 'unavailable' : value.status}
+                  chainId={chainId}
+                  copyLabel={`Copy ${value.path} value`}
+                  colorClass={cn(
+                    'font-mono leading-tight text-gray-900',
+                    showHex ? 'text-[10px]' : 'text-xs',
+                  )}
                 />
               ))}
             </div>
@@ -335,7 +293,18 @@ export const LayoutRow = memo(function LayoutRow({
               />
             </td>
             <td className="px-1 py-1.5">
-              <ValueDisplay value={value} showHex={showHex} />
+              <CompactValue
+                decoded={value.value_decoded}
+                encoded={value.value_encoded}
+                mode={showHex ? 'hex' : 'decoded'}
+                status={value.status === 'ok' && !value.value_encoded ? 'unavailable' : value.status}
+                chainId={chainId}
+                copyLabel={`Copy ${value.path} value`}
+                colorClass={cn(
+                  'font-mono leading-tight text-gray-900',
+                  showHex ? 'text-[10px]' : 'text-xs',
+                )}
+              />
             </td>
             <td
               data-testid="layout-slot"

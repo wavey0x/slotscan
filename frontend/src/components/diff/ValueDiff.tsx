@@ -1,7 +1,7 @@
 import { ReactNode } from 'react';
-import { CopyButton } from '@/components/ui/CopyButton';
+import { CompactValue } from '@/components/ui/CompactValue';
 import { DetailPopover } from '@/components/ui/DetailPopover';
-import { cn, formatDecodedValue, shouldShowCopyAction, valuesEqual } from '@/lib/utils';
+import { cn, valuesEqual } from '@/lib/utils';
 
 interface ValueDiffProps {
   before: ReactNode;
@@ -120,18 +120,6 @@ export function deriveStructuredValueFields(
   };
 }
 
-function fieldDisplay(value: unknown) {
-  if (value === undefined) return '—';
-  if (value === null) return 'null';
-  return formatDecodedValue(value);
-}
-
-function fieldCopyValue(value: unknown) {
-  if (value === null) return 'null';
-  if (typeof value === 'object') return JSON.stringify(value) ?? String(value);
-  return String(value);
-}
-
 function FieldValue({
   value,
   className,
@@ -141,47 +129,13 @@ function FieldValue({
   className?: string;
   label: string;
 }) {
-  if (value === undefined) {
-    return <span className={cn('min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]', className)}>—</span>;
-  }
-
   return (
-    <CopyableValue
-      value={value}
-      display={fieldDisplay(value)}
-      copyValue={fieldCopyValue(value)}
-      label={label}
+    <CompactValue
+      decoded={value}
+      missing="—"
+      copyLabel={label}
       className={className}
     />
-  );
-}
-
-export function CopyableValue({
-  value,
-  display,
-  copyValue,
-  label,
-  className,
-}: {
-  value: unknown;
-  display: string;
-  copyValue: string;
-  label: string;
-  className?: string;
-}) {
-  return (
-    <span className="inline-flex min-w-0 max-w-full items-start">
-      <span
-        data-testid="copyable-value-text"
-        title={copyValue !== display ? copyValue : undefined}
-        className={cn('min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]', className)}
-      >
-        {display}
-      </span>
-      {shouldShowCopyAction(value, display) && (
-        <CopyButton value={copyValue} label={label} className="-my-1" />
-      )}
-    </span>
   );
 }
 

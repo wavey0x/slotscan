@@ -15,7 +15,7 @@ import {
   cn,
   valuesEqual,
 } from '@/lib/utils';
-import { HoverCell } from '@/components/ui/HoverCell';
+import { CompactValue } from '@/components/ui/CompactValue';
 import { DetailPopover } from '@/components/ui/DetailPopover';
 import { StorageLocationCell } from '@/components/ui/StorageLocationCell';
 import {
@@ -29,11 +29,7 @@ import { StorageEvidenceDetail } from './StorageEvidenceDetail';
 import { StorageVariableCell } from './StorageVariableCell';
 import { InterimPackedChangeRows, PackedFieldRow } from './PackedFieldRows';
 import { deriveStorageIdentity, storageIdentityMetadata } from './storageIdentity';
-import {
-  deriveSlotDisplay,
-  storageHoverProps,
-  storageDisplayValue,
-} from './slotDisplay';
+import { deriveSlotDisplay } from './slotDisplay';
 
 interface SlotRowProps {
   slot: SlotChangeResponse;
@@ -60,10 +56,8 @@ export function SlotRow({
     displayedPackedFields,
     showPackedAsTree,
     singlePackedField,
-    initialValue,
-    finalValue,
     revertedWriteCount,
-  } = deriveSlotDisplay(slot, showHex);
+  } = deriveSlotDisplay(slot);
   const structMember = slot.struct_field && slot.struct_definition
     ? slot.struct_definition.members.find((member) => member.name === slot.struct_field) ?? null
     : null;
@@ -234,21 +228,23 @@ export function SlotRow({
                   beforeClassName="text-gray-300"
                   afterClassName={afterClassName}
                   before={
-                    <HoverCell
-                      display={initialValue}
-                      {...storageHoverProps(beforeDecoded, slot.before.value_encoded)}
+                    <CompactValue
+                      decoded={beforeDecoded}
+                      encoded={slot.before.value_encoded}
+                      mode={showHex ? 'hex' : 'decoded'}
                       chainId={chainId}
+                      copyLabel="Copy previous value"
                       colorClass="text-xs font-mono text-gray-300"
-                      wrap
                     />
                   }
                   after={
-                    <HoverCell
-                      display={finalValue}
-                      {...storageHoverProps(afterDecoded, slot.after.value_encoded)}
+                    <CompactValue
+                      decoded={afterDecoded}
+                      encoded={slot.after.value_encoded}
+                      mode={showHex ? 'hex' : 'decoded'}
                       chainId={chainId}
+                      copyLabel={unchanged ? 'Copy value' : 'Copy new value'}
                       colorClass={cn('text-xs font-mono', afterClassName)}
-                      wrap
                     />
                   }
                 />
@@ -298,8 +294,6 @@ export function SlotRow({
         }
 
         // Non-packed: existing flat display
-        const oldVal = storageDisplayValue(change.before.value_decoded, change.before.value_encoded, showHex);
-        const newVal = storageDisplayValue(change.after.value_decoded, change.after.value_encoded, showHex);
         const unchanged = valuesEqual(change.before.value_decoded, change.after.value_decoded);
         const afterClassName = unchanged ? 'text-gray-400' : 'text-gray-900';
         const interimStructuredBefore = !showHex
@@ -357,21 +351,23 @@ export function SlotRow({
                   beforeClassName="text-gray-300"
                   afterClassName={afterClassName}
                   before={
-                    <HoverCell
-                      display={oldVal}
-                      {...storageHoverProps(change.before.value_decoded, change.before.value_encoded)}
+                    <CompactValue
+                      decoded={change.before.value_decoded}
+                      encoded={change.before.value_encoded}
+                      mode={showHex ? 'hex' : 'decoded'}
                       chainId={chainId}
+                      copyLabel="Copy previous value"
                       colorClass="text-xs font-mono text-gray-300"
-                      wrap
                     />
                   }
                   after={
-                    <HoverCell
-                      display={newVal}
-                      {...storageHoverProps(change.after.value_decoded, change.after.value_encoded)}
+                    <CompactValue
+                      decoded={change.after.value_decoded}
+                      encoded={change.after.value_encoded}
+                      mode={showHex ? 'hex' : 'decoded'}
                       chainId={chainId}
+                      copyLabel={unchanged ? 'Copy value' : 'Copy new value'}
                       colorClass={cn('text-xs font-mono', afterClassName)}
-                      wrap
                     />
                   }
                 />

@@ -1190,7 +1190,16 @@ test('grouped view preserves keyed parents and compacts one changed packed membe
   await expect(hexSinglePath).toHaveText('processed');
   await expect(singleRow.getByTestId('keyed-variable-context')).toContainText('proposalData[20]');
   await expect(singleRow.getByTestId('keyed-variable-context')).toContainText('bool');
+  const compactHex = `${singleMemberSlot.before.value_encoded.slice(0, 8)}...${singleMemberSlot.before.value_encoded.slice(-6)}`;
   await expect(singleRow.getByTestId('value-before')).toContainText(
+    compactHex,
+  );
+  await expect(singleRow.getByTestId('value-before')).not.toContainText(singleMemberSlot.before.value_encoded);
+  await singleRow.getByTestId('value-before').getByTestId('compact-value').hover();
+  await expect(page.getByRole('dialog')).toHaveText(singleMemberSlot.before.value_encoded);
+  await page.keyboard.press('Escape');
+  await singleRow.getByTestId('value-before').getByRole('button', { name: 'Copy previous value' }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(
     singleMemberSlot.before.value_encoded,
   );
 });
@@ -1327,10 +1336,10 @@ test('timeline names struct members and stays readable on mobile', async ({ page
     expect(afterBox!.y).toBeGreaterThan(beforeBox!.y);
   }
 
-  const changedBeforeColor = await changedRow.getByTestId('value-before').getByTestId('copyable-value-text').evaluate(
+  const changedBeforeColor = await changedRow.getByTestId('value-before').getByTestId('compact-value').evaluate(
     (element) => getComputedStyle(element).color,
   );
-  const changedAfterColor = await changedRow.getByTestId('value-after').getByTestId('copyable-value-text').evaluate(
+  const changedAfterColor = await changedRow.getByTestId('value-after').getByTestId('compact-value').evaluate(
     (element) => getComputedStyle(element).color,
   );
   expect(changedAfterColor).not.toBe(changedBeforeColor);
@@ -1401,7 +1410,7 @@ test('timeline names struct members and stays readable on mobile', async ({ page
   const groupedNoopRow = contractSection.getByText('_defaultConfigData.oracle', { exact: true }).locator('xpath=ancestor::tr');
   const groupedBooleanRow = contractSection.getByText('_defaultConfigData.processed', { exact: true }).locator('xpath=ancestor::tr');
   const groupedSmallNumberRow = contractSection.getByText('_status', { exact: true }).locator('xpath=ancestor::tr');
-  await expect(groupedAddressRow.getByTestId('value-diff').getByRole('button', { name: 'Copy value' })).toHaveCount(2);
+  await expect(groupedAddressRow.getByTestId('value-diff').getByRole('button', { name: /Copy (previous|new) value/ })).toHaveCount(2);
   await expect(groupedNoopRow.getByTestId('value-noop-indicator')).toBeVisible();
   await expect(groupedNoopRow.getByTestId('value-arrow')).toHaveCount(0);
   await expect(groupedBooleanRow.getByTestId('value-diff').getByRole('button', { name: 'Copy value' })).toHaveCount(0);
