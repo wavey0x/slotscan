@@ -10,6 +10,8 @@ import {
 } from '@/lib/types';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { DetailPopover } from '@/components/ui/DetailPopover';
+import { StorageLocationCell } from '@/components/ui/StorageLocationCell';
+import { formatStorageLocation } from '@/lib/storage-location';
 import { MappingKeyInput } from './MappingKeyInput';
 import { ArrayIndexInput } from './ArrayIndexInput';
 import { cn, formatDecodedValue, shouldShowCopyAction, truncateHash } from '@/lib/utils';
@@ -43,24 +45,29 @@ function keyName(typeLabel: string, type: string, index: number): string {
   return `Key ${index + 1}`;
 }
 
-function resolveStructFieldType(
+function resolveStructField(
   rootType: StorageViewType,
   relativePath: string,
   types: Record<string, StorageViewType>,
-): string {
+): { typeLabel: string; byteSize: string | null } {
   let currentType: StorageViewType | undefined = rootType;
   let label = 'unknown';
+  let byteSize: string | null = null;
 
   for (const segment of relativePath.split('.')) {
     const member: StorageViewType['members'][number] | undefined = currentType?.members.find(
       (candidate) => candidate.name === segment,
     );
-    if (!member) return label;
+    if (!member) return { typeLabel: label, byteSize };
     label = member.label;
+    byteSize = member.byte_size;
     currentType = types[member.type_id];
   }
 
-  return currentType?.label ?? label;
+  return {
+    typeLabel: currentType?.label ?? label,
+    byteSize: currentType?.num_bytes ?? byteSize,
+  };
 }
 
 function ValueDisplay({
@@ -140,6 +147,11 @@ export const LayoutRow = memo(function LayoutRow({
     : [];
   const hasStructDetails = structValues.length > 0;
   const canExpand = isInteractive || hasStructDetails;
+  const variableLocation = formatStorageLocation({
+    slot: variable.slot,
+    byteOffset: variable.byte_offset,
+    byteSize: variable.byte_size,
+  });
 
   const mappingKeyTypes: { type: string; label: string; name: string }[] = [];
   let currentType: StorageViewType | undefined = varType;
@@ -194,7 +206,7 @@ export const LayoutRow = memo(function LayoutRow({
             content={(
               <div className="space-y-1">
                 <div className="text-[10px] font-medium uppercase tracking-wide text-gray-500">Slot</div>
-                <div className="break-all font-mono text-xs text-gray-700">{variable.slot}</div>
+                <div className="break-all font-mono text-xs text-gray-700">{variableLocation.full}</div>
               </div>
             )}
           >
@@ -216,11 +228,11 @@ export const LayoutRow = memo(function LayoutRow({
           </DetailPopover>
         </td>
 
-        <td
-          className="hidden truncate px-1 py-2 font-mono text-xs text-gray-500 sm:table-cell"
-          title={variable.slot}
-        >
-          {variable.slot}
+        <td className="hidden truncate px-1 py-2 sm:table-cell">
+          <StorageLocationCell
+            location={variableLocation}
+            colorClass="font-mono text-xs text-gray-500"
+          />
         </td>
 
         <td className="px-1 py-2">
@@ -249,10 +261,12 @@ export const LayoutRow = memo(function LayoutRow({
 
         <td
           data-testid="layout-slot"
-          className="truncate px-1 py-2 font-mono text-[10px] text-gray-500 sm:hidden"
-          title={variable.slot}
+          className="truncate px-1 py-2 sm:hidden"
         >
-          {variable.slot}
+          <StorageLocationCell
+            location={variableLocation}
+            colorClass="font-mono text-[10px] text-gray-500"
+          />
         </td>
       </tr>
 
@@ -260,10 +274,12 @@ export const LayoutRow = memo(function LayoutRow({
         const relativePath = value.path.startsWith(`${variable.name}.`)
           ? value.path.slice(variable.name.length + 1)
           : value.path;
-        const typeLabel = resolveStructFieldType(varType!, relativePath, types);
-        const slotLocation = value.byte_offset > 0
-          ? `${value.slot} +${value.byte_offset}B`
-          : value.slot;
+        const field = resolveStructField(varType!, relativePath, types);
+        const location = formatStorageLocation({
+          slot: value.slot,
+          byteOffset: value.byte_offset,
+          byteSize: field.byteSize,
+        });
 
         return (
           <tr
@@ -305,28 +321,30 @@ export const LayoutRow = memo(function LayoutRow({
                 dialogLabel={`Full type for ${value.path}`}
                 content={(
                   <span className="block whitespace-normal font-mono text-xs text-gray-700 [overflow-wrap:anywhere]">
-                    {typeLabel}
+                    {field.typeLabel}
                   </span>
                 )}
               >
-                <span className="block truncate">{typeLabel}</span>
+                <span className="block truncate">{field.typeLabel}</span>
               </DetailPopover>
             </td>
-            <td
-              className="hidden truncate px-1 py-1.5 font-mono text-xs text-gray-500 sm:table-cell"
-              title={`${value.slot} · byte offset ${value.byte_offset}`}
-            >
-              {slotLocation}
+            <td className="hidden truncate px-1 py-1.5 sm:table-cell">
+              <StorageLocationCell
+                location={location}
+                colorClass="font-mono text-xs text-gray-500"
+              />
             </td>
             <td className="px-1 py-1.5">
               <ValueDisplay value={value} showHex={showHex} />
             </td>
             <td
               data-testid="layout-slot"
-              className="truncate px-1 py-1.5 font-mono text-[10px] text-gray-500 sm:hidden"
-              title={`${value.slot} · byte offset ${value.byte_offset}`}
+              className="truncate px-1 py-1.5 sm:hidden"
             >
-              {slotLocation}
+              <StorageLocationCell
+                location={location}
+                colorClass="font-mono text-[10px] text-gray-500"
+              />
             </td>
           </tr>
         );

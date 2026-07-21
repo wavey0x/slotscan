@@ -80,6 +80,8 @@ Do not add legacy redirects or a second contract-scoped transaction UI.
 - Make no-op, restored, reverted-only, and net-changed classifications visible.
 - Keep packed-field and keyed-variable paths canonical across grouped and
   timeline views.
+- Render storage identity in one order across both views: semantic variable or
+  leaf first, then parent/key context, type, and qualifiers as metadata.
 - Surface capability warnings close to the report controls.
 - Provide search when reports are large.
 
@@ -88,6 +90,9 @@ Do not add legacy redirects or a second contract-scoped transaction UI.
 - Encoded values remain copyable in decoded mode.
 - Large integers, addresses, hashes, mapping keys, and slots have compact
   display text plus access to full values.
+- Format physical storage locations identically across transaction history,
+  contract layouts, keyed lookups, and layout comparison. Value-mode switches
+  never change location notation.
 - Copy reusable values, not structural labels. Variable, field, struct, and
   type names do not have copy actions. Keyed paths expose eligible keys
   individually rather than copying the whole path.

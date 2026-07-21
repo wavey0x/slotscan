@@ -10,12 +10,14 @@
 
 import { useState } from 'react';
 import { SlotChangeResponse } from '@/lib/types';
+import { formatStorageLocation } from '@/lib/storage-location';
 import {
   cn,
   valuesEqual,
 } from '@/lib/utils';
 import { HoverCell } from '@/components/ui/HoverCell';
 import { DetailPopover } from '@/components/ui/DetailPopover';
+import { StorageLocationCell } from '@/components/ui/StorageLocationCell';
 import {
   deriveStructuredValueFields,
   isStructuredDecodedValue,
@@ -23,9 +25,10 @@ import {
   StructuredValueDiff,
   ValueDiff,
 } from './ValueDiff';
-import { KeyedVariablePath } from './KeyedVariablePath';
 import { StorageEvidenceDetail } from './StorageEvidenceDetail';
+import { StorageVariableCell } from './StorageVariableCell';
 import { InterimPackedChangeRows, PackedFieldRow } from './PackedFieldRows';
+import { deriveStorageIdentity, storageIdentityMetadata } from './storageIdentity';
 import {
   deriveSlotDisplay,
   storageHoverProps,
@@ -53,13 +56,6 @@ export function SlotRow({
   const {
     hasInterimChanges,
     hasPacked,
-    baseVariablePath,
-    displayVariablePath,
-    variableDisplayName,
-    variableLabel,
-    hasKeyedVariablePath,
-    resolvedLeafType,
-    slotNumber,
     firstStep,
     displayedPackedFields,
     showPackedAsTree,
@@ -68,6 +64,15 @@ export function SlotRow({
     finalValue,
     revertedWriteCount,
   } = deriveSlotDisplay(slot, showHex);
+  const structMember = slot.struct_field && slot.struct_definition
+    ? slot.struct_definition.members.find((member) => member.name === slot.struct_field) ?? null
+    : null;
+  const identityMember = singlePackedField || structMember;
+  const identity = deriveStorageIdentity(slot, identityMember, {
+    packed: hasPacked && !identityMember,
+  });
+  const parentIdentity = deriveStorageIdentity(slot, null, { packed: hasPacked });
+  const location = formatStorageLocation({ slot: slot.slot });
   const canExpand = hasInterimChanges;
   const structuredBefore = !showHex
     && !hasPacked
@@ -82,9 +87,9 @@ export function SlotRow({
   const structuredFields = structuredBefore && structuredAfter
     ? deriveStructuredValueFields(structuredBefore, structuredAfter)
     : null;
-  const structuredHeaderClass = hasKeyedVariablePath
+  const structuredHeaderClass = identity.path?.includes('[')
     ? 'h-10 overflow-hidden'
-    : 'h-5 overflow-hidden';
+    : storageIdentityMetadata(identity) ? 'h-8 overflow-hidden' : 'h-5 overflow-hidden';
 
   const revertedNotice = revertedWriteCount > 0 ? (
     <span className="inline-block mt-0.5 text-[9px] uppercase tracking-wide text-amber-600">
@@ -96,7 +101,7 @@ export function SlotRow({
     <StorageEvidenceDetail
       slot={slot}
       chainId={chainId}
-      displayPath={displayVariablePath || baseVariablePath}
+      displayPath={identity.path || parentIdentity.path}
     />
   );
 
@@ -122,27 +127,15 @@ export function SlotRow({
           </td>
           <td className={cn('px-1 py-0.5 align-top', isFirst && 'pt-1')} colSpan={2}>
             <DetailPopover content={variableDetail} delay={200} maxWidth="max-w-sm">
-              {baseVariablePath?.includes('[') ? (
-                <div className="flex min-w-0 items-baseline gap-1 font-mono leading-tight">
-                  <span className="shrink-0 text-xs text-gray-400">{slot.struct_definition.name}</span>
-                  <KeyedVariablePath
-                    path={baseVariablePath}
-                    chainId={chainId}
-                  />
-                </div>
-              ) : (
-                <span className="text-xs font-mono leading-tight no-underline decoration-transparent">
-                  <span className="text-gray-400">{slot.struct_definition.name}</span>{' '}
-                  <span className="text-gray-900 font-medium">
-                    {baseVariablePath || slot.variable_name}
-                  </span>
-                </span>
-              )}
+              <StorageVariableCell identity={parentIdentity} chainId={chainId} />
             </DetailPopover>
             {revertedNotice && <div>{revertedNotice}</div>}
           </td>
           <td className={cn('hidden px-1 py-0.5 w-8 align-top sm:table-cell', isFirst && 'pt-1')}>
-            <HoverCell display={slotNumber} value={slot.slot} colorClass="text-xs text-gray-500 font-mono" />
+            <StorageLocationCell
+              location={location}
+              colorClass="text-xs text-gray-500 font-mono"
+            />
           </td>
           {showStep && (
             <td className={cn('hidden px-1 py-0.5 text-right w-8 align-top sm:table-cell', isFirst && 'pt-1')}>
@@ -170,7 +163,7 @@ export function SlotRow({
           chainId={chainId}
           showStep={showStep}
           // Show slot/step on first field row only if no struct header
-          slotInfo={!slot.struct_definition?.name && idx === 0 ? { display: slotNumber, full: slot.slot } : undefined}
+          slotInfo={!slot.struct_definition?.name && idx === 0 ? location : undefined}
           step={!slot.struct_definition?.name && idx === 0 ? firstStep : undefined}
           initialEncoded={slot.before.value_encoded}
           finalEncoded={slot.after.value_encoded}
@@ -192,68 +185,11 @@ export function SlotRow({
           >
             <div className={structuredFields ? structuredHeaderClass : undefined}>
               <DetailPopover content={variableDetail} delay={200} maxWidth="max-w-sm">
-                {hasKeyedVariablePath && displayVariablePath ? (
-                  <KeyedVariablePath
-                    path={displayVariablePath}
-                    typeLabel={resolvedLeafType}
-                    chainId={chainId}
-                    canonicalLeaf={Boolean(singlePackedField && !showHex)}
-                  />
-                ) : singlePackedField && !showHex && displayVariablePath ? (
-                  <span className="block break-words font-mono text-xs font-medium leading-tight text-gray-900">
-                    {displayVariablePath}
-                  </span>
-                ) : (
-                  <span className="space-y-0 break-words block no-underline decoration-transparent">
-                    {/* Struct type + variable name */}
-                    {slot.struct_definition?.name && (
-                      <span className="text-xs font-mono leading-tight block">
-                        <span className="text-gray-400">{slot.struct_definition.name}</span>{' '}
-                        <span className="text-gray-900 font-medium">{slot.variable_name}</span>
-                      </span>
-                    )}
-                    {/* Simple mapping variable name */}
-                    {slot.is_mapping && !slot.struct_definition?.name && slot.variable_name && (
-                      <span className="text-xs font-mono leading-tight block">
-                        <span className="text-gray-900 font-medium">{variableDisplayName}</span>
-                      </span>
-                    )}
-                    {/* Struct field member */}
-                    {slot.struct_field && slot.struct_definition ? (
-                      <span className="text-xs font-mono leading-tight flex items-start">
-                        <span className="text-gray-300 mr-1 select-none">└</span>
-                        <span>
-                          <span className="text-gray-400">
-                            {slot.struct_definition.members.find(m => m.name === slot.struct_field)?.type_label
-                              || slot.value_type
-                              || slot.type_label}
-                          </span>{' '}
-                          <span className="text-gray-900 font-medium">{variableDisplayName}</span>
-                        </span>
-                      </span>
-                    ) : slot.is_mapping && !slot.struct_definition?.name && slot.value_type ? (
-                      <span className="text-xs font-mono leading-tight flex items-start">
-                        <span className="text-gray-300 mr-1 select-none">└</span>
-                        <span className="text-gray-400">{slot.value_type}</span>
-                      </span>
-                    ) : !slot.struct_definition?.name && !slot.is_mapping ? (
-                      <span className="text-xs font-mono leading-tight block">
-                        {/* For single packed field, prefer packed field's type; otherwise use slot's type */}
-                        {(singlePackedField?.type_label || slot.value_type || slot.type_label) && (
-                          <><span className="text-gray-400">{singlePackedField?.type_label || slot.value_type || slot.type_label}</span>{' '}</>
-                        )}
-                        <span className="text-gray-900 font-medium">{singlePackedField?.name || variableDisplayName}</span>
-                        {variableLabel && (
-                          <span className="text-gray-400 ml-1">({variableLabel})</span>
-                        )}
-                        {/* A collapsed multi-field slot still needs to disclose that it is packed. */}
-                        {(slot.packed_fields?.length ?? 0) > 1 && (
-                          <span data-testid="packed-slot-marker" className="ml-1.5 select-none text-[9px] uppercase tracking-wide text-gray-400">packed</span>
-                        )}
-                      </span>
-                    ) : null}
-                  </span>
-                )}
+                <StorageVariableCell
+                  identity={identity}
+                  chainId={chainId}
+                  metadataTestId="storage-variable-meta"
+                />
               </DetailPopover>
             </div>
             {structuredFields && (
@@ -321,7 +257,10 @@ export function SlotRow({
           </td>
 
           <td className={cn('hidden px-1 py-0.5 w-8 align-top sm:table-cell', isFirst && 'pt-1')}>
-            <HoverCell display={slotNumber} value={slot.slot} colorClass="text-xs text-gray-500 font-mono" />
+            <StorageLocationCell
+              location={location}
+              colorClass="text-xs text-gray-500 font-mono"
+            />
           </td>
 
           {showStep && (

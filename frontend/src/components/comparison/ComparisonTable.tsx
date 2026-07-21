@@ -8,65 +8,54 @@ import {
   dataTableHeadCellClass,
 } from '@/components/ui/DataTable';
 import { Input } from '@/components/ui/Input';
+import { HoverCell } from '@/components/ui/HoverCell';
 import { ViewSwitch } from '@/components/ui/ViewSwitch';
 import type {
   ComparisonEntry,
   ComparisonRegion,
   ComparisonSummary,
 } from '@/lib/types';
+import { formatStorageLocation } from '@/lib/storage-location';
 import { cn } from '@/lib/utils';
 
 type Filter = 'changes' | 'conflicts' | 'all';
 
-function compactSlot(value: string): string {
-  const number = BigInt(value);
-  if (number <= BigInt(999_999_999)) return number.toString();
-  const normalized = `0x${number.toString(16)}`;
-  return `${normalized.slice(0, 8)}…${normalized.slice(-6)}`;
+function formattedRegion(region: ComparisonRegion) {
+  return formatStorageLocation({
+    slot: region.location.slot,
+    endSlot: region.location.end_slot,
+    byteOffset: region.location.byte_offset,
+    byteSize: region.location.byte_size,
+    isRoot: region.location.is_root,
+  });
 }
 
-function byteRange(region: ComparisonRegion): string {
-  const start = region.location.byte_offset;
-  const end = start + Number(region.location.byte_size) - 1;
-  return `bytes ${start}–${end}`;
-}
-
-function slotIdentifier(region: ComparisonRegion): string {
-  const { location } = region;
-  if (location.slot !== location.end_slot) {
-    return `${compactSlot(location.slot)}–${compactSlot(location.end_slot)}`;
-  }
-  return compactSlot(location.slot);
+function formattedRoot(slot: string) {
+  return formatStorageLocation({ slot });
 }
 
 function locationQualifier(region: ComparisonRegion): string | null {
-  if (region.location.is_root) return 'root';
-  if (
-    region.location.byte_offset !== 0
-    || region.location.byte_size !== '32'
-  ) {
-    return byteRange(region);
-  }
-  return null;
+  return formattedRegion(region).qualifier;
 }
 
 function sideLocation(region: ComparisonRegion): string {
   const { location } = region;
-  if (location.is_root) return `root slot ${compactSlot(location.slot)}`;
+  const formatted = formattedRegion(region);
+  if (location.is_root) return `root slot ${formatted.slot}`;
   if (location.slot !== location.end_slot) {
-    return `slots ${compactSlot(location.slot)}–${compactSlot(location.end_slot)}`;
+    return `slots ${formatted.slot}`;
   }
   if (location.byte_offset !== 0 || location.byte_size !== '32') {
-    return `slot ${compactSlot(location.slot)} · ${byteRange(region)}`;
+    return `slot ${formatted.display}`;
   }
-  return `slot ${compactSlot(location.slot)}`;
+  return `slot ${formatted.slot}`;
 }
 
 function formatComparisonLocation(entry: ComparisonEntry): string {
   const from = entry.from_region;
   const to = entry.to_region;
   if (entry.kind === 'scope_root_changed' && from && to) {
-    return `root ${compactSlot(from.scope.root_slot)} → root ${compactSlot(to.scope.root_slot)}`;
+    return `root ${formattedRoot(from.scope.root_slot).slot} → root ${formattedRoot(to.scope.root_slot).slot}`;
   }
   if (!from && to) return `— → ${sideLocation(to)}`;
   if (from && !to) return `${sideLocation(from)} → —`;
@@ -87,7 +76,9 @@ function formatComparisonLocation(entry: ComparisonEntry): string {
     && sameSlot
     && from.location.end_slot === to.location.end_slot
   ) {
-    return `slot ${compactSlot(from.location.slot)} · ${byteRange(from)} → ${byteRange(to)}`;
+    const formattedFrom = formattedRegion(from);
+    const formattedTo = formattedRegion(to);
+    return `slot ${formattedFrom.slot} · ${formattedFrom.qualifier || 'full slot'} → ${formattedTo.qualifier || 'full slot'}`;
   }
   return `${sideLocation(from)} → ${sideLocation(to)}`;
 }
@@ -95,28 +86,39 @@ function formatComparisonLocation(entry: ComparisonEntry): string {
 function locationDisplay(entry: ComparisonEntry): {
   primary: string;
   secondary: string | null;
+  full: string;
 } {
   const from = entry.from_region;
   const to = entry.to_region;
   if (entry.kind === 'scope_root_changed' && from && to) {
+    const fromRoot = formattedRoot(from.scope.root_slot);
+    const toRoot = formattedRoot(to.scope.root_slot);
     return {
-      primary: `${compactSlot(from.scope.root_slot)} → ${compactSlot(to.scope.root_slot)}`,
+      primary: `${fromRoot.slot} → ${toRoot.slot}`,
       secondary: 'scope root',
+      full: `${fromRoot.fullSlot} → ${toRoot.fullSlot}`,
     };
   }
   if (!from && to) {
+    const formatted = formattedRegion(to);
     return {
-      primary: `— → ${slotIdentifier(to)}`,
+      primary: `— → ${formatted.slot}`,
       secondary: locationQualifier(to),
+      full: `— → ${formatted.fullSlot}`,
     };
   }
   if (from && !to) {
+    const formatted = formattedRegion(from);
     return {
-      primary: `${slotIdentifier(from)} → —`,
+      primary: `${formatted.slot} → —`,
       secondary: locationQualifier(from),
+      full: `${formatted.fullSlot} → —`,
     };
   }
-  if (!from || !to) return { primary: '—', secondary: null };
+  if (!from || !to) return { primary: '—', secondary: null, full: '—' };
+
+  const formattedFrom = formattedRegion(from);
+  const formattedTo = formattedRegion(to);
 
   const sameScope = from.scope.root_slot === to.scope.root_slot;
   const sameSlot = from.location.slot === to.location.slot;
@@ -129,23 +131,26 @@ function locationDisplay(entry: ComparisonEntry): {
     && from.location.byte_size === to.location.byte_size
   ) {
     return {
-      primary: slotIdentifier(from),
+      primary: formattedFrom.slot,
       secondary: locationQualifier(from),
+      full: formattedFrom.fullSlot,
     };
   }
   if (sameScope && sameSlot && sameEndSlot) {
     return {
-      primary: slotIdentifier(from),
-      secondary: `${byteRange(from)} → ${byteRange(to)}`,
+      primary: formattedFrom.slot,
+      secondary: `${formattedFrom.qualifier || 'full slot'} → ${formattedTo.qualifier || 'full slot'}`,
+      full: formattedFrom.fullSlot,
     };
   }
   const fromQualifier = locationQualifier(from);
   const toQualifier = locationQualifier(to);
   return {
-    primary: `${slotIdentifier(from)} → ${slotIdentifier(to)}`,
+    primary: `${formattedFrom.slot} → ${formattedTo.slot}`,
     secondary: fromQualifier || toQualifier
       ? `${fromQualifier || 'full slot'} → ${toQualifier || 'full slot'}`
       : null,
+    full: `${formattedFrom.fullSlot} → ${formattedTo.fullSlot}`,
   };
 }
 
@@ -329,9 +334,13 @@ export function ComparisonTable({
                             {entry.impact === 'none' && canExpand && (
                               <span className="sr-only">Storage layout change. </span>
                             )}
-                            <div className="break-words font-mono text-xs text-gray-900">
-                              {location.primary}
-                            </div>
+                            <HoverCell
+                              display={location.primary}
+                              value={location.full}
+                              copyLabel="Copy storage location"
+                              copyInDetail
+                              colorClass="font-mono text-xs text-gray-900"
+                            />
                             {location.secondary && (
                               <div className="mt-0.5 break-words font-mono text-[9px] text-gray-400">
                                 {location.secondary}

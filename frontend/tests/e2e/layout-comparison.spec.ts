@@ -492,6 +492,29 @@ test('the comparison table keeps Location as the anchor and exposes all objectiv
   await expect(table.getByRole('button', { name: 'Expand details for — → slot 13 · bytes 0–0' })).toBeHidden();
 });
 
+test('high comparison slots use canonical compact notation with full disclosure', async ({ page }) => {
+  const highSlot = `0x8${'0'.repeat(63)}`;
+  const entry = comparisonEntry(
+    'high-slot',
+    'addition',
+    'none',
+    null,
+    region({ slot: highSlot, path: 'highValue' }),
+  );
+  await mockComparison(page, availableReport({
+    summary: { conflicts: 0, ambiguous: 0, changes: 1, unchanged: 0 },
+    entries: [entry],
+  }));
+  await page.goto(`/1/compare?from=${FROM}&to=${TO}`);
+
+  const compactLocation = page.getByText('— → 0x80…00', { exact: true });
+  await expect(compactLocation).toBeVisible();
+  await compactLocation.click();
+  const detail = page.getByRole('dialog');
+  await expect(detail).toContainText(`— → ${highSlot}`);
+  await expect(detail.getByRole('button', { name: 'Copy storage location' })).toBeVisible();
+});
+
 test('search appears only for large reports and filters paths, labels, scopes, and slots', async ({ page }) => {
   const entries = Array.from({ length: 50 }, (_, index) => comparisonEntry(
     `entry-${index}`,

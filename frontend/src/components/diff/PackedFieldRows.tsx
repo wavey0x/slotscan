@@ -1,7 +1,9 @@
 import { PackedFieldResponse, StorageChangeResponse } from '@/lib/types';
 import { cn, formatDecodedValue, valuesEqual } from '@/lib/utils';
 import { HoverCell } from '@/components/ui/HoverCell';
+import { StorageLocationCell } from '@/components/ui/StorageLocationCell';
 import { DetailPopover } from '@/components/ui/DetailPopover';
+import type { FormattedStorageLocation } from '@/lib/storage-location';
 import { ValueDiff } from './ValueDiff';
 import { storageHoverProps } from './slotDisplay';
 
@@ -26,7 +28,7 @@ export function PackedFieldRow({
   totalFields: number;
   chainId: string;
   showStep?: boolean;
-  slotInfo?: { display: string; full: string };
+  slotInfo?: FormattedStorageLocation;
   step?: number | null;
   initialEncoded: string | null;
   finalEncoded: string | null;
@@ -67,7 +69,7 @@ export function PackedFieldRow({
       </td>
       <td className="hidden w-8 px-1 py-0 align-top sm:table-cell">
         {slotInfo && (
-          <HoverCell display={slotInfo.display} value={slotInfo.full} colorClass="font-mono text-xs text-gray-500" />
+          <StorageLocationCell location={slotInfo} colorClass="font-mono text-xs text-gray-500" />
         )}
       </td>
       {showStep && (

@@ -63,16 +63,6 @@ export function truncateTxHash(hash: string): string {
   return truncateHash(hash, 6);
 }
 
-export function formatSlotShort(slot: string, chars = 6): string {
-  if (!slot.startsWith('0x')) return slot;
-  return truncateHash(slot, chars);
-}
-
-export function truncateSlot(slot: string): string {
-  if (slot.length <= 18) return slot;
-  return slot.substring(0, 10) + '...' + slot.substring(slot.length - 6);
-}
-
 function tryParseBigInt(value: string): bigint | null {
   const cleaned = value.replace(/,/g, '');
   if (/^-?\d+$/.test(cleaned)) {

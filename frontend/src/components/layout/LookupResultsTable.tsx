@@ -1,8 +1,10 @@
 import { Fragment } from 'react';
 import { StorageQueryLookup, StorageViewType } from '@/lib/types';
-import { cn, formatDecodedValue, truncateSlot } from '@/lib/utils';
+import { cn, formatDecodedValue } from '@/lib/utils';
+import { formatStorageLocation } from '@/lib/storage-location';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { HoverCell } from '@/components/ui/HoverCell';
+import { StorageLocationCell } from '@/components/ui/StorageLocationCell';
 import { DataTable, dataTableCellClass, dataTableHeadCellClass } from '@/components/ui/DataTable';
 
 function lookupValue(lookup: StorageQueryLookup): string {
@@ -65,10 +67,6 @@ function absoluteMemberSlot(baseSlot: string, relativeSlot: string): string {
   }
 }
 
-function slotLocation(slot: string, byteOffset: number): string {
-  return byteOffset > 0 ? `${slot} +${byteOffset}B` : slot;
-}
-
 export function LookupResultsTable({
   lookups,
   chainId,
@@ -103,6 +101,7 @@ export function LookupResultsTable({
         <tbody>
           {lookups.map((lookup, lookupIndex) => {
             const fields = decodedRecord(lookup.decodedValue);
+            const lookupLocation = formatStorageLocation({ slot: lookup.slot });
             if (!fields) {
               return (
                 <tr key={`${lookup.slot}:${lookupIndex}`} className="border-b border-gray-200">
@@ -111,13 +110,19 @@ export function LookupResultsTable({
                     {resultType?.label ?? '—'}
                   </td>
                   <td className={`${dataTableCellClass} hidden sm:table-cell`}>
-                    <HoverCell display={truncateSlot(lookup.slot)} value={lookup.slot} colorClass="font-mono text-gray-500" />
+                    <StorageLocationCell
+                      location={lookupLocation}
+                      colorClass="font-mono text-gray-500"
+                    />
                   </td>
                   <td className={dataTableCellClass}>
                     <ScalarLookupValue lookup={lookup} chainId={chainId} />
                   </td>
                   <td className={`${dataTableCellClass} truncate font-mono text-[10px] text-gray-500 sm:hidden`}>
-                    {truncateSlot(lookup.slot)}
+                    <StorageLocationCell
+                      location={lookupLocation}
+                      colorClass="font-mono text-[10px] text-gray-500"
+                    />
                   </td>
                 </tr>
               );
@@ -140,7 +145,10 @@ export function LookupResultsTable({
                     {resultType?.label ?? 'decoded record'}
                   </td>
                   <td className={`${dataTableCellClass} hidden sm:table-cell`}>
-                    <HoverCell display={truncateSlot(lookup.slot)} value={lookup.slot} colorClass="font-mono text-gray-500" />
+                    <StorageLocationCell
+                      location={lookupLocation}
+                      colorClass="font-mono text-gray-500"
+                    />
                   </td>
                   <td className={dataTableCellClass}>
                     <span className="inline-flex items-center gap-1 font-mono text-[10px] text-gray-400">
@@ -153,7 +161,10 @@ export function LookupResultsTable({
                     </span>
                   </td>
                   <td className={`${dataTableCellClass} truncate font-mono text-[10px] text-gray-500 sm:hidden`}>
-                    {truncateSlot(lookup.slot)}
+                    <StorageLocationCell
+                      location={lookupLocation}
+                      colorClass="font-mono text-[10px] text-gray-500"
+                    />
                   </td>
                 </tr>
                 {entries.map(([name, value], fieldIndex) => {
@@ -161,7 +172,11 @@ export function LookupResultsTable({
                   const memberSlot = member
                     ? absoluteMemberSlot(lookup.slot, member.slot)
                     : lookup.slot;
-                  const location = slotLocation(memberSlot, member?.byte_offset ?? 0);
+                  const location = formatStorageLocation({
+                    slot: memberSlot,
+                    byteOffset: member?.byte_offset,
+                    byteSize: member?.byte_size,
+                  });
                   const display = formatDecodedValue(value);
                   return (
                     <tr
@@ -189,7 +204,10 @@ export function LookupResultsTable({
                         {member?.label ?? 'unknown'}
                       </td>
                       <td className={`${dataTableCellClass} hidden py-1.5 sm:table-cell`}>
-                        <HoverCell display={location} value={location} colorClass="font-mono text-gray-500" />
+                        <StorageLocationCell
+                          location={location}
+                          colorClass="font-mono text-gray-500"
+                        />
                       </td>
                       <td className={`${dataTableCellClass} py-1.5`}>
                         <HoverCell
@@ -201,7 +219,10 @@ export function LookupResultsTable({
                         />
                       </td>
                       <td className={`${dataTableCellClass} truncate py-1.5 font-mono text-[10px] text-gray-500 sm:hidden`}>
-                        {location}
+                        <StorageLocationCell
+                          location={location}
+                          colorClass="font-mono text-[10px] text-gray-500"
+                        />
                       </td>
                     </tr>
                   );

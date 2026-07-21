@@ -2,8 +2,9 @@
 
 import { CopyButton } from '@/components/ui/CopyButton';
 import { getAddressExplorerUrl } from '@/lib/constants';
-import { cn, isAddress, shouldShowCopyAction } from '@/lib/utils';
-import { canonicalVariablePath, storageKeyDisplay } from './slotDisplay';
+import { isAddress, shouldShowCopyAction } from '@/lib/utils';
+import { storageKeyDisplay } from './slotDisplay';
+import { canonicalVariablePath } from './storageIdentity';
 
 interface PathSegment {
   name: string;
@@ -14,10 +15,6 @@ interface KeyedVariablePathProps {
   path: string;
   typeLabel?: string | null;
   chainId: string;
-  /** Keep a single leaf field in canonical order while truncating only its base name. */
-  canonicalLeaf?: boolean;
-  /** Override primary-path typography for the surrounding surface. */
-  primaryClassName?: string;
 }
 
 function splitPath(path: string): string[] {
@@ -131,8 +128,6 @@ export function KeyedVariablePath({
   path,
   typeLabel,
   chainId,
-  canonicalLeaf = false,
-  primaryClassName,
 }: KeyedVariablePathProps) {
   const fullPath = canonicalVariablePath(path);
   const segments = splitPath(fullPath).map(parseSegment);
@@ -141,9 +136,6 @@ export function KeyedVariablePath({
   const context = segments.slice(0, -1);
   const keyCount = segments.reduce((count, segment) => count + segment.keys.length, 0);
   const stackKeys = keyCount > 1;
-  const canonicalBase = canonicalLeaf && hasLeafField && context.length === 1 && keyCount <= 1
-    ? context[0]
-    : null;
   const stackedLines = stackKeys
     ? [
         ...context.flatMap((segment, index) => segmentLines(segment, index > 0)),
@@ -153,40 +145,9 @@ export function KeyedVariablePath({
       ]
     : [];
 
-  if (canonicalBase) {
-    const canonicalDisplay = (
-      <span
-        className={cn(
-          'flex min-w-0 items-center overflow-hidden whitespace-nowrap text-xs font-medium text-gray-900',
-          primaryClassName,
-        )}
-        data-testid="keyed-variable-primary"
-      >
-        <span className="min-w-0 truncate" data-testid="keyed-variable-base">
-          {canonicalBase.name}
-        </span>
-        {canonicalBase.keys.map((key, index) => (
-          <span key={`${key}:${index}`} className="shrink-0">
-            <Key value={key} chainId={chainId} />
-          </span>
-        ))}
-        <span className="shrink-0" data-testid="keyed-variable-leaf">.{finalSegment.name}</span>
-      </span>
-    );
-
-    return (
-      <div className="min-w-0 font-mono leading-tight" data-testid="keyed-variable-path">
-        {canonicalDisplay}
-      </div>
-    );
-  }
-
   const primary = (
     <span
-      className={cn(
-        'block min-w-0 max-w-full overflow-hidden break-words text-xs font-medium text-gray-900',
-        primaryClassName,
-      )}
+      className="block min-w-0 max-w-full overflow-hidden break-words text-xs font-medium text-gray-900"
       data-testid="keyed-variable-primary"
     >
       {hasLeafField || stackKeys

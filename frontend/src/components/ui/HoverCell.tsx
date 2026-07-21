@@ -131,7 +131,7 @@ export function HoverCell({
   if (!hasSupplementalDetail) return cell;
 
   return (
-    <DetailPopover content={tooltipContent} delay={300} className={wrap ? 'min-w-0 max-w-full' : undefined}>
+    <DetailPopover content={tooltipContent} delay={300} className="min-w-0 max-w-full">
       {cell}
     </DetailPopover>
   );

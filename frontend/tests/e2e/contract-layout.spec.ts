@@ -182,7 +182,7 @@ test('bytecode-equivalent layouts keep the target visibly unverified', async ({ 
   ).toBeVisible();
 });
 
-test('high slots stay exact strings in the table and disclosure', async ({ page }) => {
+test('high slots use canonical compact notation with full disclosure', async ({ page }) => {
   const highSlot = `0x8${'0'.repeat(63)}`;
   await page.setViewportSize({ width: 390, height: 844 });
   await mockView(page, {
@@ -194,9 +194,12 @@ test('high slots stay exact strings in the table and disclosure', async ({ page 
 
   const slotCell = page.getByTestId('layout-slot');
   await expect(slotCell).toBeVisible();
-  await expect(slotCell).toHaveAttribute('title', highSlot);
-  await page.getByText('highValue', { exact: true }).click();
-  await expect(page.getByRole('dialog').getByText(highSlot, { exact: true })).toBeVisible();
+  const compactSlot = slotCell.getByText('0x80…00', { exact: true });
+  await expect(compactSlot).toBeVisible();
+  await compactSlot.click();
+  const detail = page.getByRole('dialog');
+  await expect(detail.getByText(highSlot, { exact: true })).toBeVisible();
+  await expect(detail.getByRole('button', { name: 'Copy slot' })).toBeVisible();
 });
 
 test('long type labels get responsive space and an accessible full disclosure', async ({ page }) => {
@@ -347,7 +350,7 @@ test('struct values expand into semantic member rows', async ({ page }) => {
     has: page.getByText('oracle', { exact: true }),
   });
   await expect(oracleRow).toContainText('address');
-  await expect(oracleRow).toContainText('0x6');
+  await expect(oracleRow).toContainText('6 · bytes 0–19');
   await expect(oracleRow).toContainText('0xff12b7B0dF9a2A96CBc09b3822B4Db43a575cCEE');
   await expect(oracleRow.locator('td').nth(4)).not.toContainText('config.oracle');
 
@@ -355,7 +358,7 @@ test('struct values expand into semantic member rows', async ({ page }) => {
     has: page.getByText('maxLTV', { exact: true }),
   });
   await expect(maxLtvRow).toContainText('uint256');
-  await expect(maxLtvRow).toContainText('0x7');
+  await expect(maxLtvRow).toContainText('7');
   await expect(maxLtvRow).toContainText('95,000');
 
   await page.getByRole('button', { name: 'Collapse config' }).click();

@@ -863,15 +863,15 @@ test('collapsed no-op packed slots retain their packed marker in hex mode', asyn
   await contractSection.getByTestId('contract-toggle').click();
 
   const collapsedRow = contractSection.getByText('doHealthCheck', { exact: true }).locator('xpath=ancestor::tr');
-  await expect(collapsedRow.getByTestId('packed-slot-marker')).toHaveText('packed');
+  await expect(collapsedRow.getByTestId('storage-variable-meta')).toContainText('packed');
 
   await page.getByRole('button', { name: 'Decoded' }).click();
-  await expect(contractSection.getByTestId('packed-slot-marker')).toHaveCount(0);
+  await expect(contractSection.getByTestId('storage-variable-meta')).toHaveCount(0);
   await expect(contractSection.getByText('doHealthCheck', { exact: true })).toBeVisible();
   await expect(contractSection.getByText('emergencyAdmin', { exact: true })).toBeVisible();
 });
 
-test('timeline labels proven long-string words with compact fractions', async ({ page }) => {
+test('grouped and timeline share canonical long-string identity and qualifiers', async ({ page }) => {
   const storageAddress = '0xb7637c0972aa6e5ae847032949be41da1bd39964';
   const slot = {
     ...configScalarSlot({
@@ -913,7 +913,17 @@ test('timeline labels proven long-string words with compact fractions', async ({
     await route.fulfill({ json: response });
   });
 
-  await page.goto(`/1/tx/${RESOLUTION_TX}?view=timeline`);
+  await page.goto(`/1/tx/${RESOLUTION_TX}?view=grouped`);
+
+  const contractSection = page.getByRole('heading', { name: 'DepositToken' }).locator('xpath=ancestor::section');
+  await contractSection.getByTestId('contract-toggle').click();
+  const groupedVariable = contractSection.getByTestId('slot-variable');
+  await expect(groupedVariable.getByText('_name', { exact: true })).toBeVisible();
+  await expect(groupedVariable.getByTestId('storage-variable-meta')).toHaveText(
+    'string · 2/2',
+  );
+
+  await page.getByRole('button', { name: 'Timeline' }).click();
 
   const variableCell = page.getByTestId('timeline-variable');
   await expect(variableCell.getByText('_name', { exact: true })).toBeVisible();
@@ -971,22 +981,24 @@ test('timeline keeps packed paths compact and exposes contract identity across v
 
   await page.goto(`/1/tx/${RESOLUTION_TX}?view=timeline`);
 
-  const singleRow = page.getByTestId('timeline-event').filter({ hasText: 'proposalData[20].processed' });
+  const singleRow = page.getByTestId('timeline-event').filter({
+    has: page.getByTestId('keyed-variable-context').filter({ hasText: 'proposalData[20]' }),
+  });
   const canonicalPath = singleRow.getByTestId('keyed-variable-primary');
-  await expect(canonicalPath).toHaveText('proposalData[20].processed');
-  await expect(canonicalPath.getByTestId('keyed-variable-base')).toHaveText('proposalData');
-  await expect(canonicalPath.getByTestId('keyed-variable-leaf')).toHaveText('.processed');
-  expect(await canonicalPath.getByTestId('keyed-variable-base').evaluate(
+  await expect(canonicalPath).toHaveText('processed');
+  const canonicalContext = singleRow.getByTestId('keyed-variable-context');
+  await expect(canonicalContext).toContainText('proposalData[20]');
+  await expect(canonicalContext).toContainText('bool');
+  expect(await canonicalContext.getByTestId('keyed-variable-base').evaluate(
     (element) => element.clientWidth,
   )).toBeGreaterThanOrEqual(24);
-  await expect(singleRow.getByTestId('keyed-variable-context')).toHaveCount(0);
   await expect(singleRow.getByTestId('timeline-value')).not.toContainText('processed');
   await expect(singleRow.getByTestId('timeline-value')).toContainText('false');
   await expect(singleRow.getByTestId('timeline-value')).toContainText('true');
   await expect(singleRow.getByTestId('timeline-contract')).toContainText('Voter');
   await expect(singleRow.getByTestId('timeline-variable')).not.toContainText('Voter');
   const slotReference = singleRow.getByTestId('slot-reference');
-  const slotDisplay = slotReference.getByText('0xb1..b1', { exact: true });
+  const slotDisplay = slotReference.getByText('0xb1…b1', { exact: true });
   await expect(slotDisplay).toBeVisible();
   expect(await slotDisplay.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   const slotMetrics = await slotReference.evaluate((element) => ({
@@ -1002,7 +1014,6 @@ test('timeline keeps packed paths compact and exposes contract identity across v
   await page.keyboard.press('Escape');
 
   const multiRow = page.getByTestId('timeline-event').filter({ hasText: 'proposalData[21]' });
-  await expect(multiRow.getByTestId('keyed-variable-leaf')).toHaveCount(0);
   await expect(multiRow.getByTestId('timeline-variable')).toContainText('bool processed');
   await expect(multiRow.getByTestId('timeline-variable')).toContainText('uint16 quorum');
   await expect(multiRow.getByTestId('timeline-value')).not.toContainText('processed');
@@ -1026,7 +1037,7 @@ test('timeline keeps packed paths compact and exposes contract identity across v
   await expect(nestedHeader).toContainText('poolInfo[570]');
   await expect(nestedHeader).not.toContainText('[+4]');
   await expect(nestedHeader).toContainText('packed');
-  await expect(nestedRow.getByTestId('keyed-variable-context')).toHaveCount(0);
+  await expect(nestedRow.getByTestId('keyed-variable-context')).toContainText('PoolInfo · packed');
   expect(await nestedHeaderFrame.evaluate(
     (element) => element.scrollHeight <= element.clientHeight,
   )).toBe(true);
@@ -1142,17 +1153,16 @@ test('grouped view preserves keyed parents and compacts one changed packed membe
   const contractSection = page.getByRole('heading', { name: 'Voter' }).locator('xpath=ancestor::section');
   await contractSection.getByTestId('contract-toggle').click();
 
-  const singlePath = contractSection.getByTestId('keyed-variable-primary').filter({
-    hasText: /^proposalData\[20\]\.processed$/,
-  });
-  await expect(singlePath).toHaveCount(1);
-  const singleRow = singlePath.locator('xpath=ancestor::tr');
+  const singleRow = contractSection.getByTestId('keyed-variable-context')
+    .filter({ hasText: 'proposalData[20]' })
+    .locator('xpath=ancestor::tr');
+  const singlePath = singleRow.getByTestId('keyed-variable-primary');
+  await expect(singlePath).toHaveText('processed');
+  await expect(singleRow.getByTestId('keyed-variable-context')).toContainText('proposalData[20]');
+  await expect(singleRow.getByTestId('keyed-variable-context')).toContainText('bool');
   await expect(singleRow.getByTestId('value-before')).toContainText('false');
   await expect(singleRow.getByTestId('value-after')).toContainText('true');
   await expect(singleRow.getByTestId('structured-variable-fields')).toHaveCount(0);
-  await expect(contractSection.getByTestId('keyed-variable-primary').filter({
-    hasText: /^proposalData\[20\]$/,
-  })).toHaveCount(0);
 
   const multiParent = contractSection.getByTestId('keyed-variable-primary').filter({
     hasText: /^proposalData\[21\]$/,
@@ -1161,9 +1171,10 @@ test('grouped view preserves keyed parents and compacts one changed packed membe
   await expect(multiParent.locator('xpath=ancestor::tr')).toContainText('ProposalData');
   await expect(contractSection.getByText('quorum', { exact: true })).toBeVisible();
 
-  await expect(contractSection.getByTestId('keyed-variable-primary').filter({
-    hasText: /^proposalData\[22\]\.processed$/,
-  })).toHaveCount(1);
+  const mappingMemberRow = contractSection.getByTestId('keyed-variable-context')
+    .filter({ hasText: 'proposalData[22]' })
+    .locator('xpath=ancestor::tr');
+  await expect(mappingMemberRow.getByTestId('keyed-variable-primary')).toHaveText('processed');
 
   await singlePath.click();
   const pathDetail = page.getByRole('dialog');
@@ -1175,12 +1186,11 @@ test('grouped view preserves keyed parents and compacts one changed packed membe
   expect(await scroll.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
 
   await page.getByRole('button', { name: 'Hex' }).click();
-  const hexSinglePath = contractSection.getByTestId('keyed-variable-primary').filter({
-    hasText: /^proposalData\[20\]$/,
-  });
-  await expect(hexSinglePath).toHaveCount(1);
-  await expect(contractSection.getByTestId('keyed-variable-leaf')).toHaveCount(0);
-  await expect(hexSinglePath.locator('xpath=ancestor::tr').getByTestId('value-before')).toContainText(
+  const hexSinglePath = singleRow.getByTestId('keyed-variable-primary');
+  await expect(hexSinglePath).toHaveText('processed');
+  await expect(singleRow.getByTestId('keyed-variable-context')).toContainText('proposalData[20]');
+  await expect(singleRow.getByTestId('keyed-variable-context')).toContainText('bool');
+  await expect(singleRow.getByTestId('value-before')).toContainText(
     singleMemberSlot.before.value_encoded,
   );
 });
@@ -1374,9 +1384,9 @@ test('timeline names struct members and stays readable on mobile', async ({ page
   }));
   expect(scrollState.scrollWidth).toBeGreaterThan(scrollState.clientWidth);
 
-  // Value mode also controls the numeric slot representation.
+  // Value mode changes values only; physical slot notation remains stable.
   await page.getByRole('button', { name: 'Hex' }).click();
-  const hexSlotReference = slotReference.getByText('0x7', { exact: true });
+  const hexSlotReference = slotReference.getByText('7', { exact: true });
   await expect(hexSlotReference).toBeVisible();
   await hexSlotReference.click();
   await expect(page.getByRole('dialog')).toContainText(slots[1].slot);

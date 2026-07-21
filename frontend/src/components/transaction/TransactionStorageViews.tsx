@@ -4,17 +4,17 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ExternalLink } from 'lucide-react';
 import { SlotHistoryTable } from '@/components/diff/DiffTable';
-import { KeyedVariablePath } from '@/components/diff/KeyedVariablePath';
-import { dataPartTypeLabel, slotVariablePath } from '@/components/diff/slotDisplay';
 import { StorageTable, StorageTableColumns, StorageTableHeader, storageCellClass } from '@/components/diff/StorageTable';
+import { StorageVariableCell } from '@/components/diff/StorageVariableCell';
 import { CopyableValue, deriveStructuredValueFields, isStructuredDecodedValue, StructuredFieldNames, StructuredValueDiff, ValueDiff } from '@/components/diff/ValueDiff';
+import { deriveStorageIdentity, storageIdentityMetadata } from '@/components/diff/storageIdentity';
 import { CopyButton } from '@/components/ui/CopyButton';
-import { HoverCell } from '@/components/ui/HoverCell';
+import { StorageLocationCell } from '@/components/ui/StorageLocationCell';
 import { TimelineVariableDisclosure } from '@/components/transaction/TimelineVariableDisclosure';
 import { getAddressExplorerUrl } from '@/lib/constants';
+import { formatStorageLocation } from '@/lib/storage-location';
 import { ContractHistoryResponse, SlotChangeResponse, StorageChangeResponse } from '@/lib/types';
-import { cn, formatDecodedValue, getCopyValue, truncateAddress, truncateHash } from '@/lib/utils';
-import { slotReferenceDisplay } from '@/components/diff/slotDisplay';
+import { cn, formatDecodedValue, getCopyValue, truncateAddress } from '@/lib/utils';
 import {
   contractActivityStatus,
   contractDisplayLabel,
@@ -59,33 +59,6 @@ function timelineStructMember(slot: SlotChangeResponse, changedFields: string[])
   return packedFields.find((field) => field.name === changedField)
     ?? slot.struct_definition.members.find((field) => field.name === changedField)
     ?? null;
-}
-
-function semanticStructuredVariable(variable: string) {
-  return variable.replace(/\[\+\d+\]$/, '');
-}
-
-function StructuredTimelineHeader({
-  variable,
-  typeLabel,
-}: {
-  variable: string;
-  typeLabel?: string | null;
-}) {
-  return (
-    <div
-      className="flex min-w-0 items-baseline gap-1 overflow-hidden whitespace-nowrap font-mono leading-tight"
-      data-testid="timeline-structured-header"
-    >
-      <span className="min-w-0 flex-1 truncate text-gray-900">{variable}</span>
-      {typeLabel && (
-        <>
-          <span aria-hidden="true" className="shrink-0 text-gray-400">·</span>
-          <span className="max-w-[40%] truncate text-[10px] text-gray-400">{typeLabel}</span>
-        </>
-      )}
-    </div>
-  );
 }
 
 export function ContractSection({
@@ -242,26 +215,16 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
             : null;
           const structMember = timelineStructMember(slot, structuredFields?.changedFields ?? []);
           const structuredFieldNames = structuredFields?.displayedFields ?? [];
-          const variablePath = slotVariablePath(slot, structMember?.name);
-          const memberSuffix = structMember ? `.${structMember.name}` : null;
-          const memberBasePath = memberSuffix && variablePath?.endsWith(memberSuffix)
-            ? variablePath.slice(0, -memberSuffix.length)
-            : null;
-          const variableDetail = variablePath || slot.variable_name || slot.slot;
-          const variableType = dataPartTypeLabel(
-            slot,
-            structMember?.type_label || slot.value_type || slot.type_label,
-          );
-          const hasDataPart = slot.data_part_index !== null
-            && slot.data_part_index !== undefined
-            && slot.data_part_count !== null
-            && slot.data_part_count !== undefined;
           const unchanged = event.effect === 'noop';
           const hasStructuredChildren = !structMember && structuredFieldNames.length > 0;
-          const structuredVariableDetail = hasStructuredChildren
-            ? semanticStructuredVariable(variableDetail)
-            : variableDetail;
-          const structuredHeaderClass = 'h-5 overflow-hidden';
+          const identity = deriveStorageIdentity(slot, structMember, {
+            packed: Boolean(!structMember && slot.packed_fields?.length),
+          });
+          const identityMetadata = storageIdentityMetadata(identity);
+          const structuredHeaderClass = identity.path?.includes('[')
+            ? 'h-10 overflow-hidden'
+            : identityMetadata ? 'h-8 overflow-hidden' : 'h-5 overflow-hidden';
+          const location = formatStorageLocation({ slot: slot.slot });
 
           return (
             <tr key={`${contract.storage_address}:${slot.slot}:${event.step}:${ordinal}`} data-testid="timeline-event" className="border-b border-gray-200 text-xs hover:bg-gray-50">
@@ -286,45 +249,16 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                   <TimelineVariableDisclosure
                     contract={contract}
                     chain={chain}
-                    variable={structuredVariableDetail}
-                    typeLabel={variableType}
-                    isRawSlot={!variablePath && !slot.variable_name}
+                    variable={identity.detail}
+                    typeLabel={identityMetadata}
+                    isRawSlot={identity.isRaw}
                   >
-                    <div className="min-w-0">
-                      {hasStructuredChildren ? (
-                        <StructuredTimelineHeader
-                          variable={structuredVariableDetail}
-                          typeLabel={variableType}
-                        />
-                      ) : variablePath?.includes('[') ? (
-                        <KeyedVariablePath
-                          path={variablePath}
-                          typeLabel={variableType}
-                          chainId={chain}
-                          canonicalLeaf={Boolean(memberBasePath)}
-                          primaryClassName="font-normal"
-                        />
-                      ) : memberBasePath && structMember ? (
-                        <div className="flex min-w-0 font-mono text-gray-900">
-                          <span className="min-w-0 truncate">{memberBasePath}</span>
-                          <span className="shrink-0">.{structMember.name}</span>
-                        </div>
-                      ) : (
-                        <div className="min-w-0 font-mono">
-                          <div className="truncate text-gray-900">
-                            {variablePath || truncateHash(slot.slot, 7)}
-                          </div>
-                          {hasDataPart && variableType && (
-                            <div
-                              className="truncate text-[10px] text-gray-400"
-                              data-testid="timeline-variable-meta"
-                            >
-                              {variableType}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
+                    <StorageVariableCell
+                      identity={identity}
+                      chainId={chain}
+                      testId={hasStructuredChildren ? 'timeline-structured-header' : undefined}
+                      metadataTestId="timeline-variable-meta"
+                    />
                   </TimelineVariableDisclosure>
                 </div>
                 {hasStructuredChildren && (
@@ -372,12 +306,9 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
               </td>
               <td className={`${storageCellClass} min-w-0 px-1 font-mono text-gray-500 sm:px-2`}>
                 <div data-testid="slot-reference" className="min-w-0 truncate">
-                  <HoverCell
-                    display={slotReferenceDisplay(slot.slot, showHex)}
-                    value={slot.slot}
+                  <StorageLocationCell
+                    location={location}
                     colorClass="text-gray-500"
-                    copyLabel="Copy slot"
-                    copyInDetail
                   />
                 </div>
               </td>
