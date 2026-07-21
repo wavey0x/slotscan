@@ -238,12 +238,16 @@ class VerificationServiceTests(unittest.IsolatedAsyncioTestCase):
         service = _service()
         etherscan = _verified()
         etherscan.source = "etherscan"
+        etherscan.match_type = "similar_match"
         service._try_sourcify = AsyncMock(return_value=None)
         service._try_etherscan = AsyncMock(return_value=etherscan)
 
-        result = await service.resolve(1, ADDRESS, HASH_A, repo)
+        first = await service.resolve(1, ADDRESS, HASH_A, repo)
+        second = await service.resolve(1, ADDRESS, HASH_A, repo)
 
-        self.assertEqual(result.source, "etherscan")
+        self.assertEqual(first.source, "etherscan")
+        self.assertEqual(first.match_type, "similar_match")
+        self.assertEqual(second, first)
         service._try_sourcify.assert_awaited_once_with(1, ADDRESS)
         service._try_etherscan.assert_awaited_once_with(1, ADDRESS)
         self.assertEqual(repo.verified_writes, [(1, ADDRESS, HASH_A)])
@@ -351,7 +355,7 @@ class VerificationServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.storage_layout["storage"][0]["label"], "owner")
         self.assertEqual(result.sources, {"src/C.sol": "contract C {}"})
 
-    async def test_etherscan_similar_match_is_not_exact_verification(self):
+    async def test_etherscan_similar_match_is_accepted_with_provenance(self):
         body = json.dumps(
             {
                 "status": "1",
@@ -363,18 +367,27 @@ class VerificationServiceTests(unittest.IsolatedAsyncioTestCase):
                         "CompilerVersion": "v0.8.30+commit.73712a01",
                         "OptimizationUsed": "0",
                         "Runs": "200",
-                        "EVMVersion": "default",
+                        "EVMVersion": "Default",
                         "SimilarMatch": "0x" + "22" * 20,
                     }
                 ],
             }
         ).encode()
+        client = _stream_client(_StreamResponse(body))
         service = VerificationService(
             Settings(ETHERSCAN_API_KEY_1="key"),
-            _stream_client(_StreamResponse(body)),
+            client,
         )
 
-        self.assertIsNone(await service._try_etherscan(1, ADDRESS))
+        result = await service._try_etherscan(1, ADDRESS)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.source, "etherscan")
+        self.assertEqual(result.match_type, "similar_match")
+        self.assertEqual(result.name, "C")
+        self.assertEqual(result.sources, {"C.sol": "contract C {}"})
+        self.assertNotIn("evmVersion", result.compiler_settings)
+        client.stream.assert_called_once()
 
     async def test_verification_response_limit_counts_decoded_bytes(self):
         body = json.dumps(

@@ -310,13 +310,17 @@ class VerificationService:
                 raise ValueError("expected a result object")
             if not result.get("SourceCode"):
                 return None
+            match_type = "exact_match"
             if result.get("SimilarMatch"):
                 logger.info(
-                    "Ignoring non-exact Etherscan SimilarMatch for %s",
+                    "Accepting Etherscan SimilarMatch for %s",
                     address,
                 )
-                return None
-            return self._parse_etherscan_response(result)
+                match_type = "similar_match"
+            return self._parse_etherscan_response(
+                result,
+                match_type=match_type,
+            )
         except httpx.RequestError as exc:
             logger.warning("Etherscan request failed: %s", exc)
             raise VerificationProviderError(
@@ -358,11 +362,15 @@ class VerificationService:
             return response.status_code, json.loads(body)
 
     @staticmethod
-    def _parse_etherscan_response(result: dict) -> VerificationResult:
+    def _parse_etherscan_response(
+        result: dict,
+        *,
+        match_type: str,
+    ) -> VerificationResult:
         source_code = result.get("SourceCode", "")
         contract_name = result.get("ContractName", "")
         compiler_version = result.get("CompilerVersion", "")
-        evm_version = result.get("EVMVersion", "")
+        evm_version = str(result.get("EVMVersion") or "").strip().lower()
 
         is_vyper = "vyper" in compiler_version.lower()
         language = "Vyper" if is_vyper else "Solidity"
@@ -406,7 +414,7 @@ class VerificationService:
 
         return VerificationResult(
             source="etherscan",
-            match_type="exact_match",
+            match_type=match_type,
             name=contract_name,
             compilation_target=None,
             compiler_version=compiler_version,

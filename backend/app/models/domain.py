@@ -350,7 +350,7 @@ class VerificationResult:
     """Verification lookup result."""
 
     source: str  # "sourcify" or "etherscan"
-    match_type: str  # "full" or "partial"
+    match_type: str  # Provider match provenance, e.g. full or similar_match.
     name: Optional[str] = None
     compilation_target: Optional[dict] = None
     compiler_version: Optional[str] = None

@@ -1,9 +1,10 @@
 """Persistence for normalized source-verification results."""
 
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.sql import func
 
 from app.models.database import ContractSourceCache
 from app.models.domain import VerificationResult
@@ -71,13 +72,14 @@ class SourceCacheRepository:
         status: str,
         result: dict | None,
     ) -> None:
+        checked_at = datetime.utcnow()
         values = {
             "chain_id": chain_id,
             "code_address": code_address.lower(),
             "code_hash": code_hash.lower(),
             "status": status,
             "result": result,
-            "checked_at": func.now(),
+            "checked_at": checked_at,
         }
         statement = insert(ContractSourceCache).values(**values)
         statement = statement.on_conflict_do_update(
@@ -85,7 +87,7 @@ class SourceCacheRepository:
             set_={
                 "status": status,
                 "result": result,
-                "checked_at": func.now(),
+                "checked_at": checked_at,
             },
         )
         await self.session.execute(statement)
