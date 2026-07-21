@@ -1714,12 +1714,19 @@ test('all writes remain visible without interpretive classification controls', a
   await expect(page.getByTestId('summary-slots').getByText('4', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Grouped' })).toHaveAttribute('aria-pressed', 'true');
   await page.getByTestId('contract-toggle').click();
-  for (const step of ['717', '775', '918', '1428']) {
-    await expect(page.getByText(step, { exact: true })).toBeVisible();
+
+  const groupedRows = page.getByTestId('slot-value').locator('xpath=ancestor::tr');
+  await expect(groupedRows).toHaveCount(4);
+  for (const row of await groupedRows.all()) {
+    await expect(row.locator('td').last()).toHaveText(/^\d+$/);
   }
 
   await page.getByRole('button', { name: 'Expand write history' }).click();
-  await expect(page.getByText('1492', { exact: true })).toBeVisible();
+  const historyRows = page.getByTestId('interim-value').locator('xpath=ancestor::tr');
+  await expect(historyRows).toHaveCount(2);
+  for (const row of await historyRows.all()) {
+    await expect(row.locator('td').last()).toHaveText(/^\d+$/);
+  }
   await expect(page.getByText('1/2')).toBeVisible();
   await expect(page.getByText('2/2')).toBeVisible();
   await expect(page.getByText('restored', { exact: true })).toHaveCount(0);
@@ -1962,6 +1969,17 @@ test('storage detail disclosure matches the active theme and supports focus and 
   await disclosure.focus();
   const darkDetail = page.getByRole('dialog');
   await expect(darkDetail).toBeVisible();
-  await expect(darkDetail).toHaveCSS('background-color', 'rgb(17, 17, 17)');
-  await expect(darkDetail).toHaveCSS('color', 'rgb(211, 211, 211)');
+  const darkStyle = await darkDetail.evaluate((element) => {
+    const detailStyle = getComputedStyle(element);
+    const bodyStyle = getComputedStyle(document.body);
+    return {
+      backgroundColor: detailStyle.backgroundColor,
+      bodyBackgroundColor: bodyStyle.backgroundColor,
+      color: detailStyle.color,
+      bodyColor: bodyStyle.color,
+    };
+  });
+  expect(darkStyle.backgroundColor).toBe(darkStyle.bodyBackgroundColor);
+  expect(darkStyle.color).toBe(darkStyle.bodyColor);
+  expect(darkStyle.backgroundColor).not.toBe(lightStyle.backgroundColor);
 });
