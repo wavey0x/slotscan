@@ -69,6 +69,27 @@ export function slotReferenceDisplay(slotHex: string, showHex: boolean): string 
   }
 }
 
+export function dataPartTypeLabel(
+  slot: Pick<SlotChangeResponse, 'data_part_index' | 'data_part_count'>,
+  typeLabel: string | null | undefined,
+): string | null | undefined {
+  const index = slot.data_part_index;
+  const count = slot.data_part_count;
+  if (
+    !typeLabel
+    || index === null
+    || index === undefined
+    || count === null
+    || count === undefined
+    || count <= 0
+    || index < 0
+    || index >= count
+  ) {
+    return typeLabel;
+  }
+  return `${typeLabel} · ${index + 1}/${count}`;
+}
+
 export function deriveSlotDisplay(slot: SlotChangeResponse, showHex: boolean) {
   const packedFields = slot.packed_fields ?? [];
   const hasPacked = packedFields.length > 0;
@@ -89,12 +110,13 @@ export function deriveSlotDisplay(slot: SlotChangeResponse, showHex: boolean) {
     ? slotVariablePath(slot, singlePackedField.name)
     : baseVariablePath;
   const variableLabel = slot.variable_path?.match(/\(([^)]+)\)$/)?.[1] ?? null;
-  const resolvedLeafType = (!showHex ? singlePackedField?.type_label : null)
+  const baseResolvedLeafType = (!showHex ? singlePackedField?.type_label : null)
     || (slot.struct_field && slot.struct_definition
     ? slot.struct_definition.members.find((member) => member.name === slot.struct_field)?.type_label
       || slot.value_type
       || slot.type_label
     : slot.value_type || slot.type_label);
+  const resolvedLeafType = dataPartTypeLabel(slot, baseResolvedLeafType);
   const isStaticArray = slot.array_index !== null && slot.array_index !== undefined
     && !slot.is_mapping && !slot.is_dynamic_array;
   const isDynamicArray = Boolean(slot.is_dynamic_array && slot.array_index !== null);

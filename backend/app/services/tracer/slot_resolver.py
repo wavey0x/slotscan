@@ -830,18 +830,39 @@ class SlotPathResolver:
         self,
         slot_int: int,
         dynamic_bytes_index: dict[int, StorageVariable],
+        encoded_length: Callable[[int], int | None] | None = None,
     ) -> Optional[dict]:
-        """Try to match a slot to dynamic bytes/string data."""
+        """Match a long bytes/string word within its proven step-time bounds."""
         for data_start, var in dynamic_bytes_index.items():
             offset_from_start = slot_int - data_start
-            if offset_from_start == 0:
-                return {
-                    "variable": var,
-                    "base_slot": var.slot,
-                    "data_offset": offset_from_start,
-                    "path": f"{var.name} ({offset_from_start})",
-                    "encoding": "bytes",
-                }
+            if offset_from_start < 0:
+                continue
+
+            encoded = encoded_length(var.slot) if encoded_length else None
+            if encoded is None:
+                # Retain the exact-root match when the length word was not
+                # observed. Continuation words require a proven bound.
+                if offset_from_start != 0:
+                    continue
+                part_count = None
+            else:
+                # Short values live inline in the declaration slot and do not
+                # own hashed data words. Long values encode length * 2 + 1.
+                if encoded & 1 == 0:
+                    continue
+                byte_length = (encoded - 1) // 2
+                part_count = (byte_length + 31) // 32
+                if offset_from_start >= part_count:
+                    continue
+
+            return {
+                "variable": var,
+                "base_slot": var.slot,
+                "data_offset": offset_from_start,
+                "data_part_count": part_count,
+                "path": var.name,
+                "encoding": "bytes",
+            }
         return None
 
     def try_match_dynamic_array_slot(

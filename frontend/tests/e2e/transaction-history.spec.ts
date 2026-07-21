@@ -871,6 +871,61 @@ test('collapsed no-op packed slots retain their packed marker in hex mode', asyn
   await expect(contractSection.getByText('emergencyAdmin', { exact: true })).toBeVisible();
 });
 
+test('timeline labels proven long-string words with compact fractions', async ({ page }) => {
+  const storageAddress = '0xb7637c0972aa6e5ae847032949be41da1bd39964';
+  const slot = {
+    ...configScalarSlot({
+      slot: 6,
+      variable: '_name',
+      typeLabel: 'string',
+      beforeValue: '',
+      afterValue: 'posit',
+      beforeEncoded: `0x${'00'.repeat(32)}`,
+      afterEncoded: `0x${Buffer.from('posit').toString('hex').padEnd(64, '0')}`,
+      step: 3194,
+    }),
+    slot: '0xc2575a0e9e593c00f959f8c92f12db2869c3395a3b0502d05e2516446f71f85c',
+    slot_decimal: null,
+    is_static_slot: false,
+    provenance: 'runtime_preimage',
+    resolved_paths: ['_name'],
+    encoding: 'bytes',
+    data_part_index: 1,
+    data_part_count: 2,
+  };
+  const contract = resolutionContract({
+    storage_address: storageAddress,
+    code_addresses: [storageAddress],
+    name: 'DepositToken',
+    is_verified: true,
+    layout_available: true,
+    slots: [slot],
+  });
+  const response = resolutionResponse([contract]);
+  response.global_order = [{
+    ordinal: 0,
+    step: slot.changes[0].step,
+    storage_address: storageAddress,
+    slot: slot.slot,
+    event_index: 0,
+  }];
+  await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
+    await route.fulfill({ json: response });
+  });
+
+  await page.goto(`/1/tx/${RESOLUTION_TX}?view=timeline`);
+
+  const variableCell = page.getByTestId('timeline-variable');
+  await expect(variableCell.getByText('_name', { exact: true })).toBeVisible();
+  await expect(variableCell.getByTestId('timeline-variable-meta')).toHaveText(
+    'string · 2/2',
+  );
+  await expect(variableCell).not.toContainText('0xc2575a0');
+  await variableCell.getByText('_name', { exact: true }).click();
+  const detail = page.getByRole('dialog', { name: 'Variable details: _name' });
+  await expect(detail).toContainText('string · 2/2');
+});
+
 test('timeline keeps packed paths compact and exposes contract identity across viewports', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);

@@ -261,6 +261,8 @@ class StorageChange:
     value_type: Optional[str] = None  # Value type for mappings
     element_type_id: Optional[str] = None  # Element type ID for dynamic arrays (for struct lookup)
     array_index: Optional[int] = None  # Array index for dynamic array entries
+    data_part_index: Optional[int] = None  # Zero-based word within long bytes/string data
+    data_part_count: Optional[int] = None  # Total words proven by the encoded length
     change_index: int = 0  # Order of change within transaction
     pc: Optional[int] = None  # Program counter of the SSTORE operation
     effect: str = "applied"  # applied | noop | reverted

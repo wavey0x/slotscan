@@ -294,6 +294,8 @@ export interface SlotChangeResponse {
   is_mapping: boolean;
   is_dynamic_array: boolean;
   array_index: number | null;
+  data_part_index?: number | null;
+  data_part_count?: number | null;
   encoding: string | null;
   value_type: string | null;
   // Summary: before (initial) and after (final) values

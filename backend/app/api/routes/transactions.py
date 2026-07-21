@@ -801,6 +801,8 @@ def _group_changes_by_slot(
                 is_mapping=first.is_mapping,
                 is_dynamic_array=first.encoding == "dynamic_array",
                 array_index=first.array_index,
+                data_part_index=first.data_part_index,
+                data_part_count=first.data_part_count,
                 encoding=first.encoding,
                 # Use the fully-unwrapped final value type for mappings
                 value_type=response_value_type,

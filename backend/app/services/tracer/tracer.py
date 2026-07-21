@@ -761,6 +761,7 @@ class TransactionAnalysisService:
         ))
 
         array_resolution_by_slot: dict[int, list[bool]] = {}
+        dynamic_bytes_resolution_by_slot: dict[int, list[bool]] = {}
         for slot_hex, old_value, new_value, _, exec_index in raw_changes:
             slot_int = int(slot_hex, 16)
             def length_at_step(length_slot: int, step: int = exec_index) -> int | None:
@@ -794,9 +795,26 @@ class TransactionAnalysisService:
                 new_value,
             )
             array_resolution_by_slot.setdefault(slot_int, []).append(resolved)
+            bytes_match = (
+                self.slot_resolver.try_match_dynamic_bytes_slot(
+                    slot_int,
+                    dynamic_bytes_index,
+                    length_at_step,
+                )
+                if dynamic_bytes_index
+                else None
+            )
+            dynamic_bytes_resolution_by_slot.setdefault(slot_int, []).append(
+                bytes_match is not None
+            )
         blocked_array_slots = {
             slot
             for slot, resolutions in array_resolution_by_slot.items()
+            if any(resolutions) and not all(resolutions)
+        }
+        blocked_dynamic_bytes_slots = {
+            slot
+            for slot, resolutions in dynamic_bytes_resolution_by_slot.items()
             if any(resolutions) and not all(resolutions)
         }
 
@@ -926,6 +944,8 @@ class TransactionAnalysisService:
                 value_type: Optional[str] = None
                 element_type_id: Optional[str] = None
                 array_index: Optional[int] = None
+                data_part_index: Optional[int] = None
+                data_part_count: Optional[int] = None
 
                 if layout:
                     try:
@@ -1232,10 +1252,15 @@ class TransactionAnalysisService:
                                             pass
 
                             # Try dynamic bytes
-                            if not variable and dynamic_bytes_index:
+                            if (
+                                not variable
+                                and dynamic_bytes_index
+                                and slot_int not in blocked_dynamic_bytes_slots
+                            ):
                                 bytes_match = self.slot_resolver.try_match_dynamic_bytes_slot(
                                     slot_int,
                                     dynamic_bytes_index,
+                                    length_at_step,
                                 )
                                 if bytes_match:
                                     stats["dynamic_bytes"] += 1
@@ -1244,6 +1269,10 @@ class TransactionAnalysisService:
                                     variable_path = bytes_match["path"]
                                     encoding = bytes_match.get("encoding")
                                     data_offset = bytes_match.get("data_offset", 0)
+                                    data_part_index = data_offset
+                                    data_part_count = bytes_match.get(
+                                        "data_part_count"
+                                    )
                                     try:
                                         old_bytes = bytes.fromhex(old_value[2:])
                                         new_bytes = bytes.fromhex(new_value[2:])
@@ -1336,6 +1365,8 @@ class TransactionAnalysisService:
                         value_type=value_type,
                         element_type_id=element_type_id,
                         array_index=array_index,
+                        data_part_index=data_part_index,
+                        data_part_count=data_part_count,
                         change_index=exec_index,
                         pc=pc,
                     )

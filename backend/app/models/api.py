@@ -294,6 +294,8 @@ class SlotChangeResponse(BaseModel):
     is_mapping: bool = False  # Whether this is a mapping entry
     is_dynamic_array: bool = False  # Whether this is a dynamic array entry
     array_index: Optional[int] = None  # Index for dynamic array entries
+    data_part_index: Optional[int] = None  # Zero-based word in long bytes/string data
+    data_part_count: Optional[int] = None  # Total words proven by the encoded length
     encoding: Optional[str] = None  # Type encoding (inplace, mapping, bytes, etc.)
     value_type: Optional[str] = None  # Value type for mappings (cleaned up)
 

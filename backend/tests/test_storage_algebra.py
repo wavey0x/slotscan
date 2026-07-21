@@ -946,6 +946,130 @@ def five():
         tracer.slot_resolver.get_struct_offsets.assert_called_once_with(layout)
 
 
+class DynamicBytesResolutionTests(unittest.TestCase):
+    def test_long_string_continuation_words_require_and_use_proven_length(self):
+        string_type = StorageType(
+            id="t_string_storage",
+            label="string",
+            kind="value",
+            encoding="bytes",
+            num_bytes=32,
+        )
+        variable = StorageVariable(
+            name="_name",
+            slot=3,
+            offset=0,
+            size=32,
+            type_id=string_type.id,
+            label=string_type.label,
+        )
+        layout = StorageLayout(
+            contract_name="DepositToken",
+            variables=[variable],
+            types={string_type.id: string_type},
+        )
+        data_start = int.from_bytes(
+            Web3.keccak(encode(["uint256"], [variable.slot])),
+            "big",
+        )
+        first_word = b"Curve Vault for crvUSD Convex De"
+        second_word = b"posit".ljust(32, b"\x00")
+        unrelated_word = b"unrelated".ljust(32, b"\x00")
+        encoded_length = 37 * 2 + 1
+        tracer = TransactionAnalysisService(object(), Settings(), TypeDecoder())
+
+        changes = tracer._decode_changes(
+            [
+                (
+                    f"0x{data_start:064x}",
+                    "0x" + "00" * 32,
+                    "0x" + first_word.hex(),
+                    1,
+                    20,
+                ),
+                (
+                    f"0x{data_start + 1:064x}",
+                    "0x" + "00" * 32,
+                    "0x" + second_word.hex(),
+                    2,
+                    30,
+                ),
+                (
+                    f"0x{data_start + 2:064x}",
+                    "0x" + "00" * 32,
+                    "0x" + unrelated_word.hex(),
+                    3,
+                    40,
+                ),
+            ],
+            layout,
+            storage_timelines={
+                variable.slot: (0, ((10, encoded_length),)),
+            },
+        )
+
+        self.assertEqual(
+            [change.variable_path for change in changes],
+            ["_name", "_name", None],
+        )
+        self.assertEqual(
+            [
+                (change.data_part_index, change.data_part_count)
+                for change in changes
+            ],
+            [(0, 2), (1, 2), (None, None)],
+        )
+        self.assertEqual(changes[0].new_decoded.decoded, first_word.decode())
+        self.assertEqual(changes[1].new_decoded.decoded, "posit")
+
+        grouped = _group_changes_by_slot(changes, layout)
+        self.assertEqual(
+            [
+                (slot.variable_name, slot.data_part_index, slot.data_part_count)
+                for slot in grouped
+            ],
+            [("_name", 0, 2), ("_name", 1, 2), (None, None, None)],
+        )
+
+        resolver = SlotPathResolver()
+        index = resolver.build_dynamic_bytes_index(layout)
+        self.assertIsNone(
+            resolver.try_match_dynamic_bytes_slot(data_start + 1, index)
+        )
+        self.assertIsNone(
+            resolver.try_match_dynamic_bytes_slot(
+                data_start,
+                index,
+                lambda _: 10,
+            )
+        )
+
+        mixed = tracer._decode_changes(
+            [
+                (
+                    f"0x{data_start + 1:064x}",
+                    "0x" + "00" * 32,
+                    "0x" + second_word.hex(),
+                    4,
+                    20,
+                ),
+                (
+                    f"0x{data_start + 1:064x}",
+                    "0x" + second_word.hex(),
+                    "0x" + unrelated_word.hex(),
+                    5,
+                    30,
+                ),
+            ],
+            layout,
+            storage_timelines={
+                variable.slot: (encoded_length, ((25, 0),)),
+            },
+        )
+        self.assertTrue(all(change.variable is None for change in mixed))
+        self.assertTrue(all(change.variable_path is None for change in mixed))
+
+
 class PackedArrayLayoutTests(unittest.TestCase):
     def setUp(self):
         self.element = StorageType(

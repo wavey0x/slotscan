@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { ExternalLink } from 'lucide-react';
 import { SlotHistoryTable } from '@/components/diff/DiffTable';
 import { KeyedVariablePath } from '@/components/diff/KeyedVariablePath';
-import { slotVariablePath } from '@/components/diff/slotDisplay';
+import { dataPartTypeLabel, slotVariablePath } from '@/components/diff/slotDisplay';
 import { StorageTable, StorageTableColumns, StorageTableHeader, storageCellClass } from '@/components/diff/StorageTable';
 import { CopyableValue, deriveStructuredValueFields, isStructuredDecodedValue, StructuredFieldNames, StructuredValueDiff, ValueDiff } from '@/components/diff/ValueDiff';
 import { CopyButton } from '@/components/ui/CopyButton';
@@ -248,7 +248,14 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
             ? variablePath.slice(0, -memberSuffix.length)
             : null;
           const variableDetail = variablePath || slot.variable_name || slot.slot;
-          const variableType = structMember?.type_label || slot.value_type || slot.type_label;
+          const variableType = dataPartTypeLabel(
+            slot,
+            structMember?.type_label || slot.value_type || slot.type_label,
+          );
+          const hasDataPart = slot.data_part_index !== null
+            && slot.data_part_index !== undefined
+            && slot.data_part_count !== null
+            && slot.data_part_count !== undefined;
           const unchanged = event.effect === 'noop';
           const hasStructuredChildren = !structMember && structuredFieldNames.length > 0;
           const structuredVariableDetail = hasStructuredChildren
@@ -303,7 +310,19 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                           <span className="shrink-0">.{structMember.name}</span>
                         </div>
                       ) : (
-                        <div className="truncate font-mono text-gray-900">{variablePath || truncateHash(slot.slot, 7)}</div>
+                        <div className="min-w-0 font-mono">
+                          <div className="truncate text-gray-900">
+                            {variablePath || truncateHash(slot.slot, 7)}
+                          </div>
+                          {hasDataPart && variableType && (
+                            <div
+                              className="truncate text-[10px] text-gray-400"
+                              data-testid="timeline-variable-meta"
+                            >
+                              {variableType}
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   </TimelineVariableDisclosure>
