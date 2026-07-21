@@ -8,12 +8,12 @@ import {
   StorageViewValueItem,
   StorageViewVariable,
 } from '@/lib/types';
-import { CompactValue } from '@/components/ui/CompactValue';
 import { DetailPopover } from '@/components/ui/DetailPopover';
 import { StorageLocationCell } from '@/components/ui/StorageLocationCell';
 import { formatStorageLocation } from '@/lib/storage-location';
 import { MappingKeyInput } from './MappingKeyInput';
 import { ArrayIndexInput } from './ArrayIndexInput';
+import { StorageViewValueCell } from './StorageViewValueCell';
 import { cn } from '@/lib/utils';
 
 interface LayoutRowProps {
@@ -193,18 +193,11 @@ export const LayoutRow = memo(function LayoutRow({
           ) : successfulValues.length > 0 ? (
             <div className="space-y-1">
               {successfulValues.map((value) => (
-                <CompactValue
+                <StorageViewValueCell
                   key={`${value.declaration_id}:${value.path}`}
-                  decoded={value.value_decoded}
-                  encoded={value.value_encoded}
-                  mode={showHex ? 'hex' : 'decoded'}
-                  status={value.status === 'ok' && !value.value_encoded ? 'unavailable' : value.status}
+                  value={value}
+                  showHex={showHex}
                   chainId={chainId}
-                  copyLabel={`Copy ${value.path} value`}
-                  colorClass={cn(
-                    'font-mono leading-tight text-gray-900',
-                    showHex ? 'text-[10px]' : 'text-xs',
-                  )}
                 />
               ))}
             </div>
@@ -293,17 +286,10 @@ export const LayoutRow = memo(function LayoutRow({
               />
             </td>
             <td className="px-1 py-1.5">
-              <CompactValue
-                decoded={value.value_decoded}
-                encoded={value.value_encoded}
-                mode={showHex ? 'hex' : 'decoded'}
-                status={value.status === 'ok' && !value.value_encoded ? 'unavailable' : value.status}
+              <StorageViewValueCell
+                value={value}
+                showHex={showHex}
                 chainId={chainId}
-                copyLabel={`Copy ${value.path} value`}
-                colorClass={cn(
-                  'font-mono leading-tight text-gray-900',
-                  showHex ? 'text-[10px]' : 'text-xs',
-                )}
               />
             </td>
             <td

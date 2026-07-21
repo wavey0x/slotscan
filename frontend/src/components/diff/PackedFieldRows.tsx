@@ -1,10 +1,9 @@
 import { PackedFieldResponse, StorageChangeResponse } from '@/lib/types';
-import { cn, valuesEqual } from '@/lib/utils';
-import { CompactValue } from '@/components/ui/CompactValue';
+import { cn } from '@/lib/utils';
 import { StorageLocationCell } from '@/components/ui/StorageLocationCell';
 import { DetailPopover } from '@/components/ui/DetailPopover';
 import type { FormattedStorageLocation } from '@/lib/storage-location';
-import { ValueDiff } from './ValueDiff';
+import { StorageValueDiff } from './StorageValueDiff';
 
 export function PackedFieldRow({
   field,
@@ -37,9 +36,6 @@ export function PackedFieldRow({
   // Without a struct header there is no parent row, so the trunk starts at the
   // first branch instead of dangling above it.
   const treeTop = isFirst && !hasHeader ? '50%' : 0;
-  const unchanged = valuesEqual(field.before.value_decoded, field.after.value_decoded);
-  const afterClassName = unchanged ? 'text-gray-300' : 'text-gray-900';
-
   return (
     <tr className={cn('hover:bg-gray-50', borderClass)}>
       <td className="w-5 px-1 py-0.5 align-top"><span className="inline-block h-4 w-4" /></td>
@@ -56,28 +52,18 @@ export function PackedFieldRow({
         </div>
       </td>
       <td className="px-1 py-0.5 align-top">
-        <ValueDiff
-          unchanged={unchanged}
+        <StorageValueDiff
+          before={{
+            ...field.before,
+            value_encoded: initialEncoded,
+          }}
+          after={{
+            ...field.after,
+            value_encoded: finalEncoded,
+          }}
+          chainId={chainId}
           beforeClassName="text-gray-300"
-          afterClassName={afterClassName}
-          before={(
-            <CompactValue
-              decoded={field.before.value_decoded}
-              encoded={initialEncoded}
-              chainId={chainId}
-              copyLabel="Copy previous value"
-              colorClass="font-mono text-xs text-gray-300"
-            />
-          )}
-          after={(
-            <CompactValue
-              decoded={field.after.value_decoded}
-              encoded={finalEncoded}
-              chainId={chainId}
-              copyLabel={unchanged ? 'Copy value' : 'Copy new value'}
-              colorClass={cn('font-mono text-xs', afterClassName)}
-            />
-          )}
+          unchangedClassName="text-gray-300"
         />
       </td>
       <td className="hidden w-8 px-1 py-0 align-top sm:table-cell">
@@ -128,11 +114,6 @@ export function InterimPackedChangeRows({
         const beforeValue = fieldValue(change.before.value_decoded, field.name);
         const afterValue = fieldValue(change.after.value_decoded, field.name);
         const isLast = fieldIndex === packedFields.length - 1;
-        const unchanged = valuesEqual(
-          beforeValue,
-          afterValue,
-        );
-
         return (
           <tr key={`${field.name}:${fieldIndex}`} className={cn('bg-gray-100/80', !isFirstChange && fieldIndex === 0 && 'border-t border-gray-300')}>
             <td className="py-0.5 pl-3 align-top" />
@@ -154,29 +135,13 @@ export function InterimPackedChangeRows({
               </div>
             </td>
             <td className="py-0.5 pl-3 align-top" data-testid="interim-value">
-              <ValueDiff
-                unchanged={unchanged}
-                before={(
-                  <CompactValue
-                    decoded={beforeValue}
-                    chainId={chainId}
-                    copyLabel="Copy previous value"
-                    colorClass="font-mono text-xs text-gray-300"
-                  />
-                )}
-                after={(
-                  <CompactValue
-                    decoded={afterValue}
-                    chainId={chainId}
-                    copyLabel={unchanged ? 'Copy value' : 'Copy new value'}
-                    colorClass={cn(
-                      'font-mono text-xs',
-                      unchanged ? 'text-gray-400' : 'text-gray-700',
-                    )}
-                  />
-                )}
+              <StorageValueDiff
+                before={{ value_decoded: beforeValue }}
+                after={{ value_decoded: afterValue }}
+                chainId={chainId}
                 beforeClassName="text-gray-300"
-                afterClassName={unchanged ? 'text-gray-400' : 'text-gray-700'}
+                afterClassName="text-gray-700"
+                unchangedClassName="text-gray-400"
               />
             </td>
             <td className="hidden px-1 py-0.5 align-top sm:table-cell" />

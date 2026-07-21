@@ -6,9 +6,9 @@ import { ExternalLink } from 'lucide-react';
 import { SlotHistoryTable } from '@/components/diff/DiffTable';
 import { StorageTable, StorageTableColumns, StorageTableHeader, storageCellClass } from '@/components/diff/StorageTable';
 import { StorageVariableCell } from '@/components/diff/StorageVariableCell';
-import { deriveStructuredValueFields, isStructuredDecodedValue, StructuredFieldNames, StructuredValueDiff, ValueDiff } from '@/components/diff/ValueDiff';
+import { deriveStructuredValueFields, isStructuredDecodedValue, StructuredFieldNames, StructuredValueDiff } from '@/components/diff/ValueDiff';
 import { deriveStorageIdentity, storageIdentityMetadata } from '@/components/diff/storageIdentity';
-import { CompactValue } from '@/components/ui/CompactValue';
+import { StorageValueDiff } from '@/components/diff/StorageValueDiff';
 import { CopyButton } from '@/components/ui/CopyButton';
 import { StorageLocationCell } from '@/components/ui/StorageLocationCell';
 import { TimelineVariableDisclosure } from '@/components/transaction/TimelineVariableDisclosure';
@@ -262,30 +262,12 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                     />
                   </>
                 ) : (
-                  <ValueDiff
+                  <StorageValueDiff
+                    before={event.before}
+                    after={event.after}
+                    showHex={showHex}
+                    chainId={chain}
                     unchanged={unchanged}
-                    before={(
-                      <CompactValue
-                        decoded={event.before.value_decoded}
-                        encoded={event.before.value_encoded}
-                        mode={showHex ? 'hex' : 'decoded'}
-                        chainId={chain}
-                        copyLabel="Copy previous value"
-                        colorClass="font-mono text-xs text-gray-400"
-                      />
-                    )}
-                    after={(
-                      <CompactValue
-                        decoded={event.after.value_decoded}
-                        encoded={event.after.value_encoded}
-                        mode={showHex ? 'hex' : 'decoded'}
-                        chainId={chain}
-                        copyLabel={unchanged ? 'Copy value' : 'Copy new value'}
-                        colorClass={unchanged ? 'font-mono text-xs text-gray-400' : 'font-mono text-xs text-gray-900'}
-                      />
-                    )}
-                    beforeClassName="text-gray-400"
-                    afterClassName={unchanged ? 'text-gray-400' : 'text-gray-900'}
                   />
                 )}
                 {event.frame_outcome === 'reverted' && <div className="mt-0.5 text-[9px] uppercase tracking-wide text-amber-600">reverted</div>}

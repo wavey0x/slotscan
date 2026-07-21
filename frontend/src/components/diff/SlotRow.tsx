@@ -15,7 +15,6 @@ import {
   cn,
   valuesEqual,
 } from '@/lib/utils';
-import { CompactValue } from '@/components/ui/CompactValue';
 import { DetailPopover } from '@/components/ui/DetailPopover';
 import { StorageLocationCell } from '@/components/ui/StorageLocationCell';
 import {
@@ -23,13 +22,13 @@ import {
   isStructuredDecodedValue,
   StructuredFieldNames,
   StructuredValueDiff,
-  ValueDiff,
 } from './ValueDiff';
 import { StorageEvidenceDetail } from './StorageEvidenceDetail';
 import { StorageVariableCell } from './StorageVariableCell';
 import { InterimPackedChangeRows, PackedFieldRow } from './PackedFieldRows';
 import { deriveStorageIdentity, storageIdentityMetadata } from './storageIdentity';
 import { deriveSlotDisplay } from './slotDisplay';
+import { StorageValueDiff } from './StorageValueDiff';
 
 interface SlotRowProps {
   slot: SlotChangeResponse;
@@ -205,7 +204,6 @@ export function SlotRow({
               const beforeDecoded = singlePackedField ? singlePackedField.before.value_decoded : slot.before.value_decoded;
               const afterDecoded = singlePackedField ? singlePackedField.after.value_decoded : slot.after.value_decoded;
               const unchanged = valuesEqual(beforeDecoded, afterDecoded);
-              const afterClassName = unchanged ? 'text-gray-400' : 'text-gray-900';
 
               if (!showHex && isStructuredDecodedValue(beforeDecoded) && isStructuredDecodedValue(afterDecoded)) {
                 return (
@@ -223,30 +221,21 @@ export function SlotRow({
               }
 
               return (
-                <ValueDiff
+                <StorageValueDiff
+                  before={{
+                    value_decoded: beforeDecoded,
+                    value_encoded: slot.before.value_encoded,
+                  }}
+                  after={{
+                    value_decoded: afterDecoded,
+                    value_encoded: slot.after.value_encoded,
+                  }}
+                  showHex={showHex}
+                  chainId={chainId}
                   unchanged={unchanged}
                   beforeClassName="text-gray-300"
-                  afterClassName={afterClassName}
-                  before={
-                    <CompactValue
-                      decoded={beforeDecoded}
-                      encoded={slot.before.value_encoded}
-                      mode={showHex ? 'hex' : 'decoded'}
-                      chainId={chainId}
-                      copyLabel="Copy previous value"
-                      colorClass="text-xs font-mono text-gray-300"
-                    />
-                  }
-                  after={
-                    <CompactValue
-                      decoded={afterDecoded}
-                      encoded={slot.after.value_encoded}
-                      mode={showHex ? 'hex' : 'decoded'}
-                      chainId={chainId}
-                      copyLabel={unchanged ? 'Copy value' : 'Copy new value'}
-                      colorClass={cn('text-xs font-mono', afterClassName)}
-                    />
-                  }
+                  afterClassName="text-gray-900"
+                  unchangedClassName="text-gray-400"
                 />
               );
             })()}
@@ -346,30 +335,15 @@ export function SlotRow({
                   displayedFields={interimStructuredFields.displayedFields}
                 />
               ) : (
-                <ValueDiff
+                <StorageValueDiff
+                  before={change.before}
+                  after={change.after}
+                  showHex={showHex}
+                  chainId={chainId}
                   unchanged={unchanged}
                   beforeClassName="text-gray-300"
-                  afterClassName={afterClassName}
-                  before={
-                    <CompactValue
-                      decoded={change.before.value_decoded}
-                      encoded={change.before.value_encoded}
-                      mode={showHex ? 'hex' : 'decoded'}
-                      chainId={chainId}
-                      copyLabel="Copy previous value"
-                      colorClass="text-xs font-mono text-gray-300"
-                    />
-                  }
-                  after={
-                    <CompactValue
-                      decoded={change.after.value_decoded}
-                      encoded={change.after.value_encoded}
-                      mode={showHex ? 'hex' : 'decoded'}
-                      chainId={chainId}
-                      copyLabel={unchanged ? 'Copy value' : 'Copy new value'}
-                      colorClass={cn('text-xs font-mono', afterClassName)}
-                    />
-                  }
+                  afterClassName="text-gray-900"
+                  unchangedClassName="text-gray-400"
                 />
               )}
             </td>
