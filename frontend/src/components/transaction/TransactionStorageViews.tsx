@@ -61,6 +61,10 @@ function timelineStructMember(slot: SlotChangeResponse, changedFields: string[])
     ?? null;
 }
 
+function semanticStructuredVariable(variable: string) {
+  return variable.replace(/\[\+\d+\]$/, '');
+}
+
 function StructuredTimelineHeader({
   variable,
   typeLabel,
@@ -247,6 +251,9 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
           const variableType = structMember?.type_label || slot.value_type || slot.type_label;
           const unchanged = event.effect === 'noop';
           const hasStructuredChildren = !structMember && structuredFieldNames.length > 0;
+          const structuredVariableDetail = hasStructuredChildren
+            ? semanticStructuredVariable(variableDetail)
+            : variableDetail;
           const structuredHeaderClass = 'h-5 overflow-hidden';
 
           return (
@@ -272,14 +279,14 @@ export function Timeline({ entries, chain, showContract, showHex }: { entries: T
                   <TimelineVariableDisclosure
                     contract={contract}
                     chain={chain}
-                    variable={variableDetail}
+                    variable={structuredVariableDetail}
                     typeLabel={variableType}
                     isRawSlot={!variablePath && !slot.variable_name}
                   >
                     <div className="min-w-0">
                       {hasStructuredChildren ? (
                         <StructuredTimelineHeader
-                          variable={variableDetail}
+                          variable={structuredVariableDetail}
                           typeLabel={variableType}
                         />
                       ) : variablePath?.includes('[') ? (

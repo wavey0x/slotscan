@@ -964,10 +964,12 @@ test('timeline keeps packed paths compact and exposes contract identity across v
   expect(multiBox).not.toBeNull();
   expect(singleBox!.height).toBeLessThan(multiBox!.height);
 
-  const nestedRow = page.getByTestId('timeline-event').filter({ hasText: 'poolInfo[570][+4]' });
+  const nestedHeader = page.getByTestId('timeline-structured-header').filter({ hasText: 'poolInfo[570]' });
+  await expect(nestedHeader).toHaveCount(1);
+  const nestedRow = nestedHeader.locator('xpath=ancestor::tr');
   const nestedHeaderFrame = nestedRow.getByTestId('timeline-structured-header-frame');
-  const nestedHeader = nestedRow.getByTestId('timeline-structured-header');
-  await expect(nestedHeader).toContainText('poolInfo[570][+4]');
+  await expect(nestedHeader).toContainText('poolInfo[570]');
+  await expect(nestedHeader).not.toContainText('[+4]');
   await expect(nestedHeader).toContainText('packed');
   await expect(nestedRow.getByTestId('keyed-variable-context')).toHaveCount(0);
   expect(await nestedHeaderFrame.evaluate(
@@ -983,8 +985,9 @@ test('timeline keeps packed paths compact and exposes contract identity across v
   expect(Math.abs(nestedFieldBox!.y - nestedValueBox!.y)).toBeLessThan(2);
 
   await nestedHeader.click();
-  const nestedDetail = page.getByRole('dialog', { name: 'Variable details: poolInfo[570][+4]' });
-  await expect(nestedDetail).toContainText('poolInfo[570][+4]');
+  const nestedDetail = page.getByRole('dialog', { name: 'Variable details: poolInfo[570]' });
+  await expect(nestedDetail).toContainText('poolInfo[570]');
+  await expect(nestedDetail).not.toContainText('[+4]');
   await expect(nestedDetail).toContainText('packed');
   await page.keyboard.press('Escape');
 
