@@ -2,6 +2,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from web3 import Web3
+
 from app.config import Settings
 from app.models.domain import (
     ContractMetadata,
@@ -97,6 +99,76 @@ def _compiled_layout():
                 ),
             ],
             types={mapping.id: mapping},
+            language="Solidity",
+            compiler_version="0.8.30",
+            storage_scheme="solidity",
+        )
+    )
+
+
+def _dynamic_word(payload: bytes) -> int:
+    if len(payload) > 31:
+        raise ValueError("Short dynamic values cannot exceed 31 bytes")
+    return int.from_bytes(
+        payload + bytes(31 - len(payload)) + bytes([len(payload) * 2]),
+        "big",
+    )
+
+
+def _data_word(payload: bytes) -> int:
+    if len(payload) > 32:
+        raise ValueError("Storage data words cannot exceed 32 bytes")
+    return int.from_bytes(payload.ljust(32, b"\x00"), "big")
+
+
+def _dynamic_layout():
+    string_type = StorageType(
+        "t_string_storage",
+        "string",
+        "value",
+        "bytes",
+        num_bytes=32,
+    )
+    bytes_type = StorageType(
+        "t_bytes_storage",
+        "bytes",
+        "value",
+        "bytes",
+        num_bytes=32,
+    )
+    return compile_layout(
+        StorageLayout(
+            contract_name="DynamicValues",
+            variables=[
+                StorageVariable(
+                    "name",
+                    3,
+                    0,
+                    32,
+                    string_type.id,
+                    string_type.label,
+                ),
+                StorageVariable(
+                    "description",
+                    4,
+                    0,
+                    32,
+                    string_type.id,
+                    string_type.label,
+                ),
+                StorageVariable(
+                    "payload",
+                    5,
+                    0,
+                    32,
+                    bytes_type.id,
+                    bytes_type.label,
+                ),
+            ],
+            types={
+                string_type.id: string_type,
+                bytes_type.id: bytes_type,
+            },
             language="Solidity",
             compiler_version="0.8.30",
             storage_scheme="solidity",
@@ -217,6 +289,120 @@ class StorageViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(by_path["small"]["value_decoded"], "42")
         self.assertEqual([slot for slot, _ in web3.provider.storage_calls], [7])
 
+    async def test_short_and_long_solidity_dynamic_values_are_fully_decoded(self):
+        short_name = b"Pendle Market"
+        long_description = b"dynamic storage data " * 4
+        short_payload = bytes.fromhex("00ff10")
+        description_root = int.from_bytes(
+            Web3.keccak((4).to_bytes(32, "big")),
+            "big",
+        )
+        values = {
+            3: _dynamic_word(short_name),
+            4: len(long_description) * 2 + 1,
+            5: _dynamic_word(short_payload),
+            description_root: _data_word(long_description[:32]),
+            description_root + 1: _data_word(long_description[32:64]),
+            description_root + 2: _data_word(long_description[64:]),
+        }
+        web3 = _Web3(values=values)
+        context = StorageContext(
+            attempt=StorageAttempt(
+                web3,
+                BlockRef(1, 123, BLOCK_HASH),
+                2,
+            ),
+            metadata=ContractMetadata(
+                chain_id=1,
+                address=ADDRESS,
+                is_verified=True,
+            ),
+            layout=_dynamic_layout(),
+            layout_status="ok",
+        )
+
+        response = await _service(context).get_view(1, ADDRESS, "latest")
+        validated = StorageViewResponse.model_validate(response)
+        by_path = {item.path: item for item in validated.values.items}
+
+        self.assertEqual(by_path["name"].status, "ok")
+        self.assertEqual(by_path["name"].value_decoded, "Pendle Market")
+        self.assertEqual(
+            by_path["name"].value_encoded,
+            "0x" + f"{values[3]:064x}",
+        )
+        self.assertEqual(
+            by_path["name"].storage.model_dump(),
+            {
+                "base_slot": "0x3",
+                "base_role": "inline",
+                "computed_role": None,
+                "computed_slot": None,
+                "computed_slot_count": None,
+            },
+        )
+        self.assertEqual(
+            by_path["description"].value_decoded,
+            long_description.decode(),
+        )
+        self.assertEqual(
+            by_path["description"].storage.model_dump(),
+            {
+                "base_slot": "0x4",
+                "base_role": "length",
+                "computed_role": "data",
+                "computed_slot": hex(description_root),
+                "computed_slot_count": "3",
+            },
+        )
+        self.assertEqual(by_path["payload"].value_decoded, "0x00ff10")
+        self.assertEqual(by_path["payload"].storage.base_role, "inline")
+        self.assertEqual(
+            [slot for slot, _ in web3.provider.storage_calls],
+            [3, 4, 5, description_root, description_root + 1, description_root + 2],
+        )
+
+    async def test_unbounded_dynamic_length_is_deferred_before_slot_expansion(self):
+        web3 = _Web3(values={4: 2**256 - 1})
+        context = StorageContext(
+            attempt=StorageAttempt(
+                web3,
+                BlockRef(1, 123, BLOCK_HASH),
+                2,
+            ),
+            metadata=ContractMetadata(
+                chain_id=1,
+                address=ADDRESS,
+                is_verified=True,
+            ),
+            layout=_dynamic_layout(),
+            layout_status="ok",
+        )
+        service = _service(context)
+        service.settings = Settings(MAX_SLOTS_PER_CONTRACT=2)
+
+        response = await service.get_view(1, ADDRESS, "latest")
+        validated = StorageViewResponse.model_validate(response)
+        by_path = {item.path: item for item in validated.values.items}
+
+        self.assertEqual(by_path["description"].status, "deferred_budget")
+        self.assertIsNone(by_path["description"].value_encoded)
+        self.assertIsNone(by_path["description"].value_decoded)
+        self.assertEqual(by_path["description"].storage.base_role, "length")
+        self.assertEqual(by_path["description"].storage.computed_role, "data")
+        self.assertEqual(
+            by_path["description"].storage.computed_slot,
+            hex(int.from_bytes(Web3.keccak((4).to_bytes(32, "big")), "big")),
+        )
+        self.assertEqual(
+            by_path["description"].storage.computed_slot_count,
+            str(2**250),
+        )
+        self.assertEqual(
+            [slot for slot, _ in web3.provider.storage_calls],
+            [3, 4],
+        )
+
     async def test_coherent_view_uses_string_safe_values_and_on_demand_status(self):
         web3 = _Web3()
         attempt = StorageAttempt(
@@ -246,6 +432,16 @@ class StorageViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(by_path["counter"]["value_decoded"], "42")
         self.assertEqual(by_path["counter"]["slot"], hex(2**255))
         self.assertEqual(by_path["balances"]["status"], "on_demand")
+        self.assertEqual(
+            by_path["balances"]["storage"],
+            {
+                "base_slot": "0x7",
+                "base_role": "anchor",
+                "computed_role": None,
+                "computed_slot": None,
+                "computed_slot_count": None,
+            },
+        )
         self.assertEqual(
             [slot for slot, _ in web3.provider.storage_calls],
             [2**255],

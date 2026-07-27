@@ -58,6 +58,14 @@ export interface StorageViewVariable {
   confidence: string;
 }
 
+export interface StorageProvenance {
+  base_slot: string;
+  base_role: 'inline' | 'length' | 'anchor' | 'header';
+  computed_role: 'data' | 'entry' | null;
+  computed_slot: string | null;
+  computed_slot_count: string | null;
+}
+
 export interface StorageViewValueItem {
   declaration_id: string;
   path: string;
@@ -66,6 +74,7 @@ export interface StorageViewValueItem {
   byte_offset: number;
   value_encoded: string | null;
   value_decoded: unknown;
+  storage: StorageProvenance | null;
 }
 
 export interface StorageViewResponse {
@@ -124,6 +133,7 @@ export interface StorageQueryResponse {
   value_encoded: string;
   value_decoded: unknown;
   array_length: string | null;
+  storage: StorageProvenance | null;
 }
 
 export interface StorageQueryLookup {
@@ -132,6 +142,7 @@ export interface StorageQueryLookup {
   slot: string;
   rawValue: string;
   decodedValue: unknown;
+  storage: StorageProvenance | null;
 }
 
 interface ComparisonScope {

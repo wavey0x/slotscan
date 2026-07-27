@@ -97,6 +97,9 @@ export const LayoutRow = memo(function LayoutRow({
     : [];
   const hasStructDetails = structValues.length > 0;
   const canExpand = isInteractive || hasStructDetails;
+  const variableProvenance = values.find(
+    (value) => value.path === variable.name,
+  )?.storage;
   const variableLocation = formatStorageLocation({
     slot: variable.slot,
     byteOffset: variable.byte_offset,
@@ -181,6 +184,7 @@ export const LayoutRow = memo(function LayoutRow({
         <td className="hidden truncate px-1 py-2 sm:table-cell">
           <StorageLocationCell
             location={variableLocation}
+            provenance={variableProvenance}
             colorClass="font-mono text-xs text-gray-500"
           />
         </td>
@@ -216,6 +220,7 @@ export const LayoutRow = memo(function LayoutRow({
         >
           <StorageLocationCell
             location={variableLocation}
+            provenance={variableProvenance}
             colorClass="font-mono text-[10px] text-gray-500"
           />
         </td>
@@ -282,6 +287,7 @@ export const LayoutRow = memo(function LayoutRow({
             <td className="hidden truncate px-1 py-1.5 sm:table-cell">
               <StorageLocationCell
                 location={location}
+                provenance={value.storage}
                 colorClass="font-mono text-xs text-gray-500"
               />
             </td>
@@ -298,6 +304,7 @@ export const LayoutRow = memo(function LayoutRow({
             >
               <StorageLocationCell
                 location={location}
+                provenance={value.storage}
                 colorClass="font-mono text-[10px] text-gray-500"
               />
             </td>

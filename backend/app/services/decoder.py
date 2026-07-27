@@ -422,12 +422,10 @@ class TypeDecoder:
             raw_value = raw_value.rjust(32, b"\x00")
 
         raw_hex = "0x" + raw_value.hex()
-        last_byte = raw_value[-1]
+        length, is_inline = self.inspect_dynamic_bytes_slot(raw_value)
 
-        # Check if short or long encoding
-        if last_byte & 1 == 0:
+        if is_inline:
             # Short encoding: length*2 in last byte, data inline
-            length = last_byte // 2
             if length == 0:
                 return DecodedValue(
                     raw=raw_hex,
@@ -457,13 +455,68 @@ class TypeDecoder:
                 )
         else:
             # Long encoding: length*2+1 in slot, data at keccak256(slot)
-            full_value = int.from_bytes(raw_value, "big")
-            length = (full_value - 1) // 2
             return DecodedValue(
                 raw=raw_hex,
                 decoded=length,
                 type_label=f"{type_label} length",
             )
+
+    @staticmethod
+    def inspect_dynamic_bytes_slot(raw_value: bytes) -> tuple[int, bool]:
+        """Return the payload length and whether it is inline."""
+        if len(raw_value) < 32:
+            raw_value = raw_value.rjust(32, b"\x00")
+        if len(raw_value) != 32:
+            raise ValueError("Dynamic bytes base value must be exactly 32 bytes")
+
+        last_byte = raw_value[-1]
+        if last_byte & 1 == 0:
+            length = last_byte // 2
+            if length > 31:
+                raise ValueError("Invalid short dynamic bytes length")
+            return length, True
+
+        length = (int.from_bytes(raw_value, "big") - 1) // 2
+        if length < 32:
+            raise ValueError("Invalid long dynamic bytes length")
+        return length, False
+
+    def decode_dynamic_bytes_value(
+        self,
+        base_value: bytes,
+        data_values: list[bytes],
+        type_label: str = "string",
+    ) -> DecodedValue:
+        """Decode a complete Solidity string or dynamic bytes value."""
+        if len(base_value) < 32:
+            base_value = base_value.rjust(32, b"\x00")
+        length, is_inline = self.inspect_dynamic_bytes_slot(base_value)
+
+        if is_inline:
+            payload = base_value[:length]
+        else:
+            required_words = (length + 31) // 32
+            if len(data_values) != required_words:
+                raise ValueError(
+                    "Dynamic bytes data does not contain the complete payload"
+                )
+            if any(len(value) != 32 for value in data_values):
+                raise ValueError("Dynamic bytes data words must be exactly 32 bytes")
+            payload = b"".join(data_values)[:length]
+
+        raw = "0x" + payload.hex()
+        if type_label.lower() == "string":
+            try:
+                decoded: Any = payload.decode("utf-8")
+            except UnicodeDecodeError:
+                decoded = raw
+        else:
+            decoded = raw
+        return DecodedValue(
+            raw=raw,
+            decoded=decoded,
+            type_label=type_label,
+        )
 
     def decode_dynamic_bytes_data_slot(
         self, raw_value: bytes, type_label: str = "string", data_offset: int = 0

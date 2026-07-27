@@ -63,6 +63,7 @@ export function ArrayIndexInput({
         slot: result.location.slot,
         rawValue: result.value_encoded,
         decodedValue: result.value_decoded,
+        storage: result.storage,
       });
       setIndexInput('');
     } catch (caught) {

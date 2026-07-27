@@ -113,6 +113,7 @@ export function LookupResultsTable({
                   <td className={`${dataTableCellClass} hidden sm:table-cell`}>
                     <StorageLocationCell
                       location={lookupLocation}
+                      provenance={lookup.storage}
                       colorClass="font-mono text-gray-500"
                     />
                   </td>
@@ -122,6 +123,7 @@ export function LookupResultsTable({
                   <td className={`${dataTableCellClass} truncate font-mono text-[10px] text-gray-500 sm:hidden`}>
                     <StorageLocationCell
                       location={lookupLocation}
+                      provenance={lookup.storage}
                       colorClass="font-mono text-[10px] text-gray-500"
                     />
                   </td>
@@ -148,6 +150,7 @@ export function LookupResultsTable({
                   <td className={`${dataTableCellClass} hidden sm:table-cell`}>
                     <StorageLocationCell
                       location={lookupLocation}
+                      provenance={lookup.storage}
                       colorClass="font-mono text-gray-500"
                     />
                   </td>
@@ -164,6 +167,7 @@ export function LookupResultsTable({
                   <td className={`${dataTableCellClass} truncate font-mono text-[10px] text-gray-500 sm:hidden`}>
                     <StorageLocationCell
                       location={lookupLocation}
+                      provenance={lookup.storage}
                       colorClass="font-mono text-[10px] text-gray-500"
                     />
                   </td>
@@ -206,6 +210,7 @@ export function LookupResultsTable({
                       <td className={`${dataTableCellClass} hidden py-1.5 sm:table-cell`}>
                         <StorageLocationCell
                           location={location}
+                          provenance={lookup.storage}
                           colorClass="font-mono text-gray-500"
                         />
                       </td>
@@ -220,6 +225,7 @@ export function LookupResultsTable({
                       <td className={`${dataTableCellClass} truncate py-1.5 font-mono text-[10px] text-gray-500 sm:hidden`}>
                         <StorageLocationCell
                           location={location}
+                          provenance={lookup.storage}
                           colorClass="font-mono text-[10px] text-gray-500"
                         />
                       </td>

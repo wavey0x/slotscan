@@ -104,6 +104,7 @@ export function MappingKeyInput({
         slot: result.location.slot,
         rawValue: result.value_encoded,
         decodedValue: result.value_decoded,
+        storage: result.storage,
       });
       setKeys(keyTypes.map(() => ''));
     } catch (caught) {

@@ -68,6 +68,7 @@ function value(
     byte_offset: 0,
     value_encoded: status === 'ok' ? `0x${'0'.repeat(63)}1` : null,
     value_decoded: status === 'ok' ? decoded : null,
+    storage: null,
   };
 }
 
@@ -135,6 +136,84 @@ test('direct contracts render one coherent exact-block response', async ({ page 
     'href',
     `/1/compare?from=${ADDRESS}`,
   );
+});
+
+test('resolved dynamic strings disclose inline and computed storage', async ({ page }) => {
+  const encodedName = '0x50656e646c65204d61726b65740000000000000000000000000000000000001a';
+  const stringType = {
+    ...scalarType('t_string_storage', 'string'),
+    encoding: 'bytes',
+  };
+  await mockView(page, {
+    variables: [
+      variable('decl:0', '_name', '0x3', stringType.id, stringType.label),
+      variable('decl:1', '_description', '0x4', stringType.id, stringType.label),
+    ],
+    types: {
+      [stringType.id]: stringType,
+    },
+    values: [
+      {
+        ...value('decl:0', '_name', '0x3', 'Pendle Market'),
+        value_encoded: encodedName,
+        storage: {
+          base_slot: '0x3',
+          base_role: 'inline',
+          computed_role: null,
+          computed_slot: null,
+          computed_slot_count: null,
+        },
+      },
+      {
+        ...value('decl:1', '_description', '0x4', 'Dynamic storage data'),
+        storage: {
+          base_slot: '0x4',
+          base_role: 'length',
+          computed_role: 'data',
+          computed_slot: '0x1000',
+          computed_slot_count: '3',
+        },
+      },
+    ],
+  });
+  await page.goto(`/1/${ADDRESS}`);
+
+  const nameRow = page.getByRole('row').filter({
+    has: page.getByText('_name', { exact: true }),
+  });
+  await expect(nameRow).toContainText('Pendle Market');
+  await expect(nameRow.locator('td').nth(3)).toHaveText('3');
+  await nameRow.locator('td').nth(3).locator('[aria-haspopup="dialog"]').focus();
+  const inlineDetail = page.getByRole('dialog', {
+    name: 'Storage location: inline slot 0x3',
+  });
+  await expect(inlineDetail.getByText('inline', { exact: true })).toBeVisible();
+  await expect(inlineDetail.getByText('3', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  const descriptionRow = page.getByRole('row').filter({
+    has: page.getByText('_description', { exact: true }),
+  });
+  await expect(descriptionRow).toContainText('Dynamic storage data');
+  await expect(descriptionRow.locator('td').nth(3)).toHaveText('4');
+  await descriptionRow.locator('td').nth(3).locator('[aria-haspopup="dialog"]').focus();
+  const computedDetail = page.getByRole('dialog', {
+    name: 'Storage location: length slot 0x4, data 0x1000–0x1002',
+  });
+  await expect(computedDetail.getByText('length', { exact: true })).toBeVisible();
+  await expect(computedDetail.getByText('4', { exact: true })).toBeVisible();
+  await expect(computedDetail.getByText('data', { exact: true })).toBeVisible();
+  await expect(computedDetail.getByText('0x1000–0x1002', { exact: true })).toBeVisible();
+  await expect(
+    computedDetail.getByTestId('storage-computed-occupancy').locator('span'),
+  ).toHaveCount(3);
+  await expect(
+    computedDetail.getByRole('button', { name: 'Copy data slot range' }),
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await page.getByRole('button', { name: 'Hex' }).click();
+  await expect(nameRow).toContainText('0x50656e...00001a');
 });
 
 test('proxy and delegated views keep storage and effective code addresses distinct', async ({ page }) => {
@@ -534,6 +613,7 @@ test('packed struct mappings expand and render decoded members', async ({ page }
           deployTime: '1725000000',
         },
         array_length: null,
+        storage: null,
       },
     });
   });
@@ -603,6 +683,13 @@ test('mapping queries send raw keys and exact identities, never a computed slot'
         value_encoded: `0x${'0'.repeat(63)}5`,
         value_decoded: '5',
         array_length: null,
+        storage: {
+          base_slot: '0x7',
+          base_role: 'anchor',
+          computed_role: 'entry',
+          computed_slot: '0xabc',
+          computed_slot_count: '1',
+        },
       },
     });
   });
@@ -678,6 +765,7 @@ test('nested mappings preserve the raw ordered key sequence', async ({ page }) =
         value_encoded: `0x${'0'.repeat(63)}1`,
         value_decoded: '1',
         array_length: null,
+        storage: null,
       },
     });
   });
@@ -729,6 +817,15 @@ for (const arrayKind of ['fixed', 'dynamic'] as const) {
           value_encoded: `0x${'0'.repeat(63)}3`,
           value_decoded: '3',
           array_length: dynamic ? '4' : null,
+          storage: dynamic
+            ? {
+                base_slot: '0x9',
+                base_role: 'length',
+                computed_role: 'entry',
+                computed_slot: '0xaaa',
+                computed_slot_count: '1',
+              }
+            : null,
         },
       });
     });

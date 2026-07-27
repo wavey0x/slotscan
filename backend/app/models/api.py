@@ -59,6 +59,14 @@ class StorageViewLayoutResponse(BaseModel):
     storage_rules: Optional[StorageRulesResponse] = None
 
 
+class StorageProvenanceResponse(BaseModel):
+    base_slot: str
+    base_role: Literal["inline", "length", "anchor", "header"]
+    computed_role: Optional[Literal["data", "entry"]] = None
+    computed_slot: Optional[str] = None
+    computed_slot_count: Optional[str] = None
+
+
 class StorageViewValueItemResponse(BaseModel):
     declaration_id: str
     path: str
@@ -67,6 +75,7 @@ class StorageViewValueItemResponse(BaseModel):
     byte_offset: int
     value_encoded: Optional[str] = None
     value_decoded: Optional[Any] = None
+    storage: Optional[StorageProvenanceResponse] = None
 
 
 class StorageViewValuesResponse(BaseModel):
@@ -129,6 +138,7 @@ class StorageQueryResponse(BaseModel):
     value_encoded: str
     value_decoded: Optional[Any] = None
     array_length: Optional[str] = None
+    storage: Optional[StorageProvenanceResponse] = None
 
 
 class ComparisonScopeResponse(BaseModel):

@@ -47,6 +47,22 @@ def is_one_word_scalar(type_info: CompiledType | None) -> bool:
     )
 
 
+def is_solidity_dynamic_bytes(
+    layout: CompiledLayout,
+    type_info: CompiledType | None,
+) -> bool:
+    """Return whether a type uses Solidity's short/long bytes encoding."""
+    return (
+        type_info is not None
+        and layout.storage_rules.array_storage_scheme == "solidity"
+        and type_info.encoding == "bytes"
+        and type_info.kind == "value"
+        and type_info.num_bytes == 32
+        and not type_info.members
+        and type_info.label.lower() in {"bytes", "string"}
+    )
+
+
 def is_one_word_query_result(
     layout: CompiledLayout,
     type_info: CompiledType | None,
@@ -167,6 +183,20 @@ def plan_compiled_scalar_reads(
             )
             return
 
+        if is_solidity_dynamic_bytes(layout, type_info):
+            projections.append(
+                CompiledScalarProjection(
+                    declaration=declaration,
+                    path=path,
+                    slot=slot,
+                    byte_offset=byte_offset,
+                    byte_size=byte_size,
+                    type_info=type_info,
+                    status="pending_dynamic",
+                )
+            )
+            return
+
         if (
             type_info.kind == "struct"
             and type_info.encoding == "inplace"
@@ -215,7 +245,7 @@ def plan_compiled_scalar_reads(
     admitted: set[int] = set()
     bounded: list[CompiledScalarProjection] = []
     for projection in projections:
-        if projection.status != "pending":
+        if projection.status not in {"pending", "pending_dynamic"}:
             bounded.append(projection)
             continue
         if projection.slot not in admitted:

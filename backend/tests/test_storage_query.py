@@ -276,6 +276,16 @@ class StorageQueryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(validated.location.slot, hex(SOLIDITY_ADDRESS_SLOT))
         self.assertEqual(validated.location.byte_offset, 0)
         self.assertEqual(validated.location.byte_size, 32)
+        self.assertEqual(
+            validated.storage.model_dump(),
+            {
+                "base_slot": "0x7",
+                "base_role": "anchor",
+                "computed_role": "entry",
+                "computed_slot": hex(SOLIDITY_ADDRESS_SLOT),
+                "computed_slot_count": "1",
+            },
+        )
         self.assertEqual(attempt.calls, [[SOLIDITY_ADDRESS_SLOT]])
 
     async def test_mapping_to_multi_slot_struct_is_rejected_without_reading(self):
@@ -374,6 +384,16 @@ class StorageQueryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["location"]["slot"], hex(data_start))
         self.assertEqual(response["location"]["byte_offset"], 4)
         self.assertEqual(response["value_decoded"], "17")
+        self.assertEqual(
+            response["storage"],
+            {
+                "base_slot": "0x9",
+                "base_role": "length",
+                "computed_role": "entry",
+                "computed_slot": hex(data_start),
+                "computed_slot_count": "1",
+            },
+        )
         self.assertEqual(attempt.calls, [[9], [data_start]])
 
     async def test_decode_failure_keeps_the_raw_query_value(self):

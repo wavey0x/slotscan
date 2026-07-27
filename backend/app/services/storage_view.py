@@ -23,6 +23,7 @@ from app.services.storage import (
     StorageReader,
     is_one_word_query_result,
     is_one_word_scalar,
+    is_solidity_dynamic_bytes,
     plan_compiled_scalar_reads,
 )
 from app.services.storage_rules import (
@@ -96,6 +97,46 @@ def _mapping_location(
 
 def _hashed_array_root(slot: int) -> int:
     return int.from_bytes(Web3.keccak(slot.to_bytes(32, "big")), "big")
+
+
+def _base_storage_provenance(
+    layout: CompiledLayout,
+    type_info: CompiledType,
+    slot: int,
+) -> dict[str, str | None] | None:
+    base = hex(slot)
+    if type_info.encoding == "mapping":
+        return {
+            "base_slot": base,
+            "base_role": "anchor",
+            "computed_role": None,
+            "computed_slot": None,
+            "computed_slot_count": None,
+        }
+    if type_info.encoding == "dynamic_array":
+        scheme = layout.storage_rules.array_storage_scheme
+        if scheme == "solidity":
+            data_start = _hashed_array_root(slot)
+        elif scheme == "vyper_sequential":
+            data_start = (slot + 1) % (2**256)
+        else:
+            data_start = None
+        return {
+            "base_slot": base,
+            "base_role": "length",
+            "computed_role": "data" if data_start is not None else None,
+            "computed_slot": hex(data_start) if data_start is not None else None,
+            "computed_slot_count": None,
+        }
+    if is_solidity_dynamic_bytes(layout, type_info):
+        return {
+            "base_slot": base,
+            "base_role": "header",
+            "computed_role": None,
+            "computed_slot": None,
+            "computed_slot_count": None,
+        }
+    return None
 
 
 def _array_element_location(
@@ -345,11 +386,20 @@ class StorageViewService:
             }
 
         layout = context.layout
+        max_words = min(256, self.settings.max_slots_per_contract)
         plan = plan_compiled_scalar_reads(
             layout,
-            max_words=min(256, self.settings.max_slots_per_contract),
+            max_words=max_words,
         )
         reader = StorageReader(attempt)
+        storage_provenance = {
+            index: _base_storage_provenance(
+                layout,
+                projection.type_info,
+                projection.slot,
+            )
+            for index, projection in enumerate(plan.projections)
+        }
         try:
             word_values = await reader.read_slots(
                 chain_id,
@@ -357,6 +407,76 @@ class StorageViewService:
                 list(plan.words),
                 attempt.block_ref.number,
             )
+
+            dynamic_data_slots: dict[int, tuple[int, ...]] = {}
+            deferred_dynamic: set[int] = set()
+            admitted_words = set(plan.words)
+            remaining_words = max_words - len(admitted_words)
+            pending_data_words: list[int] = []
+
+            for index, projection in enumerate(plan.projections):
+                if projection.status != "pending_dynamic":
+                    continue
+
+                raw_word = bytes.fromhex(word_values[projection.slot][2:])
+                try:
+                    length, is_inline = self.decoder.inspect_dynamic_bytes_slot(
+                        raw_word
+                    )
+                except ValueError:
+                    dynamic_data_slots[index] = ()
+                    continue
+                if is_inline:
+                    storage_provenance[index] = {
+                        "base_slot": hex(projection.slot),
+                        "base_role": "inline",
+                        "computed_role": None,
+                        "computed_slot": None,
+                        "computed_slot_count": None,
+                    }
+                    dynamic_data_slots[index] = ()
+                    continue
+
+                required_words = (length + 31) // 32
+                data_start = _hashed_array_root(projection.slot)
+                storage_provenance[index] = {
+                    "base_slot": hex(projection.slot),
+                    "base_role": "length",
+                    "computed_role": "data",
+                    "computed_slot": hex(data_start),
+                    "computed_slot_count": str(required_words),
+                }
+                if required_words > max_words:
+                    deferred_dynamic.add(index)
+                    continue
+
+                slots = tuple(
+                    (data_start + offset) % (2**256)
+                    for offset in range(required_words)
+                )
+                new_slots = [
+                    slot
+                    for slot in slots
+                    if slot not in admitted_words
+                ]
+                if len(new_slots) > remaining_words:
+                    deferred_dynamic.add(index)
+                    continue
+
+                dynamic_data_slots[index] = slots
+                admitted_words.update(new_slots)
+                pending_data_words.extend(new_slots)
+                remaining_words -= len(new_slots)
+
+            if pending_data_words:
+                word_values.update(
+                    await reader.read_slots(
+                        chain_id,
+                        metadata.address,
+                        pending_data_words,
+                        attempt.block_ref.number,
+                    )
+                )
         except Exception:
             values_wire = {
                 "status": "error",
@@ -365,19 +485,27 @@ class StorageViewService:
             }
         else:
             items = []
-            for projection in plan.projections:
+            for index, projection in enumerate(plan.projections):
+                projection_status = (
+                    "deferred_budget"
+                    if index in deferred_dynamic
+                    else projection.status
+                )
                 base = {
                     "declaration_id": projection.declaration.declaration_id,
                     "path": projection.path,
                     "status": (
-                        "ok" if projection.status == "pending" else projection.status
+                        "ok"
+                        if projection_status in {"pending", "pending_dynamic"}
+                        else projection_status
                     ),
                     "slot": hex(projection.slot),
                     "byte_offset": projection.byte_offset,
                     "value_encoded": None,
                     "value_decoded": None,
+                    "storage": storage_provenance[index],
                 }
-                if projection.status == "pending":
+                if projection_status == "pending":
                     raw_word = word_values[projection.slot]
                     base["value_encoded"] = raw_word
                     try:
@@ -385,6 +513,22 @@ class StorageViewService:
                             bytes.fromhex(raw_word[2:]),
                             projection.type_info,
                             projection.byte_offset,
+                        )
+                    except Exception:
+                        pass
+                    else:
+                        base["value_decoded"] = _wire_decoded(decoded.decoded)
+                elif projection_status == "pending_dynamic":
+                    raw_word = word_values[projection.slot]
+                    base["value_encoded"] = raw_word
+                    try:
+                        decoded = self.decoder.decode_dynamic_bytes_value(
+                            bytes.fromhex(raw_word[2:]),
+                            [
+                                bytes.fromhex(word_values[slot][2:])
+                                for slot in dynamic_data_slots.get(index, ())
+                            ],
+                            projection.type_info.label,
                         )
                     except Exception:
                         pass
@@ -481,6 +625,7 @@ class StorageViewService:
             )
 
         length_word: str | None = None
+        storage_provenance: dict[str, str | None] | None = None
         if type_info.encoding == "mapping":
             slot = declaration.slot
             path = declaration.name
@@ -517,6 +662,13 @@ class StorageViewService:
                 )
             byte_offset = 0
             result_type = current_type
+            storage_provenance = {
+                "base_slot": hex(declaration.slot),
+                "base_role": "anchor",
+                "computed_role": "entry",
+                "computed_slot": hex(slot),
+                "computed_slot_count": "1",
+            }
         elif type_info.kind == "array":
             if len(steps) != 1 or steps[0].get("kind") != "array_index":
                 raise StorageQueryError(
@@ -537,6 +689,13 @@ class StorageViewService:
                 )
             path = f"{declaration.name}[{index}]"
             if type_info.encoding == "dynamic_array":
+                storage_provenance = {
+                    "base_slot": hex(declaration.slot),
+                    "base_role": "length",
+                    "computed_role": "entry",
+                    "computed_slot": hex(slot),
+                    "computed_slot_count": "1",
+                }
                 reader = StorageReader(context.attempt)
                 length_values = await reader.read_slots(
                     chain_id,
@@ -600,6 +759,7 @@ class StorageViewService:
             },
             "value_encoded": raw_word,
             "value_decoded": decoded_wire,
+            "storage": storage_provenance,
         }
         if length_word is not None:
             response["array_length"] = str(int(length_word, 16))

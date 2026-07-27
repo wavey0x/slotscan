@@ -62,7 +62,7 @@ class ScalarReadPlanningTests(unittest.TestCase):
             ["count", "enabled", "owner"],
         )
 
-    def test_aggregate_paths_are_explicit_and_not_scheduled(self):
+    def test_aggregate_paths_are_explicit_and_solidity_strings_schedule_their_base(self):
         layout = _compiled(
             [
                 StorageVariable("balances", 0, 0, 32, "mapping", "mapping"),
@@ -99,13 +99,13 @@ class ScalarReadPlanningTests(unittest.TestCase):
 
         plan = plan_compiled_scalar_reads(layout)
 
-        self.assertEqual(plan.words, ())
+        self.assertEqual(plan.words, (3,))
         self.assertEqual(
             [(projection.path, projection.status) for projection in plan.projections],
             [
                 ("balances", "on_demand"),
                 ("items", "on_demand"),
-                ("name", "unsupported"),
+                ("name", "pending_dynamic"),
             ],
         )
 
