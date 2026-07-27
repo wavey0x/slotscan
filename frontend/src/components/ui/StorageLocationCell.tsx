@@ -2,11 +2,12 @@ import {
   formatStorageLocation,
   type FormattedStorageLocation,
 } from '@/lib/storage-location';
-import type { StorageProvenance } from '@/lib/types';
+import type { StorageProvenance, StorageRegion } from '@/lib/types';
 import { CopyButton } from './CopyButton';
 import { HoverCell } from './HoverCell';
 
 const MAX_VISIBLE_SLOT_SEGMENTS = 12;
+const SLOT_MODULUS = BigInt(2) ** BigInt(256);
 
 function slotCount(location: FormattedStorageLocation): number | null {
   if (!location.fullEndSlot) return null;
@@ -20,44 +21,37 @@ function slotCount(location: FormattedStorageLocation): number | null {
   }
 }
 
-function computedLocation(provenance: StorageProvenance): {
-  display: string;
-  full: string;
+function regionLocation(region: StorageRegion): {
+  location: FormattedStorageLocation;
+  count: bigint | null;
   segments: number | null;
-} | null {
-  if (!provenance.computed_slot) return null;
-
+} {
   let count: bigint | null = null;
   let endSlot: string | null = null;
   try {
-    count = provenance.computed_slot_count
-      ? BigInt(provenance.computed_slot_count)
-      : null;
+    count = region.slot_count ? BigInt(region.slot_count) : null;
     if (count && count > BigInt(1)) {
-      const start = BigInt(provenance.computed_slot);
-      const end = start + count - BigInt(1);
-      if (end < BigInt(2) ** BigInt(256)) {
-        endSlot = provenance.computed_slot.startsWith('0x')
+      const end = BigInt(region.slot) + count - BigInt(1);
+      if (end < SLOT_MODULUS) {
+        endSlot = region.slot.startsWith('0x')
           ? `0x${end.toString(16)}`
           : end.toString();
+      } else {
+        count = null;
       }
     }
   } catch {
     count = null;
   }
-  const location = formatStorageLocation({
-    slot: provenance.computed_slot,
-    endSlot,
-  });
-  const segments = count
-    && count >= BigInt(2)
-    && count <= BigInt(MAX_VISIBLE_SLOT_SEGMENTS)
-      ? Number(count)
-      : null;
+
   return {
-    display: location.slot,
-    full: location.fullSlot,
-    segments,
+    location: formatStorageLocation({ slot: region.slot, endSlot }),
+    count,
+    segments: count
+      && count >= BigInt(2)
+      && count <= BigInt(MAX_VISIBLE_SLOT_SEGMENTS)
+        ? Number(count)
+        : null,
   };
 }
 
@@ -66,51 +60,53 @@ function StorageProvenanceDetail({
 }: {
   provenance: StorageProvenance;
 }) {
-  const base = formatStorageLocation({ slot: provenance.base_slot });
-  const computed = computedLocation(provenance);
-
   return (
     <div data-testid="storage-provenance" className="space-y-1.5 font-mono">
-      <div className="flex items-baseline gap-2 whitespace-nowrap">
-        <span className="text-[9px] font-medium uppercase tracking-wide text-gray-400">
-          {provenance.base_role}
-        </span>
-        <span className="text-[11px] tabular-nums text-gray-700">{base.startSlot}</span>
-      </div>
-      {computed && provenance.computed_role && (
-        <div className="space-y-1">
-          <div className="flex items-center gap-1 whitespace-nowrap">
-            <span className="mr-1 text-[9px] font-medium uppercase tracking-wide text-gray-400">
-              {provenance.computed_role}
-            </span>
-            <span className="text-[11px] tabular-nums text-gray-700">{computed.display}</span>
-            <CopyButton
-              value={computed.full}
-              label={`Copy ${provenance.computed_role} slot${computed.full.includes('–') ? ' range' : ''}`}
-              className="-my-1"
-            />
-          </div>
-          {provenance.computed_role === 'data' && computed.segments && (
-            <div
-              aria-hidden="true"
-              data-testid="storage-computed-occupancy"
-              className="flex gap-1"
-            >
-              {Array.from({ length: computed.segments }, (_, index) => (
-                <span
-                  key={index}
-                  className="h-2 w-3 rounded-[1px] bg-gray-700"
-                />
-              ))}
+      {provenance.regions.map((region, index) => {
+        const detail = regionLocation(region);
+        return (
+          <div key={`${region.role}:${region.slot}:${index}`} className="space-y-1">
+            <div className="flex items-center gap-1 whitespace-nowrap">
+              <span className="mr-1 text-[9px] font-medium uppercase tracking-wide text-gray-400">
+                {region.role}
+              </span>
+              <span className="text-[11px] tabular-nums text-gray-700">
+                {detail.location.slot}
+              </span>
+              <CopyButton
+                value={detail.location.fullSlot}
+                label={`Copy ${region.role} slot${detail.location.fullEndSlot ? ' range' : ''}`}
+                className="-my-1"
+              />
             </div>
-          )}
-        </div>
-      )}
+            {detail.segments && (
+              <div
+                aria-hidden="true"
+                data-testid="storage-computed-occupancy"
+                className="flex gap-1"
+              >
+                {Array.from({ length: detail.segments }, (_, segment) => (
+                  <span
+                    key={segment}
+                    className="h-2 w-3 rounded-[1px] bg-gray-700"
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-function StorageOccupancy({ location }: { location: FormattedStorageLocation }) {
+function StorageOccupancy({
+  location,
+  showSlots,
+}: {
+  location: FormattedStorageLocation;
+  showSlots: boolean;
+}) {
   if (location.byteRange) {
     const { start, end } = location.byteRange;
     const size = end - start + 1;
@@ -138,9 +134,8 @@ function StorageOccupancy({ location }: { location: FormattedStorageLocation }) 
     );
   }
 
-  if (location.endSlot && location.fullEndSlot) {
+  if (showSlots && location.endSlot && location.fullEndSlot) {
     const count = slotCount(location);
-
     return (
       <div className="space-y-1 font-mono">
         <div className="flex items-baseline gap-2 whitespace-nowrap">
@@ -170,6 +165,20 @@ function StorageOccupancy({ location }: { location: FormattedStorageLocation }) 
   return null;
 }
 
+function provenanceDuplicatesSlotRange(
+  provenance: StorageProvenance,
+  location: FormattedStorageLocation,
+): boolean {
+  if (!location.fullEndSlot || provenance.regions.length === 0) return false;
+  const last = regionLocation(provenance.regions[provenance.regions.length - 1]);
+  return Boolean(
+    last.count
+    && last.count > BigInt(1)
+    && last.location.fullStartSlot === location.fullStartSlot
+    && last.location.fullEndSlot === location.fullEndSlot,
+  );
+}
+
 export function StorageLocationCell({
   location,
   provenance,
@@ -179,24 +188,27 @@ export function StorageLocationCell({
   provenance?: StorageProvenance | null;
   colorClass?: string;
 }) {
-  const occupancy = (
-    provenance || location.byteRange || location.endSlot
-  ) ? (
+  const showSlots = !provenance
+    || !provenanceDuplicatesSlotRange(provenance, location);
+  const hasOccupancy = Boolean(
+    provenance
+    || location.byteRange
+    || (showSlots && location.endSlot),
+  );
+  const occupancy = hasOccupancy ? (
     <div className="space-y-2">
       {provenance && <StorageProvenanceDetail provenance={provenance} />}
-      {(location.byteRange || location.endSlot) && (
-        <StorageOccupancy location={location} />
+      {(location.byteRange || (showSlots && location.endSlot)) && (
+        <StorageOccupancy location={location} showSlots={showSlots} />
       )}
     </div>
   ) : undefined;
-  const computed = provenance ? computedLocation(provenance) : null;
+  const regionLabels = provenance?.regions.map((region) => {
+    const detail = regionLocation(region);
+    return `${region.role} ${detail.location.fullSlot}`;
+  }) ?? [];
   const dialogLabel = provenance
-    ? [
-        `Storage location: ${provenance.base_role} slot ${provenance.base_slot}`,
-        provenance.computed_role && computed
-          ? `${provenance.computed_role} ${computed.full}`
-          : null,
-      ].filter(Boolean).join(', ')
+    ? `Storage location: ${regionLabels.join(', ')}`
     : location.byteRange
       ? `Storage location: slot ${location.fullStartSlot}, bytes ${location.byteRange.start} through ${location.byteRange.end}`
       : location.fullEndSlot

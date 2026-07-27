@@ -59,12 +59,14 @@ class StorageViewLayoutResponse(BaseModel):
     storage_rules: Optional[StorageRulesResponse] = None
 
 
+class StorageRegionResponse(BaseModel):
+    role: Literal["anchor", "length", "header", "inline", "entry", "data"]
+    slot: str
+    slot_count: Optional[str] = None
+
+
 class StorageProvenanceResponse(BaseModel):
-    base_slot: str
-    base_role: Literal["inline", "length", "anchor", "header"]
-    computed_role: Optional[Literal["data", "entry"]] = None
-    computed_slot: Optional[str] = None
-    computed_slot_count: Optional[str] = None
+    regions: list[StorageRegionResponse] = Field(min_length=1)
 
 
 class StorageViewValueItemResponse(BaseModel):
@@ -110,7 +112,7 @@ class StorageQueryAccess(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     declaration_id: str
-    steps: list[StorageQueryStep]
+    steps: list[StorageQueryStep] = Field(min_length=1, max_length=32)
 
 
 class StorageQueryRequest(BaseModel):
@@ -129,16 +131,28 @@ class StorageQueryLocationResponse(BaseModel):
     byte_size: int
 
 
+class StorageQueryValueItemResponse(BaseModel):
+    path: str
+    relative_path: str
+    type_id: str
+    type_label: str
+    location: StorageQueryLocationResponse
+    value_encoded: str
+    value_decoded: Optional[Any] = None
+    storage: Optional[StorageProvenanceResponse] = None
+
+
 class StorageQueryResponse(BaseModel):
     block_ref: BlockRefResponse
     layout_id: str
     declaration_id: str
     path: str
+    type_id: str
+    type_label: str
     location: StorageQueryLocationResponse
-    value_encoded: str
-    value_decoded: Optional[Any] = None
     array_length: Optional[str] = None
     storage: Optional[StorageProvenanceResponse] = None
+    items: list[StorageQueryValueItemResponse] = Field(min_length=1)
 
 
 class ComparisonScopeResponse(BaseModel):

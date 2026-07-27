@@ -133,7 +133,7 @@ def _array_layout(*, dynamic=False, base_slot=9):
     )
 
 
-def _struct_mapping_layout(*, multi_slot=False):
+def _struct_mapping_layout(*, multi_slot=False, legacy_vyper=False):
     members = [
         StorageVariable("protocolId", 0, 0, 5, "t_uint40", "uint40"),
         StorageVariable(
@@ -165,6 +165,255 @@ def _struct_mapping_layout(*, multi_slot=False):
     return _layout(
         StorageVariable("deployInfo", 7, 0, 32, mapping.id, mapping.label),
         {mapping.id: mapping, struct.id: struct},
+        language="Vyper" if legacy_vyper else "Solidity",
+        compiler_version="0.2.4" if legacy_vyper else "0.8.30",
+        storage_scheme="vyper_legacy_hashed" if legacy_vyper else "solidity",
+    )
+
+
+def _dynamic_word(payload: bytes) -> int:
+    if len(payload) > 31:
+        raise ValueError("inline payload is too large")
+    return int.from_bytes(
+        payload.ljust(31, b"\x00") + bytes([len(payload) * 2]),
+        "big",
+    )
+
+
+def _data_words(payload: bytes) -> list[int]:
+    return [
+        int.from_bytes(payload[offset : offset + 32].ljust(32, b"\x00"), "big")
+        for offset in range(0, len(payload), 32)
+    ]
+
+
+def _proposal_data_layout():
+    results = StorageType(
+        "results",
+        "struct Voter.Vote",
+        "struct",
+        "inplace",
+        num_bytes=32,
+        members=[
+            StorageVariable("weightYes", 0, 0, 5, "t_uint40", "uint40"),
+            StorageVariable("weightNo", 0, 5, 5, "t_uint40", "uint40"),
+        ],
+    )
+    proposal = StorageType(
+        "proposal",
+        "struct Voter.Proposal",
+        "struct",
+        "inplace",
+        num_bytes=64,
+        members=[
+            StorageVariable("epoch", 0, 0, 2, "t_uint16", "uint16"),
+            StorageVariable("createdAt", 0, 2, 4, "t_uint32", "uint32"),
+            StorageVariable(
+                "quorumWeight",
+                0,
+                6,
+                5,
+                "t_uint40",
+                "uint40",
+            ),
+            StorageVariable("processed", 0, 11, 1, "t_bool", "bool"),
+            StorageVariable("results", 1, 0, 32, results.id, results.label),
+        ],
+    )
+    array = StorageType(
+        "proposal_array",
+        "struct Voter.Proposal[]",
+        "array",
+        "dynamic_array",
+        num_bytes=32,
+        element_type=proposal.id,
+    )
+    return _layout(
+        StorageVariable("proposalData", 1, 0, 32, array.id, array.label),
+        {array.id: array, proposal.id: proposal, results.id: results},
+    )
+
+
+def _description_layout():
+    string = StorageType(
+        "string",
+        "string",
+        "value",
+        "bytes",
+        num_bytes=32,
+    )
+    mapping = StorageType(
+        "description_mapping",
+        "mapping(uint256 => string)",
+        "mapping",
+        "mapping",
+        num_bytes=32,
+        key_type="t_uint256",
+        value_type=string.id,
+    )
+    return _layout(
+        StorageVariable(
+            "proposalDescription",
+            3,
+            0,
+            32,
+            mapping.id,
+            mapping.label,
+        ),
+        {mapping.id: mapping, string.id: string},
+    )
+
+
+def _payload_layout():
+    dynamic_bytes = StorageType(
+        "bytes",
+        "bytes",
+        "value",
+        "bytes",
+        num_bytes=32,
+    )
+    action = StorageType(
+        "action",
+        "struct Voter.Action",
+        "struct",
+        "inplace",
+        num_bytes=64,
+        members=[
+            StorageVariable("target", 0, 0, 20, "t_address", "address"),
+            StorageVariable("data", 1, 0, 32, dynamic_bytes.id, "bytes"),
+        ],
+    )
+    actions = StorageType(
+        "actions",
+        "struct Voter.Action[]",
+        "array",
+        "dynamic_array",
+        num_bytes=32,
+        element_type=action.id,
+    )
+    mapping = StorageType(
+        "payload_mapping",
+        "mapping(uint256 => struct Voter.Action[])",
+        "mapping",
+        "mapping",
+        num_bytes=32,
+        key_type="t_uint256",
+        value_type=actions.id,
+    )
+    return _layout(
+        StorageVariable(
+            "proposalPayload",
+            2,
+            0,
+            32,
+            mapping.id,
+            mapping.label,
+        ),
+        {
+            mapping.id: mapping,
+            actions.id: actions,
+            action.id: action,
+            dynamic_bytes.id: dynamic_bytes,
+        },
+    )
+
+
+def _two_strings_layout():
+    string = StorageType(
+        "string",
+        "string",
+        "value",
+        "bytes",
+        num_bytes=32,
+    )
+    pair = StorageType(
+        "pair",
+        "struct Pair",
+        "struct",
+        "inplace",
+        num_bytes=64,
+        members=[
+            StorageVariable("first", 0, 0, 32, string.id, "string"),
+            StorageVariable("second", 1, 0, 32, string.id, "string"),
+        ],
+    )
+    mapping = StorageType(
+        "pair_mapping",
+        "mapping(uint256 => struct Pair)",
+        "mapping",
+        "mapping",
+        num_bytes=32,
+        key_type="t_uint256",
+        value_type=pair.id,
+    )
+    return _layout(
+        StorageVariable("pairs", 5, 0, 32, mapping.id, mapping.label),
+        {mapping.id: mapping, pair.id: pair, string.id: string},
+    )
+
+
+def _nested_struct_layout(*, unsupported_member=False):
+    if unsupported_member:
+        child = StorageType(
+            "child_mapping",
+            "mapping(uint256 => uint256)",
+            "mapping",
+            "mapping",
+            num_bytes=32,
+            key_type="t_uint256",
+            value_type="t_uint256",
+        )
+        child_member = StorageVariable(
+            "values",
+            1,
+            0,
+            32,
+            child.id,
+            child.label,
+        )
+    else:
+        child = StorageType(
+            "inner",
+            "struct Inner",
+            "struct",
+            "inplace",
+            num_bytes=32,
+            members=[
+                StorageVariable("flag", 0, 0, 1, "t_bool", "bool"),
+                StorageVariable("owner", 0, 1, 20, "t_address", "address"),
+            ],
+        )
+        child_member = StorageVariable(
+            "inner",
+            1,
+            0,
+            32,
+            child.id,
+            child.label,
+        )
+    outer = StorageType(
+        "outer_struct",
+        "struct Outer",
+        "struct",
+        "inplace",
+        num_bytes=64,
+        members=[
+            StorageVariable("count", 0, 0, 32, "t_uint256", "uint256"),
+            child_member,
+        ],
+    )
+    mapping = StorageType(
+        "outer_mapping",
+        "mapping(uint256 => struct Outer)",
+        "mapping",
+        "mapping",
+        num_bytes=32,
+        key_type="t_uint256",
+        value_type=outer.id,
+    )
+    return _layout(
+        StorageVariable("records", 8, 0, 32, mapping.id, mapping.label),
+        {mapping.id: mapping, outer.id: outer, child.id: child},
     )
 
 
@@ -204,6 +453,337 @@ async def _query(service, layout, steps):
 
 
 class StorageQueryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_proposal_data_index_materializes_a_multi_slot_struct(self):
+        layout = _proposal_data_layout()
+        data_start = _hashed_slot = int.from_bytes(
+            Web3.keccak((1).to_bytes(32, "big")),
+            "big",
+        )
+        first_word = (
+            15
+            | (1_751_169_587 << 16)
+            | (1_486_201 << 48)
+            | (1 << 88)
+        )
+        second_word = 3_555_667
+        service, attempt = _service(
+            layout,
+            {
+                1: 26,
+                data_start: first_word,
+                data_start + 1: second_word,
+            },
+        )
+
+        response = await _query(
+            service,
+            layout,
+            [{"kind": "array_index", "value": "0"}],
+        )
+
+        self.assertEqual(response["array_length"], "26")
+        self.assertEqual(response["location"]["slot"], hex(_hashed_slot))
+        self.assertEqual(
+            [
+                (item["relative_path"], item["value_decoded"])
+                for item in response["items"]
+            ],
+            [
+                ("epoch", "15"),
+                ("createdAt", "1751169587"),
+                ("quorumWeight", "1486201"),
+                ("processed", True),
+                ("results.weightYes", "3555667"),
+                ("results.weightNo", "0"),
+            ],
+        )
+        self.assertEqual(
+            response["storage"]["regions"],
+            [
+                {"role": "length", "slot": "0x1", "slot_count": "1"},
+                {
+                    "role": "entry",
+                    "slot": hex(data_start),
+                    "slot_count": "2",
+                },
+            ],
+        )
+        self.assertEqual(
+            attempt.calls,
+            [[1], [data_start, data_start + 1]],
+        )
+
+    async def test_mapping_string_materializes_short_long_and_malformed_values(self):
+        layout = _description_layout()
+        entry = int.from_bytes(
+            Web3.keccak(
+                abi_encode(["uint256"], [0])
+                + abi_encode(["uint256"], [3])
+            ),
+            "big",
+        )
+        short = b"Pay bad debt through governance"
+        service, attempt = _service(layout, {entry: _dynamic_word(short)})
+        response = await _query(
+            service,
+            layout,
+            [{"kind": "mapping_key", "value": "0"}],
+        )
+        self.assertEqual(response["items"][0]["value_decoded"], short.decode())
+        self.assertEqual(
+            [region["role"] for region in response["storage"]["regions"]],
+            ["anchor", "inline"],
+        )
+        self.assertEqual(attempt.calls, [[entry]])
+
+        long = b"Governance proposal description that exceeds one word."
+        data_start = int.from_bytes(
+            Web3.keccak(entry.to_bytes(32, "big")),
+            "big",
+        )
+        service, attempt = _service(
+            layout,
+            {
+                entry: len(long) * 2 + 1,
+                **{
+                    data_start + offset: value
+                    for offset, value in enumerate(_data_words(long))
+                },
+            },
+        )
+        response = await _query(
+            service,
+            layout,
+            [{"kind": "mapping_key", "value": "0"}],
+        )
+        self.assertEqual(response["items"][0]["value_decoded"], long.decode())
+        self.assertEqual(
+            response["storage"]["regions"],
+            [
+                {"role": "anchor", "slot": "0x3", "slot_count": "1"},
+                {"role": "length", "slot": hex(entry), "slot_count": "1"},
+                {
+                    "role": "data",
+                    "slot": hex(data_start),
+                    "slot_count": "2",
+                },
+            ],
+        )
+        self.assertEqual(
+            attempt.calls,
+            [[entry], [data_start, data_start + 1]],
+        )
+
+        service, attempt = _service(layout, {entry: 3})
+        with self.assertRaises(StorageQueryError) as raised:
+            await _query(
+                service,
+                layout,
+                [{"kind": "mapping_key", "value": "0"}],
+            )
+        self.assertEqual(raised.exception.code, "MALFORMED_STORAGE")
+        self.assertEqual(attempt.calls, [[entry]])
+
+    async def test_mapping_then_array_materializes_action_and_long_bytes(self):
+        layout = _payload_layout()
+        mapping_entry = int.from_bytes(
+            Web3.keccak(
+                abi_encode(["uint256"], [0])
+                + abi_encode(["uint256"], [2])
+            ),
+            "big",
+        )
+        action_slot = int.from_bytes(
+            Web3.keccak(mapping_entry.to_bytes(32, "big")),
+            "big",
+        )
+        data_header = action_slot + 1
+        payload = bytes.fromhex(
+            "12345678"
+            + "00" * 32
+        )
+        payload_root = int.from_bytes(
+            Web3.keccak(data_header.to_bytes(32, "big")),
+            "big",
+        )
+        target = "0x10101010E0C3171D894B71B3400668aF311e7D94"
+        service, attempt = _service(
+            layout,
+            {
+                mapping_entry: 9,
+                action_slot: int(target, 16),
+                data_header: len(payload) * 2 + 1,
+                **{
+                    payload_root + offset: value
+                    for offset, value in enumerate(_data_words(payload))
+                },
+            },
+        )
+
+        response = await _query(
+            service,
+            layout,
+            [
+                {"kind": "mapping_key", "value": "0"},
+                {"kind": "array_index", "value": "0"},
+            ],
+        )
+
+        self.assertEqual(response["array_length"], "9")
+        self.assertEqual(
+            [
+                (item["relative_path"], item["value_decoded"])
+                for item in response["items"]
+            ],
+            [
+                ("target", target),
+                ("data", "0x" + payload.hex()),
+            ],
+        )
+        self.assertEqual(
+            [region["role"] for region in response["storage"]["regions"]],
+            ["anchor", "length", "entry"],
+        )
+        self.assertEqual(
+            response["items"][1]["storage"]["regions"],
+            [
+                {
+                    "role": "length",
+                    "slot": hex(data_header),
+                    "slot_count": "1",
+                },
+                {
+                    "role": "data",
+                    "slot": hex(payload_root),
+                    "slot_count": "2",
+                },
+            ],
+        )
+        self.assertEqual(
+            attempt.calls,
+            [
+                [mapping_entry],
+                [action_slot, data_header],
+                [payload_root, payload_root + 1],
+            ],
+        )
+
+    async def test_access_shape_errors_are_rejected_before_storage_reads(self):
+        layout = _payload_layout()
+        for steps in (
+            [{"kind": "array_index", "value": "0"}],
+            [{"kind": "mapping_key", "value": "0"}],
+            [
+                {"kind": "mapping_key", "value": "0"},
+                {"kind": "array_index", "value": "0"},
+                {"kind": "array_index", "value": "0"},
+            ],
+        ):
+            with self.subTest(steps=steps):
+                service, attempt = _service(layout, {})
+                with self.assertRaises(StorageQueryError) as raised:
+                    await _query(service, layout, steps)
+                self.assertEqual(raised.exception.code, "UNSUPPORTED_ACCESS")
+                self.assertEqual(attempt.calls, [])
+
+    async def test_dynamic_materialization_budget_is_atomic_across_all_leaves(self):
+        layout = _two_strings_layout()
+        entry = int.from_bytes(
+            Web3.keccak(
+                abi_encode(["uint256"], [0])
+                + abi_encode(["uint256"], [5])
+            ),
+            "big",
+        )
+        service, attempt = _service(
+            layout,
+            {
+                entry: 4064 * 2 + 1,
+                entry + 1: 4096 * 2 + 1,
+            },
+        )
+
+        with self.assertRaises(StorageQueryError) as raised:
+            await _query(
+                service,
+                layout,
+                [{"kind": "mapping_key", "value": "0"}],
+            )
+
+        self.assertEqual(raised.exception.code, "QUERY_TOO_LARGE")
+        self.assertEqual(attempt.calls, [[entry, entry + 1]])
+
+    async def test_nested_finite_structs_are_flattened_recursively(self):
+        layout = _nested_struct_layout()
+        entry = int.from_bytes(
+            Web3.keccak(
+                abi_encode(["uint256"], [4])
+                + abi_encode(["uint256"], [8])
+            ),
+            "big",
+        )
+        owner = "0x2222222222222222222222222222222222222222"
+        packed_inner = 1 | (int(owner, 16) << 8)
+        service, attempt = _service(
+            layout,
+            {entry: 17, entry + 1: packed_inner},
+        )
+
+        response = await _query(
+            service,
+            layout,
+            [{"kind": "mapping_key", "value": "4"}],
+        )
+
+        self.assertEqual(
+            [
+                (
+                    item["relative_path"],
+                    item["location"]["slot"],
+                    item["location"]["byte_offset"],
+                    item["value_decoded"],
+                )
+                for item in response["items"]
+            ],
+            [
+                ("count", hex(entry), 0, "17"),
+                ("inner.flag", hex(entry + 1), 0, True),
+                ("inner.owner", hex(entry + 1), 1, owner),
+            ],
+        )
+        self.assertEqual(attempt.calls, [[entry, entry + 1]])
+
+    async def test_structs_with_mapping_members_are_unsupported_without_reads(self):
+        layout = _nested_struct_layout(unsupported_member=True)
+        service, attempt = _service(layout, {})
+
+        with self.assertRaises(StorageQueryError) as raised:
+            await _query(
+                service,
+                layout,
+                [{"kind": "mapping_key", "value": "4"}],
+            )
+
+        self.assertEqual(raised.exception.code, "UNSUPPORTED_ACCESS")
+        self.assertEqual(attempt.calls, [])
+
+    async def test_legacy_vyper_does_not_gain_multi_word_materialization(self):
+        layout = _struct_mapping_layout(
+            multi_slot=True,
+            legacy_vyper=True,
+        )
+        service, attempt = _service(layout, {})
+
+        with self.assertRaises(StorageQueryError) as raised:
+            await _query(
+                service,
+                layout,
+                [{"kind": "mapping_key", "value": ADDRESS}],
+            )
+
+        self.assertEqual(raised.exception.code, "UNSUPPORTED_ACCESS")
+        self.assertEqual(attempt.calls, [])
+
     async def test_solidity_and_vyper_mapping_locations_use_literal_vectors(self):
         for layout, expected in (
             (_mapping_layout(), SOLIDITY_ADDRESS_SLOT),
@@ -218,7 +798,7 @@ class StorageQueryTests(unittest.IsolatedAsyncioTestCase):
                 )
 
                 self.assertEqual(response["location"]["slot"], hex(expected))
-                self.assertEqual(response["value_decoded"], "42")
+                self.assertEqual(response["items"][0]["value_decoded"], "42")
                 self.assertEqual(attempt.calls, [[expected]])
 
     async def test_nested_mapping_ends_in_one_scalar_read(self):
@@ -249,7 +829,15 @@ class StorageQueryTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(response["location"]["slot"], hex(expected))
-        self.assertEqual(response["value_decoded"], "99")
+        self.assertEqual(response["items"][0]["value_decoded"], "99")
+        self.assertEqual(
+            response["storage"]["regions"],
+            [
+                {"role": "anchor", "slot": "0x7", "slot_count": "1"},
+                {"role": "anchor", "slot": hex(outer), "slot_count": "1"},
+                {"role": "entry", "slot": hex(expected), "slot_count": "1"},
+            ],
+        )
         self.assertEqual(attempt.calls, [[expected]])
 
     async def test_mapping_to_packed_struct_reads_and_decodes_one_word(self):
@@ -267,11 +855,14 @@ class StorageQueryTests(unittest.IsolatedAsyncioTestCase):
         validated = StorageQueryResponse.model_validate(response)
 
         self.assertEqual(
-            validated.value_decoded,
-            {
-                "protocolId": str(protocol_id),
-                "deployTime": str(deploy_time),
-            },
+            [
+                (item.relative_path, item.value_decoded)
+                for item in validated.items
+            ],
+            [
+                ("protocolId", str(protocol_id)),
+                ("deployTime", str(deploy_time)),
+            ],
         )
         self.assertEqual(validated.location.slot, hex(SOLIDITY_ADDRESS_SLOT))
         self.assertEqual(validated.location.byte_offset, 0)
@@ -279,28 +870,68 @@ class StorageQueryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             validated.storage.model_dump(),
             {
-                "base_slot": "0x7",
-                "base_role": "anchor",
-                "computed_role": "entry",
-                "computed_slot": hex(SOLIDITY_ADDRESS_SLOT),
-                "computed_slot_count": "1",
+                "regions": [
+                    {
+                        "role": "anchor",
+                        "slot": "0x7",
+                        "slot_count": "1",
+                    },
+                    {
+                        "role": "entry",
+                        "slot": hex(SOLIDITY_ADDRESS_SLOT),
+                        "slot_count": "1",
+                    },
+                ]
             },
         )
         self.assertEqual(attempt.calls, [[SOLIDITY_ADDRESS_SLOT]])
 
-    async def test_mapping_to_multi_slot_struct_is_rejected_without_reading(self):
+    async def test_mapping_to_multi_slot_struct_returns_backend_authored_leaves(self):
         layout = _struct_mapping_layout(multi_slot=True)
-        service, attempt = _service(layout, {})
+        service, attempt = _service(
+            layout,
+            {
+                SOLIDITY_ADDRESS_SLOT: 7,
+                SOLIDITY_ADDRESS_SLOT + 1: 1_725_000_000,
+            },
+        )
 
-        with self.assertRaises(StorageQueryError) as raised:
-            await _query(
-                service,
-                layout,
-                [{"kind": "mapping_key", "value": ADDRESS}],
-            )
+        response = await _query(
+            service,
+            layout,
+            [{"kind": "mapping_key", "value": ADDRESS}],
+        )
 
-        self.assertEqual(raised.exception.code, "UNSUPPORTED_ACCESS")
-        self.assertEqual(attempt.calls, [])
+        self.assertEqual(
+            [
+                (
+                    item["relative_path"],
+                    item["location"]["slot"],
+                    item["value_decoded"],
+                )
+                for item in response["items"]
+            ],
+            [
+                ("protocolId", hex(SOLIDITY_ADDRESS_SLOT), "7"),
+                (
+                    "deployTime",
+                    hex(SOLIDITY_ADDRESS_SLOT + 1),
+                    "1725000000",
+                ),
+            ],
+        )
+        self.assertEqual(
+            response["storage"]["regions"][-1],
+            {
+                "role": "entry",
+                "slot": hex(SOLIDITY_ADDRESS_SLOT),
+                "slot_count": "2",
+            },
+        )
+        self.assertEqual(
+            attempt.calls,
+            [[SOLIDITY_ADDRESS_SLOT, SOLIDITY_ADDRESS_SLOT + 1]],
+        )
 
     async def test_invalid_mapping_key_and_layout_mismatch_read_no_value_words(self):
         layout = _mapping_layout()
@@ -336,7 +967,7 @@ class StorageQueryTests(unittest.IsolatedAsyncioTestCase):
         validated = StorageQueryResponse.model_validate(response)
         self.assertEqual(validated.location.slot, "0xa")
         self.assertEqual(validated.location.byte_offset, 1)
-        self.assertEqual(validated.value_decoded, "42")
+        self.assertEqual(validated.items[0].value_decoded, "42")
         self.assertEqual(attempt.calls, [[10]])
 
     async def test_static_bounds_failure_reads_no_words_and_high_slots_stay_strings(self):
@@ -383,15 +1014,22 @@ class StorageQueryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["array_length"], "2")
         self.assertEqual(response["location"]["slot"], hex(data_start))
         self.assertEqual(response["location"]["byte_offset"], 4)
-        self.assertEqual(response["value_decoded"], "17")
+        self.assertEqual(response["items"][0]["value_decoded"], "17")
         self.assertEqual(
             response["storage"],
             {
-                "base_slot": "0x9",
-                "base_role": "length",
-                "computed_role": "entry",
-                "computed_slot": hex(data_start),
-                "computed_slot_count": "1",
+                "regions": [
+                    {
+                        "role": "length",
+                        "slot": "0x9",
+                        "slot_count": "1",
+                    },
+                    {
+                        "role": "entry",
+                        "slot": hex(data_start),
+                        "slot_count": "1",
+                    },
+                ]
             },
         )
         self.assertEqual(attempt.calls, [[9], [data_start]])
@@ -408,8 +1046,11 @@ class StorageQueryTests(unittest.IsolatedAsyncioTestCase):
         )
         validated = StorageQueryResponse.model_validate(response)
 
-        self.assertEqual(validated.value_encoded, "0x" + f"{42:064x}")
-        self.assertIsNone(validated.value_decoded)
+        self.assertEqual(
+            validated.items[0].value_encoded,
+            "0x" + f"{42:064x}",
+        )
+        self.assertIsNone(validated.items[0].value_decoded)
 
     async def test_mismatched_exact_block_is_a_client_error(self):
         provider = type("Provider", (), {})()

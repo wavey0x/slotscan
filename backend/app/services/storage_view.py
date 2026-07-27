@@ -21,17 +21,14 @@ from app.services.layout import LayoutParser
 from app.services.resolver import ContractResolver
 from app.services.storage import (
     StorageReader,
-    is_one_word_query_result,
-    is_one_word_scalar,
     is_solidity_dynamic_bytes,
     plan_compiled_scalar_reads,
 )
-from app.services.storage_rules import (
-    compute_solidity_mapping_slot,
-    compute_vyper_mapping_slot,
-    encode_mapping_key,
+from app.services.storage_query import (
+    StorageQueryEngine,
+    StorageQueryError,
 )
-from app.services.web3_provider import BlockRef, StorageAttempt, Web3Provider
+from app.services.web3_provider import StorageAttempt, Web3Provider
 
 
 @dataclass(frozen=True)
@@ -40,14 +37,6 @@ class StorageContext:
     metadata: ContractMetadata
     layout: CompiledLayout | None
     layout_status: str
-
-
-class StorageQueryError(ValueError):
-    """A stable client error for an invalid or unsupported typed access."""
-
-    def __init__(self, code: str, message: str):
-        super().__init__(message)
-        self.code = code
 
 
 def _wire_decoded(value: Any) -> Any:
@@ -62,39 +51,6 @@ def _wire_decoded(value: Any) -> Any:
     return value
 
 
-def _parse_uint(value: str, label: str) -> int:
-    if not isinstance(value, str) or not value.strip():
-        raise StorageQueryError("INVALID_INPUT", f"{label} must be a string")
-    try:
-        parsed = int(value, 0)
-    except ValueError as exc:
-        raise StorageQueryError(
-            "INVALID_INPUT",
-            f"{label} must be a decimal or hexadecimal integer",
-        ) from exc
-    if parsed < 0 or parsed >= 2**256:
-        raise StorageQueryError(
-            "INVALID_INPUT",
-            f"{label} is outside the uint256 range",
-        )
-    return parsed
-
-
-def _mapping_location(
-    layout: CompiledLayout,
-    base_slot: int,
-    declared_key_type: str,
-    value: str,
-) -> int:
-    try:
-        encoded_key = encode_mapping_key(declared_key_type, value)
-    except (TypeError, ValueError) as exc:
-        raise StorageQueryError("INVALID_MAPPING_KEY", str(exc)) from exc
-    if layout.storage_rules.mapping_preimage_order == "key_then_slot":
-        return compute_solidity_mapping_slot(base_slot, encoded_key)
-    return compute_vyper_mapping_slot(base_slot, encoded_key)
-
-
 def _hashed_array_root(slot: int) -> int:
     return int.from_bytes(Web3.keccak(slot.to_bytes(32, "big")), "big")
 
@@ -103,15 +59,16 @@ def _base_storage_provenance(
     layout: CompiledLayout,
     type_info: CompiledType,
     slot: int,
-) -> dict[str, str | None] | None:
-    base = hex(slot)
+) -> dict[str, list[dict[str, str | None]]] | None:
     if type_info.encoding == "mapping":
         return {
-            "base_slot": base,
-            "base_role": "anchor",
-            "computed_role": None,
-            "computed_slot": None,
-            "computed_slot_count": None,
+            "regions": [
+                {
+                    "role": "anchor",
+                    "slot": hex(slot),
+                    "slot_count": "1",
+                }
+            ]
         }
     if type_info.encoding == "dynamic_array":
         scheme = layout.storage_rules.array_storage_scheme
@@ -122,73 +79,36 @@ def _base_storage_provenance(
         else:
             data_start = None
         return {
-            "base_slot": base,
-            "base_role": "length",
-            "computed_role": "data" if data_start is not None else None,
-            "computed_slot": hex(data_start) if data_start is not None else None,
-            "computed_slot_count": None,
+            "regions": [
+                {
+                    "role": "length",
+                    "slot": hex(slot),
+                    "slot_count": "1",
+                },
+                *(
+                    [
+                        {
+                            "role": "data",
+                            "slot": hex(data_start),
+                            "slot_count": None,
+                        }
+                    ]
+                    if data_start is not None
+                    else []
+                ),
+            ]
         }
     if is_solidity_dynamic_bytes(layout, type_info):
         return {
-            "base_slot": base,
-            "base_role": "header",
-            "computed_role": None,
-            "computed_slot": None,
-            "computed_slot_count": None,
+            "regions": [
+                {
+                    "role": "header",
+                    "slot": hex(slot),
+                    "slot_count": "1",
+                }
+            ]
         }
     return None
-
-
-def _array_element_location(
-    layout: CompiledLayout,
-    type_info: CompiledType,
-    declaration_slot: int,
-    index: int,
-) -> tuple[int, int, CompiledType, int | None]:
-    element_type = (
-        layout.get_type(type_info.element_type) if type_info.element_type else None
-    )
-    if not is_one_word_scalar(element_type):
-        raise StorageQueryError(
-            "UNSUPPORTED_ACCESS",
-            "Only arrays ending in one-word scalar elements are supported",
-        )
-
-    scheme = layout.storage_rules.array_storage_scheme
-    is_dynamic = type_info.encoding == "dynamic_array"
-    if is_dynamic:
-        if scheme == "solidity":
-            data_start = _hashed_array_root(declaration_slot)
-        elif scheme == "vyper_sequential":
-            data_start = declaration_slot + 1
-        else:
-            raise StorageQueryError(
-                "UNSUPPORTED_ACCESS",
-                "Dynamic arrays using legacy Vyper hashed storage are unsupported",
-            )
-        static_bound = type_info.array_length if scheme != "solidity" else None
-    else:
-        if type_info.encoding != "inplace" or type_info.array_length is None:
-            raise StorageQueryError(
-                "UNSUPPORTED_ACCESS",
-                "The declaration is not a supported fixed array",
-            )
-        data_start = (
-            _hashed_array_root(declaration_slot)
-            if scheme == "vyper_legacy_hashed"
-            else declaration_slot
-        )
-        static_bound = type_info.array_length
-
-    element_size = element_type.num_bytes or 32
-    if scheme == "solidity" and element_size < 32:
-        elements_per_word = 32 // element_size
-        slot = data_start + index // elements_per_word
-        byte_offset = (index % elements_per_word) * element_size
-    else:
-        slot = data_start + index
-        byte_offset = 0
-    return slot % (2**256), byte_offset, element_type, static_bound
 
 
 class StorageViewService:
@@ -428,11 +348,13 @@ class StorageViewService:
                     continue
                 if is_inline:
                     storage_provenance[index] = {
-                        "base_slot": hex(projection.slot),
-                        "base_role": "inline",
-                        "computed_role": None,
-                        "computed_slot": None,
-                        "computed_slot_count": None,
+                        "regions": [
+                            {
+                                "role": "inline",
+                                "slot": hex(projection.slot),
+                                "slot_count": "1",
+                            }
+                        ]
                     }
                     dynamic_data_slots[index] = ()
                     continue
@@ -440,11 +362,18 @@ class StorageViewService:
                 required_words = (length + 31) // 32
                 data_start = _hashed_array_root(projection.slot)
                 storage_provenance[index] = {
-                    "base_slot": hex(projection.slot),
-                    "base_role": "length",
-                    "computed_role": "data",
-                    "computed_slot": hex(data_start),
-                    "computed_slot_count": str(required_words),
+                    "regions": [
+                        {
+                            "role": "length",
+                            "slot": hex(projection.slot),
+                            "slot_count": "1",
+                        },
+                        {
+                            "role": "data",
+                            "slot": hex(data_start),
+                            "slot_count": str(required_words),
+                        },
+                    ]
                 }
                 if required_words > max_words:
                     deferred_dynamic.add(index)
@@ -564,7 +493,7 @@ class StorageViewService:
         declaration_id: str,
         steps: list[dict[str, str]],
     ) -> dict[str, Any]:
-        """Resolve one backend-authoritative mapping or array access."""
+        """Resolve one backend-authoritative typed storage access."""
         if chain_id <= 0:
             raise StorageQueryError("INVALID_CHAIN", "chain_id must be positive")
         try:
@@ -617,158 +546,13 @@ class StorageViewService:
                 "INVALID_DECLARATION",
                 "declaration_id is not part of this layout",
             )
-        type_info = layout.get_type(declaration.type_id)
-        if type_info is None:
-            raise StorageQueryError(
-                "UNSUPPORTED_ACCESS",
-                "The declaration type is unavailable",
-            )
-
-        length_word: str | None = None
-        storage_provenance: dict[str, str | None] | None = None
-        if type_info.encoding == "mapping":
-            slot = declaration.slot
-            path = declaration.name
-            current_type = type_info
-            for step in steps:
-                if (
-                    step.get("kind") != "mapping_key"
-                    or current_type.encoding != "mapping"
-                    or not current_type.key_type
-                    or not current_type.value_type
-                ):
-                    raise StorageQueryError(
-                        "UNSUPPORTED_ACCESS",
-                        "The step sequence is not a scalar mapping path",
-                    )
-                slot = _mapping_location(
-                    layout,
-                    slot,
-                    current_type.key_type,
-                    step.get("value", ""),
-                )
-                path = f"{path}[{step.get('value', '')}]"
-                next_type = layout.get_type(current_type.value_type)
-                if next_type is None:
-                    raise StorageQueryError(
-                        "UNSUPPORTED_ACCESS",
-                        "The mapping value type is unavailable",
-                    )
-                current_type = next_type
-            if not is_one_word_query_result(layout, current_type):
-                raise StorageQueryError(
-                    "UNSUPPORTED_ACCESS",
-                    "Mappings must end in a one-word scalar or packed struct value",
-                )
-            byte_offset = 0
-            result_type = current_type
-            storage_provenance = {
-                "base_slot": hex(declaration.slot),
-                "base_role": "anchor",
-                "computed_role": "entry",
-                "computed_slot": hex(slot),
-                "computed_slot_count": "1",
-            }
-        elif type_info.kind == "array":
-            if len(steps) != 1 or steps[0].get("kind") != "array_index":
-                raise StorageQueryError(
-                    "UNSUPPORTED_ACCESS",
-                    "Top-level arrays require exactly one array_index step",
-                )
-            index = _parse_uint(steps[0].get("value", ""), "array index")
-            slot, byte_offset, result_type, static_bound = _array_element_location(
-                layout,
-                type_info,
-                declaration.slot,
-                index,
-            )
-            if static_bound is not None and index >= static_bound:
-                raise StorageQueryError(
-                    "ARRAY_BOUNDS",
-                    "Array index is outside the declared bound",
-                )
-            path = f"{declaration.name}[{index}]"
-            if type_info.encoding == "dynamic_array":
-                storage_provenance = {
-                    "base_slot": hex(declaration.slot),
-                    "base_role": "length",
-                    "computed_role": "entry",
-                    "computed_slot": hex(slot),
-                    "computed_slot_count": "1",
-                }
-                reader = StorageReader(context.attempt)
-                length_values = await reader.read_slots(
-                    chain_id,
-                    checksum_address,
-                    [declaration.slot],
-                    context.attempt.block_ref.number,
-                )
-                length_word = length_values[declaration.slot]
-                length = int(length_word, 16)
-                if index >= length:
-                    raise StorageQueryError(
-                        "ARRAY_BOUNDS",
-                        "Array index is outside the current dynamic length",
-                    )
-        else:
-            raise StorageQueryError(
-                "UNSUPPORTED_ACCESS",
-                "Only mappings and top-level arrays are queryable",
-            )
-
-        reader = StorageReader(context.attempt)
-        word_values = await reader.read_slots(
-            chain_id,
-            checksum_address,
-            [slot],
-            context.attempt.block_ref.number,
+        engine = StorageQueryEngine(
+            layout=layout,
+            reader=StorageReader(context.attempt),
+            decoder=self.decoder,
+            max_words=min(256, self.settings.max_slots_per_contract),
+            chain_id=chain_id,
+            address=checksum_address,
+            block_ref=context.attempt.block_ref,
         )
-        raw_word = word_values[slot]
-        try:
-            raw_bytes = bytes.fromhex(raw_word[2:])
-            if result_type.kind == "struct":
-                decoded_wire = {
-                    member.name: _wire_decoded(
-                        self.decoder.decode(
-                            raw_bytes,
-                            layout.types[member.type_id],
-                            member.byte_offset,
-                        ).decoded
-                    )
-                    for member in result_type.members
-                }
-            else:
-                decoded = self.decoder.decode(
-                    raw_bytes,
-                    result_type,
-                    byte_offset,
-                )
-                decoded_wire = _wire_decoded(decoded.decoded)
-        except Exception:
-            decoded_wire = None
-
-        response = {
-            "block_ref": block_ref_wire(context.attempt.block_ref),
-            "layout_id": layout.layout_id,
-            "declaration_id": declaration.declaration_id,
-            "path": path,
-            "location": {
-                "slot": hex(slot),
-                "byte_offset": byte_offset,
-                "byte_size": result_type.num_bytes,
-            },
-            "value_encoded": raw_word,
-            "value_decoded": decoded_wire,
-            "storage": storage_provenance,
-        }
-        if length_word is not None:
-            response["array_length"] = str(int(length_word, 16))
-        return response
-
-
-def block_ref_wire(block_ref: BlockRef) -> dict[str, str]:
-    """Return the public exact-block representation."""
-    return {
-        "number": hex(block_ref.number),
-        "hash": block_ref.hash,
-    }
+        return await engine.query(declaration, steps)

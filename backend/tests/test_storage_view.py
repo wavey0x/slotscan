@@ -334,11 +334,13 @@ class StorageViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             by_path["name"].storage.model_dump(),
             {
-                "base_slot": "0x3",
-                "base_role": "inline",
-                "computed_role": None,
-                "computed_slot": None,
-                "computed_slot_count": None,
+                "regions": [
+                    {
+                        "role": "inline",
+                        "slot": "0x3",
+                        "slot_count": "1",
+                    }
+                ]
             },
         )
         self.assertEqual(
@@ -348,15 +350,22 @@ class StorageViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             by_path["description"].storage.model_dump(),
             {
-                "base_slot": "0x4",
-                "base_role": "length",
-                "computed_role": "data",
-                "computed_slot": hex(description_root),
-                "computed_slot_count": "3",
+                "regions": [
+                    {
+                        "role": "length",
+                        "slot": "0x4",
+                        "slot_count": "1",
+                    },
+                    {
+                        "role": "data",
+                        "slot": hex(description_root),
+                        "slot_count": "3",
+                    },
+                ]
             },
         )
         self.assertEqual(by_path["payload"].value_decoded, "0x00ff10")
-        self.assertEqual(by_path["payload"].storage.base_role, "inline")
+        self.assertEqual(by_path["payload"].storage.regions[0].role, "inline")
         self.assertEqual(
             [slot for slot, _ in web3.provider.storage_calls],
             [3, 4, 5, description_root, description_root + 1, description_root + 2],
@@ -388,14 +397,16 @@ class StorageViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(by_path["description"].status, "deferred_budget")
         self.assertIsNone(by_path["description"].value_encoded)
         self.assertIsNone(by_path["description"].value_decoded)
-        self.assertEqual(by_path["description"].storage.base_role, "length")
-        self.assertEqual(by_path["description"].storage.computed_role, "data")
         self.assertEqual(
-            by_path["description"].storage.computed_slot,
+            [region.role for region in by_path["description"].storage.regions],
+            ["length", "data"],
+        )
+        self.assertEqual(
+            by_path["description"].storage.regions[1].slot,
             hex(int.from_bytes(Web3.keccak((4).to_bytes(32, "big")), "big")),
         )
         self.assertEqual(
-            by_path["description"].storage.computed_slot_count,
+            by_path["description"].storage.regions[1].slot_count,
             str(2**250),
         )
         self.assertEqual(
@@ -435,11 +446,13 @@ class StorageViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             by_path["balances"]["storage"],
             {
-                "base_slot": "0x7",
-                "base_role": "anchor",
-                "computed_role": None,
-                "computed_slot": None,
-                "computed_slot_count": None,
+                "regions": [
+                    {
+                        "role": "anchor",
+                        "slot": "0x7",
+                        "slot_count": "1",
+                    }
+                ]
             },
         )
         self.assertEqual(

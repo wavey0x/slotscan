@@ -63,12 +63,14 @@ def is_solidity_dynamic_bytes(
     )
 
 
-def is_one_word_query_result(
+def is_materializable_storage_type(
     layout: CompiledLayout,
     type_info: CompiledType | None,
+    *,
+    stack: tuple[str, ...] = (),
 ) -> bool:
-    """Return whether one queried word can be decoded without further access."""
-    if is_one_word_scalar(type_info):
+    """Return whether a bounded query can fully materialize a terminal type."""
+    if is_one_word_scalar(type_info) or is_solidity_dynamic_bytes(layout, type_info):
         return True
     if (
         type_info is None
@@ -76,21 +78,27 @@ def is_one_word_query_result(
         or type_info.encoding != "inplace"
         or not type_info.members
         or type_info.num_bytes is None
-        or not 0 < type_info.num_bytes <= 32
+        or type_info.id in stack
     ):
         return False
 
+    next_stack = stack + (type_info.id,)
     occupied_ranges: list[tuple[int, int]] = []
+    struct_words = (type_info.num_bytes + 31) // 32
     for member in type_info.members:
         member_type = layout.get_type(member.type_id)
-        start = member.byte_offset
+        if (
+            member_type is None
+            or member_type.num_bytes is None
+            or member.byte_size != member_type.num_bytes
+        ):
+            return False
+        if member_type.kind == "struct" and member.byte_offset != 0:
+            return False
+        start = member.slot * 32 + member.byte_offset
         end = start + member.byte_size
         if (
-            member.slot != 0
-            or not is_one_word_scalar(member_type)
-            or member_type.num_bytes != member.byte_size
-            or start < 0
-            or end > 32
+            end > struct_words * 32
             or any(
                 start < occupied_end and end > occupied_start
                 for occupied_start, occupied_end in occupied_ranges
@@ -98,6 +106,12 @@ def is_one_word_query_result(
         ):
             return False
         occupied_ranges.append((start, end))
+        if not is_materializable_storage_type(
+            layout,
+            member_type,
+            stack=next_stack,
+        ):
+            return False
     return True
 
 
@@ -106,37 +120,40 @@ def is_queryable_storage_type(
     type_info: CompiledType,
 ) -> bool:
     """Return whether the typed-query endpoint supports this aggregate."""
-    if type_info.encoding == "mapping":
-        current = type_info
-        visited: set[str] = set()
-        while current.encoding == "mapping":
+    current = type_info
+    visited: set[str] = set()
+    while current.encoding == "mapping" or current.kind == "array":
+        if current.id in visited:
+            return False
+        visited.add(current.id)
+
+        if current.encoding == "mapping":
+            next_type_id = current.value_type
+        else:
             if (
-                current.id in visited
-                or not current.key_type
-                or not current.value_type
+                current.encoding == "dynamic_array"
+                and layout.storage_rules.array_storage_scheme
+                == "vyper_legacy_hashed"
             ):
                 return False
-            visited.add(current.id)
-            next_type = layout.get_type(current.value_type)
-            if next_type is None:
-                return False
-            current = next_type
-        return is_one_word_query_result(layout, current)
+            next_type_id = current.element_type
 
-    if type_info.kind == "array":
-        if (
-            type_info.encoding == "dynamic_array"
-            and layout.storage_rules.array_storage_scheme == "vyper_legacy_hashed"
-        ):
+        next_type = layout.get_type(next_type_id) if next_type_id else None
+        if next_type is None:
             return False
-        element = (
-            layout.get_type(type_info.element_type)
-            if type_info.element_type
-            else None
-        )
-        return is_one_word_scalar(element)
+        current = next_type
 
-    return False
+    if layout.storage_rules.array_storage_scheme == "vyper_legacy_hashed":
+        return (
+            is_one_word_scalar(current)
+            or (
+                current.kind == "struct"
+                and current.num_bytes is not None
+                and current.num_bytes <= 32
+                and is_materializable_storage_type(layout, current)
+            )
+        )
+    return is_materializable_storage_type(layout, current)
 
 
 def plan_compiled_scalar_reads(

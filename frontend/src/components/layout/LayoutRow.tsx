@@ -2,6 +2,7 @@
 
 import { memo, useState } from 'react';
 import {
+  StorageAccessDescriptor,
   StorageQueryLookup,
   StorageViewResponse,
   StorageViewType,
@@ -11,8 +12,7 @@ import {
 import { DetailPopover } from '@/components/ui/DetailPopover';
 import { StorageLocationCell } from '@/components/ui/StorageLocationCell';
 import { formatStorageLocation } from '@/lib/storage-location';
-import { MappingKeyInput } from './MappingKeyInput';
-import { ArrayIndexInput } from './ArrayIndexInput';
+import { StorageAccessInput } from './StorageAccessInput';
 import { StorageViewValueCell } from './StorageViewValueCell';
 import { cn } from '@/lib/utils';
 
@@ -37,12 +37,57 @@ function keyTypeLabel(keyType: string): string {
   return 'key';
 }
 
-function keyName(typeLabel: string, type: string, index: number): string {
-  const finalIdentifier = typeLabel.match(/([A-Za-z_$][\w$]*)\s*$/)?.[1];
-  if (finalIdentifier && finalIdentifier.toLowerCase() !== type.toLowerCase()) {
-    return finalIdentifier;
+function storageAccessors(
+  rootType: StorageViewType | undefined,
+  types: Record<string, StorageViewType>,
+): StorageAccessDescriptor[] {
+  const accessors: StorageAccessDescriptor[] = [];
+  const visited = new Set<string>();
+  let current = rootType;
+
+  while (current && (current.encoding === 'mapping' || current.kind === 'array')) {
+    if (visited.has(current.id)) return [];
+    visited.add(current.id);
+
+    if (current.encoding === 'mapping') {
+      if (!current.key_type || !current.value_type) return [];
+      const keyType = types[current.key_type];
+      const type = keyType?.label ?? current.key_type;
+      accessors.push({
+        kind: 'mapping_key',
+        type,
+        label: keyTypeLabel(type),
+        name: 'Key',
+        arrayLength: null,
+      });
+      current = types[current.value_type];
+      continue;
+    }
+
+    if (!current.element_type) return [];
+    accessors.push({
+      kind: 'array_index',
+      type: 'uint256',
+      label: 'index',
+      name: 'Index',
+      arrayLength: current.array_length,
+    });
+    current = types[current.element_type];
   }
-  return `Key ${index + 1}`;
+
+  for (const kind of ['mapping_key', 'array_index'] as const) {
+    const matches = accessors.filter((accessor) => accessor.kind === kind);
+    if (matches.length > 1) {
+      let ordinal = 0;
+      for (const accessor of accessors) {
+        if (accessor.kind === kind) {
+          ordinal += 1;
+          accessor.name = `${accessor.name} ${ordinal}`;
+        }
+      }
+    }
+  }
+  return accessors;
 }
 
 function resolveStructField(
@@ -83,15 +128,9 @@ export const LayoutRow = memo(function LayoutRow({
   const [expanded, setExpanded] = useState(false);
   const [lookups, setLookups] = useState<StorageQueryLookup[]>([]);
   const varType = types[variable.type_id];
-  const isMapping = varType?.encoding === 'mapping';
-  const isDynamicArray = varType?.encoding === 'dynamic_array';
-  const isStaticArray = varType?.kind === 'array' && varType.encoding === 'inplace';
-  const isArray = isDynamicArray || isStaticArray;
-  const arrayResultType = varType?.element_type
-    ? types[varType.element_type]
-    : undefined;
+  const accessors = storageAccessors(varType, types);
   const status = values[0]?.status;
-  const isInteractive = (isMapping || isArray) && status === 'on_demand';
+  const isInteractive = accessors.length > 0 && status === 'on_demand';
   const structValues = varType?.kind === 'struct'
     ? values.filter((value) => value.path !== variable.name)
     : [];
@@ -105,22 +144,6 @@ export const LayoutRow = memo(function LayoutRow({
     byteOffset: variable.byte_offset,
     byteSize: variable.byte_size,
   });
-
-  const mappingKeyTypes: { type: string; label: string; name: string }[] = [];
-  let currentType: StorageViewType | undefined = varType;
-  while (currentType?.encoding === 'mapping' && currentType.key_type) {
-    const keyType = types[currentType.key_type];
-    const typeLabel = keyType?.label ?? currentType.key_type;
-    const label = keyTypeLabel(typeLabel);
-    mappingKeyTypes.push({
-      type: typeLabel,
-      label,
-      name: keyName(typeLabel, label, mappingKeyTypes.length),
-    });
-    currentType = currentType.value_type
-      ? types[currentType.value_type]
-      : undefined;
-  }
 
   const successfulValues = values.filter(
     (value) => value.status === 'ok' && value.value_encoded
@@ -312,35 +335,16 @@ export const LayoutRow = memo(function LayoutRow({
         );
       })}
 
-      {expanded && isInteractive && isMapping && (
+      {expanded && isInteractive && (
         <tr className="bg-gray-50/50">
           <td colSpan={5} className="border-b border-gray-100 px-4 pb-2 pt-1">
-            <MappingKeyInput
+            <StorageAccessInput
               declarationId={variable.declaration_id}
-              keyTypes={mappingKeyTypes}
+              accessors={accessors}
               chainId={chainId}
               address={address}
               blockRef={blockRef}
               layoutId={layoutId}
-              resultType={currentType}
-              lookups={lookups}
-              onLookup={(lookup) => setLookups((previous) => [...previous, lookup])}
-            />
-          </td>
-        </tr>
-      )}
-
-      {expanded && isInteractive && isArray && !isMapping && (
-        <tr className="bg-gray-50/50">
-          <td colSpan={5} className="border-b border-gray-100 px-4 pb-2 pt-1">
-            <ArrayIndexInput
-              declarationId={variable.declaration_id}
-              arrayLength={varType?.array_length ?? null}
-              chainId={chainId}
-              address={address}
-              blockRef={blockRef}
-              layoutId={layoutId}
-              resultType={arrayResultType}
               lookups={lookups}
               onLookup={(lookup) => setLookups((previous) => [...previous, lookup])}
             />

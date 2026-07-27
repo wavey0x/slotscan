@@ -109,7 +109,7 @@ class ScalarReadPlanningTests(unittest.TestCase):
             ],
         )
 
-    def test_aggregate_queries_include_packed_struct_mappings_only(self):
+    def test_aggregate_queries_include_bounded_struct_terminals(self):
         packed_struct = StorageType(
             "config",
             "struct Config",
@@ -149,6 +149,41 @@ class ScalarReadPlanningTests(unittest.TestCase):
             key_type="t_address",
             value_type=wide_struct.id,
         )
+        nested_mapping = StorageType(
+            "nested_mapping",
+            "mapping(address => uint256)",
+            "mapping",
+            "mapping",
+            num_bytes=32,
+            key_type="t_address",
+            value_type="t_uint256",
+        )
+        unsupported_struct = StorageType(
+            "unsupported_config",
+            "struct UnsupportedConfig",
+            "struct",
+            "inplace",
+            num_bytes=32,
+            members=[
+                StorageVariable(
+                    "values",
+                    0,
+                    0,
+                    32,
+                    nested_mapping.id,
+                    nested_mapping.label,
+                )
+            ],
+        )
+        unsupported_mapping = StorageType(
+            "unsupported_configs",
+            "mapping(address => struct UnsupportedConfig)",
+            "mapping",
+            "mapping",
+            num_bytes=32,
+            key_type="t_address",
+            value_type=unsupported_struct.id,
+        )
         array = StorageType(
             "config_array",
             "struct Config[]",
@@ -183,12 +218,23 @@ class ScalarReadPlanningTests(unittest.TestCase):
                     wide_mapping.id,
                     wide_mapping.label,
                 ),
+                StorageVariable(
+                    "unsupportedConfigs",
+                    3,
+                    0,
+                    32,
+                    unsupported_mapping.id,
+                    unsupported_mapping.label,
+                ),
             ],
             {
                 packed_struct.id: packed_struct,
                 packed_mapping.id: packed_mapping,
                 wide_struct.id: wide_struct,
                 wide_mapping.id: wide_mapping,
+                nested_mapping.id: nested_mapping,
+                unsupported_struct.id: unsupported_struct,
+                unsupported_mapping.id: unsupported_mapping,
                 array.id: array,
             },
         )
@@ -199,8 +245,9 @@ class ScalarReadPlanningTests(unittest.TestCase):
             [(projection.path, projection.status) for projection in plan.projections],
             [
                 ("configs", "on_demand"),
-                ("configList", "unsupported"),
-                ("wideConfigs", "unsupported"),
+                ("configList", "on_demand"),
+                ("wideConfigs", "on_demand"),
+                ("unsupportedConfigs", "unsupported"),
             ],
         )
 

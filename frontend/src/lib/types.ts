@@ -58,12 +58,14 @@ export interface StorageViewVariable {
   confidence: string;
 }
 
+export interface StorageRegion {
+  role: 'anchor' | 'length' | 'header' | 'inline' | 'entry' | 'data';
+  slot: string;
+  slot_count: string | null;
+}
+
 export interface StorageProvenance {
-  base_slot: string;
-  base_role: 'inline' | 'length' | 'anchor' | 'header';
-  computed_role: 'data' | 'entry' | null;
-  computed_slot: string | null;
-  computed_slot_count: string | null;
+  regions: StorageRegion[];
 }
 
 export interface StorageViewValueItem {
@@ -125,6 +127,23 @@ export interface StorageQueryResponse {
   layout_id: string;
   declaration_id: string;
   path: string;
+  type_id: string;
+  type_label: string;
+  location: {
+    slot: string;
+    byte_offset: number;
+    byte_size: number;
+  };
+  array_length: string | null;
+  storage: StorageProvenance | null;
+  items: StorageQueryValueItem[];
+}
+
+export interface StorageQueryValueItem {
+  path: string;
+  relative_path: string;
+  type_id: string;
+  type_label: string;
   location: {
     slot: string;
     byte_offset: number;
@@ -132,17 +151,19 @@ export interface StorageQueryResponse {
   };
   value_encoded: string;
   value_decoded: unknown;
-  array_length: string | null;
   storage: StorageProvenance | null;
 }
 
-export interface StorageQueryLookup {
-  keys?: string[];
-  index?: string;
-  slot: string;
-  rawValue: string;
-  decodedValue: unknown;
-  storage: StorageProvenance | null;
+export interface StorageAccessDescriptor {
+  kind: 'mapping_key' | 'array_index';
+  type: string;
+  label: string;
+  name: string;
+  arrayLength: string | null;
+}
+
+export interface StorageQueryLookup extends StorageQueryResponse {
+  inputs: string[];
 }
 
 interface ComparisonScope {

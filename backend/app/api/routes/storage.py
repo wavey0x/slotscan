@@ -15,7 +15,7 @@ async def query_storage(
     request: StorageQueryRequest,
     service: StorageViewService = Depends(get_storage_view_service),
 ):
-    """Resolve one identity-bound mapping or array scalar on the backend."""
+    """Resolve and materialize one identity-bound typed storage access."""
     try:
         chain_id = int(request.chain_id, 0)
         block_number = int(request.block_ref.number, 0)

@@ -157,21 +157,18 @@ test('resolved dynamic strings disclose inline and computed storage', async ({ p
         ...value('decl:0', '_name', '0x3', 'Pendle Market'),
         value_encoded: encodedName,
         storage: {
-          base_slot: '0x3',
-          base_role: 'inline',
-          computed_role: null,
-          computed_slot: null,
-          computed_slot_count: null,
+          regions: [
+            { role: 'inline', slot: '0x3', slot_count: '1' },
+          ],
         },
       },
       {
         ...value('decl:1', '_description', '0x4', 'Dynamic storage data'),
         storage: {
-          base_slot: '0x4',
-          base_role: 'length',
-          computed_role: 'data',
-          computed_slot: '0x1000',
-          computed_slot_count: '3',
+          regions: [
+            { role: 'length', slot: '0x4', slot_count: '1' },
+            { role: 'data', slot: '0x1000', slot_count: '3' },
+          ],
         },
       },
     ],
@@ -185,7 +182,7 @@ test('resolved dynamic strings disclose inline and computed storage', async ({ p
   await expect(nameRow.locator('td').nth(3)).toHaveText('3');
   await nameRow.locator('td').nth(3).locator('[aria-haspopup="dialog"]').focus();
   const inlineDetail = page.getByRole('dialog', {
-    name: 'Storage location: inline slot 0x3',
+    name: 'Storage location: inline 0x3',
   });
   await expect(inlineDetail.getByText('inline', { exact: true })).toBeVisible();
   await expect(inlineDetail.getByText('3', { exact: true })).toBeVisible();
@@ -198,7 +195,7 @@ test('resolved dynamic strings disclose inline and computed storage', async ({ p
   await expect(descriptionRow.locator('td').nth(3)).toHaveText('4');
   await descriptionRow.locator('td').nth(3).locator('[aria-haspopup="dialog"]').focus();
   const computedDetail = page.getByRole('dialog', {
-    name: 'Storage location: length slot 0x4, data 0x1000–0x1002',
+    name: 'Storage location: length 0x4, data 0x1000–0x1002',
   });
   await expect(computedDetail.getByText('length', { exact: true })).toBeVisible();
   await expect(computedDetail.getByText('4', { exact: true })).toBeVisible();
@@ -606,21 +603,45 @@ test('packed struct mappings expand and render decoded members', async ({ page }
         layout_id: LAYOUT_ID,
         declaration_id: 'decl:0',
         path: `deployInfo[${ADDRESS}]`,
+        type_id: deployInfo.id,
+        type_label: deployInfo.label,
         location: { slot: '0xabc', byte_offset: 0, byte_size: 32 },
-        value_encoded: `0x${'0'.repeat(44)}0066d210000000000007`,
-        value_decoded: {
-          protocolId: '7',
-          deployTime: '1725000000',
-        },
         array_length: null,
-        storage: null,
+        storage: {
+          regions: [
+            { role: 'anchor', slot: '0x4', slot_count: '1' },
+            { role: 'entry', slot: '0xabc', slot_count: '1' },
+          ],
+        },
+        items: [
+          {
+            path: `deployInfo[${ADDRESS}].protocolId`,
+            relative_path: 'protocolId',
+            type_id: 't_uint40',
+            type_label: 'uint40',
+            location: { slot: '0xabc', byte_offset: 0, byte_size: 5 },
+            value_encoded: `0x${'0'.repeat(44)}0066d210000000000007`,
+            value_decoded: '7',
+            storage: null,
+          },
+          {
+            path: `deployInfo[${ADDRESS}].deployTime`,
+            relative_path: 'deployTime',
+            type_id: 't_uint40',
+            type_label: 'uint40',
+            location: { slot: '0xabc', byte_offset: 5, byte_size: 5 },
+            value_encoded: `0x${'0'.repeat(44)}0066d210000000000007`,
+            value_decoded: '1725000000',
+            storage: null,
+          },
+        ],
       },
     });
   });
   await page.goto(`/1/${ADDRESS}`);
 
   await page.getByRole('button', { name: 'Expand deployInfo' }).click();
-  await page.getByPlaceholder('0x… address').fill(ADDRESS);
+  await page.getByPlaceholder('Key').fill(ADDRESS);
   await page.getByRole('button', { name: 'Lookup' }).click();
 
   const history = page.getByText('Lookup history').locator('..');
@@ -640,7 +661,9 @@ test('packed struct mappings expand and render decoded members', async ({ page }
   await expect(deployTimeSlotDetail.getByText('5–9', { exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(deployTimeRow).toContainText('1,725,000,000');
-  await expect(history.getByRole('button', { name: 'Copy raw storage value' })).toBeVisible();
+  await expect(
+    history.getByRole('button', { name: 'Copy deployInfo' }).first(),
+  ).toBeVisible();
   expect(requestBody!.access.steps).toEqual([
     { kind: 'mapping_key', value: ADDRESS },
   ]);
@@ -679,27 +702,41 @@ test('mapping queries send raw keys and exact identities, never a computed slot'
         layout_id: LAYOUT_ID,
         declaration_id: 'decl:0',
         path: `balances[${ADDRESS}]`,
+        type_id: 't_uint256',
+        type_label: 'uint256',
         location: { slot: '0xabc', byte_offset: 0, byte_size: 32 },
-        value_encoded: `0x${'0'.repeat(63)}5`,
-        value_decoded: '5',
         array_length: null,
         storage: {
-          base_slot: '0x7',
-          base_role: 'anchor',
-          computed_role: 'entry',
-          computed_slot: '0xabc',
-          computed_slot_count: '1',
+          regions: [
+            { role: 'anchor', slot: '0x7', slot_count: '1' },
+            { role: 'entry', slot: '0xabc', slot_count: '1' },
+          ],
         },
+        items: [{
+          path: `balances[${ADDRESS}]`,
+          relative_path: '',
+          type_id: 't_uint256',
+          type_label: 'uint256',
+          location: { slot: '0xabc', byte_offset: 0, byte_size: 32 },
+          value_encoded: `0x${'0'.repeat(63)}5`,
+          value_decoded: '5',
+          storage: {
+            regions: [
+              { role: 'anchor', slot: '0x7', slot_count: '1' },
+              { role: 'entry', slot: '0xabc', slot_count: '1' },
+            ],
+          },
+        }],
       },
     });
   });
   await page.goto(`/1/${ADDRESS}`);
 
   await page.getByRole('button', { name: 'Expand balances' }).click();
-  await page.getByPlaceholder('0x… address').fill(ADDRESS);
+  await page.getByPlaceholder('Key').fill(ADDRESS);
   await page.getByRole('button', { name: 'Lookup' }).click();
   await expect(page.getByText('0xabc', { exact: true }).first()).toBeVisible();
-  const keyCopy = page.getByRole('button', { name: 'Copy mapping key 0x1234...5678' });
+  const keyCopy = page.getByRole('button', { name: 'Copy Key' });
   await expect(keyCopy).toBeVisible();
   await keyCopy.click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(ADDRESS);
@@ -761,20 +798,30 @@ test('nested mappings preserve the raw ordered key sequence', async ({ page }) =
         layout_id: LAYOUT_ID,
         declaration_id: 'decl:0',
         path: 'votes',
+        type_id: 't_uint256',
+        type_label: 'uint256',
         location: { slot: '0xdef', byte_offset: 0, byte_size: 32 },
-        value_encoded: `0x${'0'.repeat(63)}1`,
-        value_decoded: '1',
         array_length: null,
         storage: null,
+        items: [{
+          path: 'votes',
+          relative_path: '',
+          type_id: 't_uint256',
+          type_label: 'uint256',
+          location: { slot: '0xdef', byte_offset: 0, byte_size: 32 },
+          value_encoded: `0x${'0'.repeat(63)}1`,
+          value_decoded: '1',
+          storage: null,
+        }],
       },
     });
   });
   await page.goto(`/1/${ADDRESS}`);
   await page.getByRole('button', { name: 'Expand votes' }).click();
-  await page.getByPlaceholder('voter (0x…)').fill(ADDRESS);
-  await page.getByPlaceholder('proposalId').fill('5');
-  await expect(page.getByText('voter · address', { exact: true })).toBeVisible();
-  await expect(page.getByText('proposalId · uint256', { exact: true })).toBeVisible();
+  await page.getByPlaceholder('0x… address').fill(ADDRESS);
+  await page.getByPlaceholder('integer').fill('5');
+  await expect(page.getByText('Key 1 · address', { exact: true })).toBeVisible();
+  await expect(page.getByText('Key 2 · uint256', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Lookup' }).click();
 
   expect(steps).toEqual([
@@ -813,25 +860,41 @@ for (const arrayKind of ['fixed', 'dynamic'] as const) {
           layout_id: LAYOUT_ID,
           declaration_id: 'decl:0',
           path: 'items[3]',
+          type_id: 't_uint32',
+          type_label: 'uint32',
           location: { slot: '0xaaa', byte_offset: 12, byte_size: 4 },
-          value_encoded: `0x${'0'.repeat(63)}3`,
-          value_decoded: '3',
           array_length: dynamic ? '4' : null,
           storage: dynamic
             ? {
-                base_slot: '0x9',
-                base_role: 'length',
-                computed_role: 'entry',
-                computed_slot: '0xaaa',
-                computed_slot_count: '1',
+                regions: [
+                  { role: 'length', slot: '0x9', slot_count: '1' },
+                  { role: 'entry', slot: '0xaaa', slot_count: '1' },
+                ],
               }
             : null,
+          items: [{
+            path: 'items[3]',
+            relative_path: '',
+            type_id: 't_uint32',
+            type_label: 'uint32',
+            location: { slot: '0xaaa', byte_offset: 12, byte_size: 4 },
+            value_encoded: `0x${'0'.repeat(63)}3`,
+            value_decoded: '3',
+            storage: dynamic
+              ? {
+                  regions: [
+                    { role: 'length', slot: '0x9', slot_count: '1' },
+                    { role: 'entry', slot: '0xaaa', slot_count: '1' },
+                  ],
+                }
+              : null,
+          }],
         },
       });
     });
     await page.goto(`/1/${ADDRESS}`);
     await page.getByRole('button', { name: 'Expand items' }).click();
-    await page.getByPlaceholder(dynamic ? 'Enter array index' : 'Enter index (length 8)').fill('3');
+    await page.getByPlaceholder(dynamic ? 'Array index' : 'Index (length 8)').fill('3');
     await page.getByRole('button', { name: 'Lookup' }).click();
 
     expect(requestBody!.access.steps).toEqual([{ kind: 'array_index', value: '3' }]);
@@ -839,6 +902,371 @@ for (const arrayKind of ['fixed', 'dynamic'] as const) {
     expect(JSON.stringify(requestBody)).not.toContain('"slot"');
   });
 }
+
+test('proposalData indexes render a backend-authored multi-slot record', async ({ page }) => {
+  const results = {
+    ...scalarType('proposal_results', 'struct Voter.Vote'),
+    kind: 'struct',
+    members: [
+      {
+        name: 'weightYes',
+        slot: '0x0',
+        byte_offset: 0,
+        byte_size: '5',
+        type_id: 't_uint40',
+        label: 'uint40',
+      },
+      {
+        name: 'weightNo',
+        slot: '0x0',
+        byte_offset: 5,
+        byte_size: '5',
+        type_id: 't_uint40',
+        label: 'uint40',
+      },
+    ],
+  };
+  const proposal = {
+    ...scalarType('proposal', 'struct Voter.Proposal', '64'),
+    kind: 'struct',
+    members: [
+      {
+        name: 'epoch',
+        slot: '0x0',
+        byte_offset: 0,
+        byte_size: '2',
+        type_id: 't_uint16',
+        label: 'uint16',
+      },
+      {
+        name: 'createdAt',
+        slot: '0x0',
+        byte_offset: 2,
+        byte_size: '4',
+        type_id: 't_uint32',
+        label: 'uint32',
+      },
+      {
+        name: 'quorumWeight',
+        slot: '0x0',
+        byte_offset: 6,
+        byte_size: '5',
+        type_id: 't_uint40',
+        label: 'uint40',
+      },
+      {
+        name: 'processed',
+        slot: '0x0',
+        byte_offset: 11,
+        byte_size: '1',
+        type_id: 't_bool',
+        label: 'bool',
+      },
+      {
+        name: 'results',
+        slot: '0x1',
+        byte_offset: 0,
+        byte_size: '32',
+        type_id: results.id,
+        label: results.label,
+      },
+    ],
+  };
+  const array = {
+    ...scalarType('proposal_array', 'struct Voter.Proposal[]'),
+    kind: 'array',
+    encoding: 'dynamic_array',
+    element_type: proposal.id,
+  };
+  await mockView(page, {
+    variables: [
+      variable('decl:0', 'proposalData', '0x1', array.id, array.label),
+    ],
+    types: {
+      [array.id]: array,
+      [proposal.id]: proposal,
+      [results.id]: results,
+      t_uint16: scalarType('t_uint16', 'uint16', '2'),
+      t_uint32: scalarType('t_uint32', 'uint32', '4'),
+      t_uint40: scalarType('t_uint40', 'uint40', '5'),
+      t_bool: scalarType('t_bool', 'bool', '1'),
+    },
+    values: [value('decl:0', 'proposalData', '0x1', null, 'on_demand')],
+  });
+  let steps: unknown;
+  const fields = [
+    ['epoch', '0x1000', 0, 2, 'uint16', '15'],
+    ['createdAt', '0x1000', 2, 4, 'uint32', '1751169587'],
+    ['quorumWeight', '0x1000', 6, 5, 'uint40', '1486201'],
+    ['processed', '0x1000', 11, 1, 'bool', true],
+    ['results.weightYes', '0x1001', 0, 5, 'uint40', '3555667'],
+    ['results.weightNo', '0x1001', 5, 5, 'uint40', '0'],
+  ];
+  await page.route('**/api/slotscan/storage/query', async (route) => {
+    steps = route.request().postDataJSON().access.steps;
+    await route.fulfill({
+      json: {
+        block_ref: { number: '0x7b', hash: BLOCK_HASH },
+        layout_id: LAYOUT_ID,
+        declaration_id: 'decl:0',
+        path: 'proposalData[0]',
+        type_id: proposal.id,
+        type_label: proposal.label,
+        location: { slot: '0x1000', byte_offset: 0, byte_size: 64 },
+        array_length: '26',
+        storage: {
+          regions: [
+            { role: 'length', slot: '0x1', slot_count: '1' },
+            { role: 'entry', slot: '0x1000', slot_count: '2' },
+          ],
+        },
+        items: fields.map(([name, slot, byte_offset, byte_size, type_label, decoded]) => ({
+          path: `proposalData[0].${name}`,
+          relative_path: name,
+          type_id: `t_${type_label}`,
+          type_label,
+          location: { slot, byte_offset, byte_size },
+          value_encoded: `0x${'0'.repeat(63)}1`,
+          value_decoded: decoded,
+          storage: null,
+        })),
+      },
+    });
+  });
+
+  await page.goto(`/1/${ADDRESS}`);
+  await page.getByRole('button', { name: 'Expand proposalData' }).click();
+  await page.getByPlaceholder('Array index').fill('0');
+  await page.getByRole('button', { name: 'Lookup' }).click();
+
+  expect(steps).toEqual([{ kind: 'array_index', value: '0' }]);
+  const history = page.getByText('Lookup history').locator('..');
+  await expect(history.getByText('6 fields')).toBeVisible();
+  await expect(history.getByRole('row').filter({ hasText: 'processed' })).toContainText('true');
+  const parentRow = history.getByRole('row').filter({ hasText: '6 fields' });
+  await parentRow.locator('td').nth(2).locator('[aria-haspopup="dialog"]').focus();
+  const detail = page.getByRole('dialog', {
+    name: 'Storage location: length 0x1, entry 0x1000–0x1001',
+  });
+  await expect(detail.getByText('length', { exact: true })).toBeVisible();
+  await expect(detail.getByText('entry', { exact: true })).toBeVisible();
+  await expect(
+    detail.getByTestId('storage-computed-occupancy').locator('span'),
+  ).toHaveCount(2);
+  await expect(detail.getByTestId('storage-slot-occupancy')).toHaveCount(0);
+});
+
+test('proposalDescription keys render long string data provenance', async ({ page }) => {
+  const string = {
+    ...scalarType('t_string_storage', 'string'),
+    encoding: 'bytes',
+  };
+  const mapping = {
+    ...scalarType('description_mapping', 'mapping(uint256 => string)'),
+    kind: 'mapping',
+    encoding: 'mapping',
+    key_type: 't_uint256',
+    value_type: string.id,
+  };
+  await mockView(page, {
+    variables: [
+      variable(
+        'decl:0',
+        'proposalDescription',
+        '0x3',
+        mapping.id,
+        mapping.label,
+      ),
+    ],
+    types: {
+      [mapping.id]: mapping,
+      [string.id]: string,
+      t_uint256: scalarType(),
+    },
+    values: [
+      value('decl:0', 'proposalDescription', '0x3', null, 'on_demand'),
+    ],
+  });
+  await page.route('**/api/slotscan/storage/query', async (route) => {
+    await route.fulfill({
+      json: {
+        block_ref: { number: '0x7b', hash: BLOCK_HASH },
+        layout_id: LAYOUT_ID,
+        declaration_id: 'decl:0',
+        path: 'proposalDescription[0]',
+        type_id: string.id,
+        type_label: string.label,
+        location: { slot: '0x2000', byte_offset: 0, byte_size: 32 },
+        array_length: null,
+        storage: {
+          regions: [
+            { role: 'anchor', slot: '0x3', slot_count: '1' },
+            { role: 'length', slot: '0x2000', slot_count: '1' },
+            { role: 'data', slot: '0x3000', slot_count: '2' },
+          ],
+        },
+        items: [{
+          path: 'proposalDescription[0]',
+          relative_path: '',
+          type_id: string.id,
+          type_label: string.label,
+          location: { slot: '0x2000', byte_offset: 0, byte_size: 32 },
+          value_encoded: `0x${'0'.repeat(63)}5`,
+          value_decoded: 'Pay bad debt through governance with a long explanation',
+          storage: {
+            regions: [
+              { role: 'anchor', slot: '0x3', slot_count: '1' },
+              { role: 'length', slot: '0x2000', slot_count: '1' },
+              { role: 'data', slot: '0x3000', slot_count: '2' },
+            ],
+          },
+        }],
+      },
+    });
+  });
+
+  await page.goto(`/1/${ADDRESS}`);
+  await page.getByRole('button', { name: 'Expand proposalDescription' }).click();
+  await page.getByPlaceholder('Key').fill('0');
+  await page.getByRole('button', { name: 'Lookup' }).click();
+
+  const history = page.getByText('Lookup history').locator('..');
+  const resultRow = history.getByRole('row').filter({
+    hasText: 'Pay bad debt',
+  });
+  await expect(resultRow).toContainText('string');
+  await resultRow.locator('td').nth(2).locator('[aria-haspopup="dialog"]').focus();
+  const detail = page.getByRole('dialog', {
+    name: 'Storage location: anchor 0x3, length 0x2000, data 0x3000–0x3001',
+  });
+  await expect(detail.getByText('anchor', { exact: true })).toBeVisible();
+  await expect(detail.getByText('data', { exact: true })).toBeVisible();
+});
+
+test('proposalPayload uses one ordered Key to Index access flow', async ({ page }) => {
+  const bytes = {
+    ...scalarType('t_bytes_storage', 'bytes'),
+    encoding: 'bytes',
+  };
+  const action = {
+    ...scalarType('action', 'struct Voter.Action', '64'),
+    kind: 'struct',
+    members: [
+      {
+        name: 'target',
+        slot: '0x0',
+        byte_offset: 0,
+        byte_size: '20',
+        type_id: 't_address',
+        label: 'address',
+      },
+      {
+        name: 'data',
+        slot: '0x1',
+        byte_offset: 0,
+        byte_size: '32',
+        type_id: bytes.id,
+        label: 'bytes',
+      },
+    ],
+  };
+  const actions = {
+    ...scalarType('actions', 'struct Voter.Action[]'),
+    kind: 'array',
+    encoding: 'dynamic_array',
+    element_type: action.id,
+  };
+  const mapping = {
+    ...scalarType(
+      'payload_mapping',
+      'mapping(uint256 => struct Voter.Action[])',
+    ),
+    kind: 'mapping',
+    encoding: 'mapping',
+    key_type: 't_uint256',
+    value_type: actions.id,
+  };
+  await mockView(page, {
+    variables: [
+      variable('decl:0', 'proposalPayload', '0x2', mapping.id, mapping.label),
+    ],
+    types: {
+      [mapping.id]: mapping,
+      [actions.id]: actions,
+      [action.id]: action,
+      [bytes.id]: bytes,
+      t_uint256: scalarType(),
+      t_address: scalarType('t_address', 'address', '20'),
+    },
+    values: [value('decl:0', 'proposalPayload', '0x2', null, 'on_demand')],
+  });
+  let steps: unknown;
+  await page.route('**/api/slotscan/storage/query', async (route) => {
+    steps = route.request().postDataJSON().access.steps;
+    await route.fulfill({
+      json: {
+        block_ref: { number: '0x7b', hash: BLOCK_HASH },
+        layout_id: LAYOUT_ID,
+        declaration_id: 'decl:0',
+        path: 'proposalPayload[0][0]',
+        type_id: action.id,
+        type_label: action.label,
+        location: { slot: '0x4000', byte_offset: 0, byte_size: 64 },
+        array_length: '9',
+        storage: {
+          regions: [
+            { role: 'anchor', slot: '0x2', slot_count: '1' },
+            { role: 'length', slot: '0x3500', slot_count: '1' },
+            { role: 'entry', slot: '0x4000', slot_count: '2' },
+          ],
+        },
+        items: [
+          {
+            path: 'proposalPayload[0][0].target',
+            relative_path: 'target',
+            type_id: 't_address',
+            type_label: 'address',
+            location: { slot: '0x4000', byte_offset: 0, byte_size: 20 },
+            value_encoded: `0x${'0'.repeat(24)}${ADDRESS.slice(2)}`,
+            value_decoded: ADDRESS,
+            storage: null,
+          },
+          {
+            path: 'proposalPayload[0][0].data',
+            relative_path: 'data',
+            type_id: bytes.id,
+            type_label: bytes.label,
+            location: { slot: '0x4001', byte_offset: 0, byte_size: 32 },
+            value_encoded: `0x${'0'.repeat(63)}5`,
+            value_decoded: `0x${'12'.repeat(36)}`,
+            storage: {
+              regions: [
+                { role: 'length', slot: '0x4001', slot_count: '1' },
+                { role: 'data', slot: '0x5000', slot_count: '2' },
+              ],
+            },
+          },
+        ],
+      },
+    });
+  });
+
+  await page.goto(`/1/${ADDRESS}`);
+  await page.getByRole('button', { name: 'Expand proposalPayload' }).click();
+  await page.getByPlaceholder('Key').fill('0');
+  await page.getByPlaceholder('Array index').fill('0');
+  await expect(page.getByText('Key · uint256', { exact: true })).toBeVisible();
+  await expect(page.getByText('Index · index', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Lookup' }).click();
+
+  expect(steps).toEqual([
+    { kind: 'mapping_key', value: '0' },
+    { kind: 'array_index', value: '0' },
+  ]);
+  const history = page.getByText('Lookup history').locator('..');
+  await expect(history.getByRole('row').filter({ hasText: 'target' })).toContainText('0x1234...5678');
+  await expect(history.getByRole('row').filter({ hasText: 'data' })).toContainText('0x121212');
+});
 
 test('invalid array syntax is rejected before any query request', async ({ page }) => {
   const array = {
@@ -866,7 +1294,7 @@ test('invalid array syntax is rejected before any query request', async ({ page 
   });
   await page.goto(`/1/${ADDRESS}`);
   await page.getByRole('button', { name: 'Expand items' }).click();
-  await page.getByPlaceholder('Enter array index').fill('-1');
+  await page.getByPlaceholder('Array index').fill('-1');
   await page.getByRole('button', { name: 'Lookup' }).click();
 
   await expect(page.getByText('Enter a non-negative decimal or hexadecimal index')).toBeVisible();
