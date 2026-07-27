@@ -10,6 +10,14 @@ export interface StorageLocationInput {
 }
 
 export interface FormattedStorageLocation {
+  startSlot: string;
+  fullStartSlot: string;
+  endSlot: string | null;
+  fullEndSlot: string | null;
+  byteRange: {
+    start: number;
+    end: number;
+  } | null;
   slot: string;
   fullSlot: string;
   qualifier: string | null;
@@ -70,18 +78,50 @@ function locationEndSlot(input: StorageLocationInput): string | null {
   }
 }
 
+function locationByteRange(
+  input: StorageLocationInput,
+  endSlot: string | null,
+): FormattedStorageLocation['byteRange'] {
+  if (input.isRoot || (endSlot && endSlot !== input.slot)) return null;
+
+  const start = input.byteOffset ?? 0;
+  const size = Number(input.byteSize);
+  if (
+    !Number.isInteger(start)
+    || !Number.isInteger(size)
+    || start < 0
+    || size <= 0
+    || start + size > 32
+    || (start === 0 && size === 32)
+  ) {
+    return null;
+  }
+
+  return {
+    start,
+    end: start + size - 1,
+  };
+}
+
 export function formatStorageLocation(input: StorageLocationInput): FormattedStorageLocation {
   const endSlot = locationEndSlot(input);
   const hasRange = Boolean(endSlot && endSlot !== input.slot);
+  const startSlot = compactSlot(input.slot);
+  const compactEndSlot = hasRange ? compactSlot(endSlot!) : null;
   const slot = hasRange
-    ? `${compactSlot(input.slot)}–${compactSlot(endSlot!)}`
-    : compactSlot(input.slot);
+    ? `${startSlot}–${compactEndSlot}`
+    : startSlot;
   const fullSlot = hasRange
     ? `${input.slot}–${endSlot}`
     : input.slot;
   const qualifier = locationQualifier(input);
 
   return {
+    startSlot,
+    fullStartSlot: input.slot,
+    endSlot: compactEndSlot,
+    fullEndSlot: hasRange ? endSlot : null,
+    byteRange: locationByteRange(input, endSlot),
     slot,
     fullSlot,
     qualifier,

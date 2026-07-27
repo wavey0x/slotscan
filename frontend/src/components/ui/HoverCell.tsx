@@ -22,6 +22,8 @@ interface HoverCellProps {
   colorClass?: string;
   /** Accessible label for the copy action */
   copyLabel?: string;
+  /** Accessible label for the detail disclosure */
+  dialogLabel?: string;
   /** Put the copy action in the detail disclosure instead of beside the compact value. */
   copyInDetail?: boolean;
   /** Wrap long display values instead of truncating them */
@@ -62,6 +64,7 @@ export function HoverCell({
   className,
   colorClass = 'text-gray-900',
   copyLabel = 'Copy value',
+  dialogLabel,
   copyInDetail = false,
   wrap = false,
 }: HoverCellProps) {
@@ -131,7 +134,12 @@ export function HoverCell({
   if (!hasSupplementalDetail) return cell;
 
   return (
-    <DetailPopover content={tooltipContent} delay={300} className="min-w-0 max-w-full">
+    <DetailPopover
+      content={tooltipContent}
+      dialogLabel={dialogLabel}
+      delay={300}
+      className="min-w-0 max-w-full"
+    >
       {cell}
     </DetailPopover>
   );

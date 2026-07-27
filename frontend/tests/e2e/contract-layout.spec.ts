@@ -327,7 +327,10 @@ test('struct values expand into semantic member rows', async ({ page }) => {
   };
   await mockView(page, {
     variables: [
-      variable('decl:0', 'config', '0x6', config.id, config.label),
+      {
+        ...variable('decl:0', 'config', '0x6', config.id, config.label),
+        byte_size: config.num_bytes,
+      },
     ],
     types: {
       config,
@@ -344,13 +347,39 @@ test('struct values expand into semantic member rows', async ({ page }) => {
   await expect(page.getByText('2 fields', { exact: true })).toBeVisible();
   await expect(page.getByText('oracle', { exact: true })).toHaveCount(0);
 
+  const configRow = page.getByRole('row').filter({
+    has: page.getByText('config', { exact: true }),
+  });
+  const configSlot = configRow.locator('td').nth(3);
+  await expect(configSlot).toHaveText('6');
+  await configSlot.locator('[aria-haspopup="dialog"]').focus();
+  const slotDetail = page.getByRole('dialog', {
+    name: 'Storage location: slots 0x6 through 0x7',
+  });
+  await expect(slotDetail.getByText('Slots', { exact: true })).toBeVisible();
+  await expect(slotDetail.getByText('6–7', { exact: true })).toBeVisible();
+  await expect(slotDetail.getByTestId('storage-slot-occupancy').locator('span')).toHaveCount(2);
+  await page.keyboard.press('Escape');
+
   await page.getByRole('button', { name: 'Expand config' }).click();
 
   const oracleRow = page.getByRole('row').filter({
     has: page.getByText('oracle', { exact: true }),
   });
   await expect(oracleRow).toContainText('address');
-  await expect(oracleRow).toContainText('6 · bytes 0–19');
+  const oracleSlot = oracleRow.locator('td').nth(3);
+  await expect(oracleSlot).toHaveText('6');
+  await oracleSlot.locator('[aria-haspopup="dialog"]').focus();
+  const byteDetail = page.getByRole('dialog', {
+    name: 'Storage location: slot 0x6, bytes 0 through 19',
+  });
+  await expect(byteDetail.getByText('Bytes', { exact: true })).toBeVisible();
+  await expect(byteDetail.getByText('0–19', { exact: true })).toBeVisible();
+  await expect(byteDetail.getByTestId('storage-byte-occupancy').locator('span')).toHaveAttribute(
+    'style',
+    'left: 0%; width: 62.5%;',
+  );
+  await page.keyboard.press('Escape');
   await expect(oracleRow).toContainText('0xff12...cCEE');
   await oracleRow.getByTestId('compact-value').hover();
   await expect(page.getByRole('dialog')).toHaveText('0xff12b7B0dF9a2A96CBc09b3822B4Db43a575cCEE');
@@ -521,7 +550,15 @@ test('packed struct mappings expand and render decoded members', async ({ page }
   await expect(protocolRow).toContainText('7');
   const deployTimeRow = history.getByRole('row').filter({ hasText: 'deployTime' });
   await expect(deployTimeRow).toContainText('uint40');
-  await expect(deployTimeRow).toContainText('0xabc · bytes 5–9');
+  const deployTimeSlot = deployTimeRow.locator('td').nth(2);
+  await expect(deployTimeSlot).toHaveText('0xabc');
+  await deployTimeSlot.locator('[aria-haspopup="dialog"]').focus();
+  const deployTimeSlotDetail = page.getByRole('dialog', {
+    name: 'Storage location: slot 0xabc, bytes 5 through 9',
+  });
+  await expect(deployTimeSlotDetail.getByText('Bytes', { exact: true })).toBeVisible();
+  await expect(deployTimeSlotDetail.getByText('5–9', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
   await expect(deployTimeRow).toContainText('1,725,000,000');
   await expect(history.getByRole('button', { name: 'Copy raw storage value' })).toBeVisible();
   expect(requestBody!.access.steps).toEqual([
