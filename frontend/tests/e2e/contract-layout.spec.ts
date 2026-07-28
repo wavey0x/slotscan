@@ -644,12 +644,12 @@ test('packed struct mappings expand and render decoded members', async ({ page }
   await page.getByPlaceholder('Key').fill(ADDRESS);
   await page.getByRole('button', { name: 'Lookup' }).click();
 
-  const history = page.getByText('Lookup history').locator('..');
-  const protocolRow = history.getByRole('row').filter({ hasText: 'protocolId' });
+  const result = page.getByTestId('lookup-result');
+  const protocolRow = result.getByRole('row').filter({ hasText: 'protocolId' });
   await expect(protocolRow).toContainText('uint40');
   await expect(protocolRow).toContainText('0xabc');
   await expect(protocolRow).toContainText('7');
-  const deployTimeRow = history.getByRole('row').filter({ hasText: 'deployTime' });
+  const deployTimeRow = result.getByRole('row').filter({ hasText: 'deployTime' });
   await expect(deployTimeRow).toContainText('uint40');
   const deployTimeSlot = deployTimeRow.locator('td').nth(2);
   await expect(deployTimeSlot).toHaveText('0xabc');
@@ -662,7 +662,7 @@ test('packed struct mappings expand and render decoded members', async ({ page }
   await page.keyboard.press('Escape');
   await expect(deployTimeRow).toContainText('1,725,000,000');
   await expect(
-    history.getByRole('button', { name: 'Copy deployInfo' }).first(),
+    result.getByRole('button', { name: 'Copy deployInfo' }).first(),
   ).toBeVisible();
   expect(requestBody!.access.steps).toEqual([
     { kind: 'mapping_key', value: ADDRESS },
@@ -1003,13 +1003,15 @@ test('proposalData indexes render a backend-authored multi-slot record', async (
     ['results.weightNo', '0x1001', 5, 5, 'uint40', '0'],
   ];
   await page.route('**/api/slotscan/storage/query', async (route) => {
-    steps = route.request().postDataJSON().access.steps;
+    const request = route.request().postDataJSON();
+    steps = request.access.steps;
+    const queriedIndex = request.access.steps[0].value;
     await route.fulfill({
       json: {
         block_ref: { number: '0x7b', hash: BLOCK_HASH },
         layout_id: LAYOUT_ID,
         declaration_id: 'decl:0',
-        path: 'proposalData[0]',
+        path: `proposalData[${queriedIndex}]`,
         type_id: proposal.id,
         type_label: proposal.label,
         location: { slot: '0x1000', byte_offset: 0, byte_size: 64 },
@@ -1021,7 +1023,7 @@ test('proposalData indexes render a backend-authored multi-slot record', async (
           ],
         },
         items: fields.map(([name, slot, byte_offset, byte_size, type_label, decoded]) => ({
-          path: `proposalData[0].${name}`,
+          path: `proposalData[${queriedIndex}].${name}`,
           relative_path: name,
           type_id: `t_${type_label}`,
           type_label,
@@ -1036,14 +1038,18 @@ test('proposalData indexes render a backend-authored multi-slot record', async (
 
   await page.goto(`/1/${ADDRESS}`);
   await page.getByRole('button', { name: 'Expand proposalData' }).click();
-  await page.getByPlaceholder('Array index').fill('0');
+  const indexInput = page.getByPlaceholder('Array index');
+  await indexInput.fill('0');
   await page.getByRole('button', { name: 'Lookup' }).click();
 
   expect(steps).toEqual([{ kind: 'array_index', value: '0' }]);
-  const history = page.getByText('Lookup history').locator('..');
-  await expect(history.getByText('6 fields')).toBeVisible();
-  await expect(history.getByRole('row').filter({ hasText: 'processed' })).toContainText('true');
-  const parentRow = history.getByRole('row').filter({ hasText: '6 fields' });
+  await expect(indexInput).toHaveValue('0');
+  const result = page.getByTestId('lookup-result');
+  await expect(result.locator('tbody > tr')).toHaveCount(7);
+  await expect(result.locator('tbody > tr').first().locator('td').first()).toHaveText('[0]');
+  await expect(result.getByText('6 fields')).toBeVisible();
+  await expect(result.getByRole('row').filter({ hasText: 'processed' })).toContainText('true');
+  const parentRow = result.getByRole('row').filter({ hasText: '6 fields' });
   await parentRow.locator('td').nth(2).locator('[aria-haspopup="dialog"]').focus();
   const detail = page.getByRole('dialog', {
     name: 'Storage location: length 0x1, entry 0x1000–0x1001',
@@ -1054,6 +1060,16 @@ test('proposalData indexes render a backend-authored multi-slot record', async (
     detail.getByTestId('storage-computed-occupancy').locator('span'),
   ).toHaveCount(2);
   await expect(detail.getByTestId('storage-slot-occupancy')).toHaveCount(0);
+
+  await indexInput.fill('1');
+  await page.getByRole('button', { name: 'Lookup' }).click();
+  await expect(indexInput).toHaveValue('1');
+  await expect(result.locator('tbody > tr')).toHaveCount(7);
+  await expect(result.locator('tbody > tr').first().locator('td').first()).toHaveText('[1]');
+
+  await result.getByRole('button', { name: 'Dismiss result' }).click();
+  await expect(result).toHaveCount(0);
+  await expect(indexInput).toHaveValue('1');
 });
 
 test('proposalDescription keys render long string data provenance', async ({ page }) => {
@@ -1130,8 +1146,8 @@ test('proposalDescription keys render long string data provenance', async ({ pag
   await page.getByPlaceholder('Key').fill('0');
   await page.getByRole('button', { name: 'Lookup' }).click();
 
-  const history = page.getByText('Lookup history').locator('..');
-  const resultRow = history.getByRole('row').filter({
+  const result = page.getByTestId('lookup-result');
+  const resultRow = result.getByRole('row').filter({
     hasText: 'Pay bad debt',
   });
   await expect(resultRow).toContainText('string');
@@ -1263,9 +1279,9 @@ test('proposalPayload uses one ordered Key to Index access flow', async ({ page 
     { kind: 'mapping_key', value: '0' },
     { kind: 'array_index', value: '0' },
   ]);
-  const history = page.getByText('Lookup history').locator('..');
-  await expect(history.getByRole('row').filter({ hasText: 'target' })).toContainText('0x1234...5678');
-  await expect(history.getByRole('row').filter({ hasText: 'data' })).toContainText('0x121212');
+  const result = page.getByTestId('lookup-result');
+  await expect(result.getByRole('row').filter({ hasText: 'target' })).toContainText('0x1234...5678');
+  await expect(result.getByRole('row').filter({ hasText: 'data' })).toContainText('0x121212');
 });
 
 test('invalid array syntax is rejected before any query request', async ({ page }) => {

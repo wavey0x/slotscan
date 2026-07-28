@@ -3,7 +3,6 @@
 import { memo, useState } from 'react';
 import {
   StorageAccessDescriptor,
-  StorageQueryLookup,
   StorageViewResponse,
   StorageViewType,
   StorageViewValueItem,
@@ -126,7 +125,6 @@ export const LayoutRow = memo(function LayoutRow({
   values,
 }: LayoutRowProps) {
   const [expanded, setExpanded] = useState(false);
-  const [lookups, setLookups] = useState<StorageQueryLookup[]>([]);
   const varType = types[variable.type_id];
   const accessors = storageAccessors(varType, types);
   const status = values[0]?.status;
@@ -345,8 +343,6 @@ export const LayoutRow = memo(function LayoutRow({
               address={address}
               blockRef={blockRef}
               layoutId={layoutId}
-              lookups={lookups}
-              onLookup={(lookup) => setLookups((previous) => [...previous, lookup])}
             />
           </td>
         </tr>

@@ -18,8 +18,6 @@ interface StorageAccessInputProps {
   address: string;
   blockRef: StorageViewResponse['block_ref'];
   layoutId: string;
-  lookups: StorageQueryLookup[];
-  onLookup: (lookup: StorageQueryLookup) => void;
 }
 
 function keyHint(type: string): string {
@@ -81,10 +79,9 @@ export function StorageAccessInput({
   address,
   blockRef,
   layoutId,
-  lookups,
-  onLookup,
 }: StorageAccessInputProps) {
   const [inputs, setInputs] = useState<string[]>(accessors.map(() => ''));
+  const [lookup, setLookup] = useState<StorageQueryLookup | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -114,8 +111,7 @@ export function StorageAccessInput({
           })),
         },
       });
-      onLookup({ ...result, inputs: [...inputs] });
-      setInputs(accessors.map(() => ''));
+      setLookup({ ...result, inputs: [...inputs] });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Lookup failed');
     } finally {
@@ -177,9 +173,10 @@ export function StorageAccessInput({
       {error && <p className="text-xs text-red">{error}</p>}
 
       <LookupResultsTable
-        lookups={lookups}
+        lookup={lookup}
         accessors={accessors}
         chainId={chainId}
+        onDismiss={() => setLookup(null)}
       />
     </div>
   );
