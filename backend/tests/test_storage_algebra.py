@@ -374,7 +374,7 @@ def five():
             {},
         )
         self.assertEqual(match["path"], "names[alice]")
-        self.assertEqual(match["key_type"], "t_string_storage")
+        self.assertEqual(match["key_type"], "string")
 
     def test_segmented_rpc_preimage_prefixes_are_normalized(self):
         value_type = StorageType("t_uint256", "uint256", "value", "inplace", 32)
@@ -460,6 +460,169 @@ def five():
         )
 
         self.assertEqual(match["path"], f"configs[{outer_key}][{inner_key}]")
+
+    def test_nested_mapping_uses_semantic_key_types_and_canonical_path(self):
+        protocol_type = StorageType(
+            "t_source_protocol",
+            "uint256 protocolId",
+            "value",
+            "inplace",
+            32,
+        )
+        borrow_token_type = StorageType(
+            "t_source_borrow_token",
+            "address borrowToken",
+            "value",
+            "inplace",
+            20,
+        )
+        collateral_token_type = StorageType(
+            "t_source_collateral_token",
+            "address collateralToken",
+            "value",
+            "inplace",
+            20,
+        )
+        id_type = StorageType(
+            "t_source_id",
+            "uint256 id",
+            "value",
+            "inplace",
+            32,
+        )
+        collateral_mapping = StorageType(
+            "t_source_collateral_mapping",
+            "mapping(address collateralToken => uint256 id)",
+            "mapping",
+            "mapping",
+            32,
+            key_type=collateral_token_type.id,
+            value_type=id_type.id,
+        )
+        borrow_mapping = StorageType(
+            "t_source_borrow_mapping",
+            "mapping(address borrowToken => mapping(address collateralToken => uint256 id))",
+            "mapping",
+            "mapping",
+            32,
+            key_type=borrow_token_type.id,
+            value_type=collateral_mapping.id,
+        )
+        protocol_mapping = StorageType(
+            "t_source_protocol_mapping",
+            "mapping(uint256 protocolId => mapping(address borrowToken => mapping(address collateralToken => uint256 id)))",
+            "mapping",
+            "mapping",
+            32,
+            key_type=protocol_type.id,
+            value_type=borrow_mapping.id,
+        )
+        variable = StorageVariable(
+            "collateralId",
+            5,
+            0,
+            32,
+            protocol_mapping.id,
+            protocol_mapping.label,
+            provenance="source_inference",
+            confidence="inferred",
+        )
+        layout = StorageLayout(
+            "ResupplyPairDeployer",
+            [variable],
+            {
+                type_info.id: type_info
+                for type_info in (
+                    protocol_type,
+                    borrow_token_type,
+                    collateral_token_type,
+                    id_type,
+                    collateral_mapping,
+                    borrow_mapping,
+                    protocol_mapping,
+                )
+            },
+        )
+        protocol_id = 2
+        borrow_token = "0xf939e0a03fb07f59a73314e73794be0e57ac1b4e"
+        collateral_token = "0x80ac24aa929eaf5013f6436cda2a7ba190f5cc0b"
+        protocol_preimage = encode(
+            ["uint256", "uint256"],
+            [protocol_id, variable.slot],
+        )
+        protocol_hash = Web3.keccak(protocol_preimage)
+        borrow_preimage = encode(
+            ["address", "bytes32"],
+            [borrow_token, protocol_hash],
+        )
+        borrow_hash = Web3.keccak(borrow_preimage)
+        collateral_preimage = encode(
+            ["address", "bytes32"],
+            [collateral_token, borrow_hash],
+        )
+        collateral_hash = "0x" + Web3.keccak(collateral_preimage).hex()
+        lookup = {
+            "0x" + protocol_hash.hex(): "0x" + protocol_preimage.hex(),
+            "0x" + borrow_hash.hex(): "0x" + borrow_preimage.hex(),
+            collateral_hash: "0x" + collateral_preimage.hex(),
+        }
+        expected_path = (
+            f"collateralId[2][{borrow_token}][{collateral_token}]"
+        )
+
+        match = SlotPathResolver().try_match_slot_from_preimage(
+            collateral_hash,
+            lookup[collateral_hash],
+            layout,
+            lookup,
+        )
+        changes = TransactionAnalysisService(
+            object(),
+            Settings(),
+            TypeDecoder(),
+        )._decode_changes(
+            [
+                (
+                    collateral_hash,
+                    f"0x{0:064x}",
+                    f"0x{1:064x}",
+                    1,
+                    1,
+                )
+            ],
+            layout,
+            lookup,
+        )
+        response = _group_changes_by_slot(changes, layout)[0]
+
+        self.assertEqual(match["path"], expected_path)
+        self.assertEqual(match["key"], f"2, {borrow_token}, {collateral_token}")
+        self.assertEqual(changes[0].variable_path, expected_path)
+        self.assertEqual(
+            [(param.type, param.value) for param in response.params],
+            [
+                ("uint256 protocolId", "2"),
+                (
+                    "address borrowToken",
+                    Web3.to_checksum_address(borrow_token),
+                ),
+                (
+                    "address collateralToken",
+                    Web3.to_checksum_address(collateral_token),
+                ),
+            ],
+        )
+
+    def test_unknown_declared_mapping_key_type_preserves_raw_word(self):
+        raw_word = f"0x{2:064x}"
+
+        self.assertEqual(
+            SlotPathResolver().decode_mapping_key(
+                raw_word,
+                "t_source_unknown",
+            ),
+            raw_word,
+        )
 
     def test_nested_mapping_array_uses_step_time_length_evidence(self):
         address_type = StorageType(

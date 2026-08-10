@@ -286,7 +286,11 @@ class SlotPathResolver:
             var_type = layout.get_type(variable.type_id)
             logger.debug(f"  Preimage match: base_slot={base_slot_int}, var={variable.name}, var_type_encoding={var_type.encoding if var_type else None}")
             if var_type and var_type.encoding == "mapping":
-                decoded_key = self.decode_mapping_key(key_hex, var_type.key_type)
+                key_type = self._mapping_key_type_label(
+                    layout,
+                    var_type.key_type,
+                )
+                decoded_key = self.decode_mapping_key(key_hex, key_type)
                 final_value_type_id, decode_type = self.get_final_mapping_value_type(var_type, layout)
                 remaining_mapping_type = (
                     layout.get_type(var_type.value_type)
@@ -302,7 +306,7 @@ class SlotPathResolver:
                     "key": decoded_key,
                     "path": f"{variable.name}[{decoded_key}]",
                     "encoding": var_type.encoding,
-                    "key_type": var_type.key_type,
+                    "key_type": key_type,
                     "value_type": final_value_type_id,
                     "decode_type": decode_type,
                     "remaining_mapping_type": remaining_mapping_type,
@@ -330,9 +334,17 @@ class SlotPathResolver:
                 outer_variable = outer_match.get("variable")
                 outer_var_type = layout.get_type(outer_variable.type_id) if outer_variable else None
                 current_mapping_type = outer_match.get("remaining_mapping_type")
+                current_key_type = self._mapping_key_type_label(
+                    layout,
+                    (
+                        current_mapping_type.key_type
+                        if current_mapping_type
+                        else None
+                    ),
+                )
                 decoded_key = self.decode_mapping_key(
                     nested_key_hex,
-                    current_mapping_type.key_type if current_mapping_type else None,
+                    current_key_type,
                 )
 
                 final_value_type_id = None
@@ -349,9 +361,13 @@ class SlotPathResolver:
                     "variable": outer_variable,
                     "base_slot": outer_match.get("base_slot"),
                     "key": f"{outer_key}, {decoded_key}",
-                    "path": f"{outer_variable.name}[{outer_key}][{decoded_key}]" if outer_variable else None,
+                    "path": (
+                        f"{outer_match['path']}[{decoded_key}]"
+                        if outer_match.get("path")
+                        else None
+                    ),
                     "encoding": "mapping",
-                    "key_type": outer_var_type.key_type if outer_var_type else None,
+                    "key_type": current_key_type,
                     "value_type": final_value_type_id,
                     "decode_type": decode_type,
                     "remaining_mapping_type": next_mapping_type,
@@ -379,9 +395,13 @@ class SlotPathResolver:
                 )
                 if not field_name or not field_type or field_type.encoding != "mapping":
                     continue
+                field_key_type = self._mapping_key_type_label(
+                    layout,
+                    field_type.key_type,
+                )
                 nested_key = self.decode_mapping_key(
                     candidate_key_hex,
-                    field_type.key_type,
+                    field_key_type,
                 )
                 base_path = base_match.get("path") or (
                     f"{base_variable.name}[{base_key}]" if base_variable else None
@@ -402,7 +422,7 @@ class SlotPathResolver:
                         else None
                     ),
                     "encoding": "mapping",
-                    "key_type": field_type.key_type,
+                    "key_type": field_key_type,
                     "value_type": field_type.value_type,
                     "decode_type": value_type,
                     "remaining_mapping_type": (
@@ -678,7 +698,10 @@ class SlotPathResolver:
                         continue
                     key = self.decode_mapping_key(
                         "0x" + cleaned[64:128],
-                        mapping_type.key_type,
+                        self._mapping_key_type_label(
+                            layout,
+                            mapping_type.key_type,
+                        ),
                     )
                     exact[output] = {
                         **parent,
@@ -1160,7 +1183,10 @@ class SlotPathResolver:
                 variable = outer_match.get("variable")
                 var_type = outer_match.get("remaining_mapping_type")
 
-            key_type = (var_type.key_type or "") if var_type else ""
+            key_type = self._mapping_key_type_label(
+                layout,
+                var_type.key_type if var_type else None,
+            ) or ""
             normalized_key_type = key_type.lower()
             if "string" not in normalized_key_type and not re.search(
                 r"(?:^|t_)bytes(?:_storage)?$", normalized_key_type
@@ -1230,6 +1256,7 @@ class SlotPathResolver:
                 return str(int.from_bytes(raw, "big"))
             if "int" in normalized:
                 return str(int.from_bytes(raw, "big", signed=True))
+            return key_hex
 
         if len(key_bytes) == 64 and key_bytes[:24] == "0" * 24:
             return "0x" + key_bytes[24:]
@@ -1239,6 +1266,17 @@ class SlotPathResolver:
             return str(key_int)
 
         return key_hex
+
+    @staticmethod
+    def _mapping_key_type_label(
+        layout: StorageLayout,
+        key_type: str | None,
+    ) -> str | None:
+        """Resolve an internal key ID to its declared semantic label."""
+        if not key_type:
+            return None
+        type_info = layout.get_type(key_type)
+        return type_info.label if type_info and type_info.label else key_type
 
     def _normalize_slot(self, slot: str) -> str:
         """Normalize slot to 66-char hex (0x + 64 chars)."""

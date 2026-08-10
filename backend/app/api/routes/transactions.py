@@ -89,7 +89,13 @@ def _get_mapping_key_types(
 
     while var_type and var_type.encoding == "mapping":
         if var_type.key_type:
-            key_types.append(strip_type_prefix(var_type.key_type))
+            key_type = layout.get_type(var_type.key_type)
+            label = (
+                key_type.label
+                if key_type and key_type.label
+                else var_type.key_type
+            )
+            key_types.append(clean_type_label(label))
         if var_type.value_type:
             var_type = layout.get_type(var_type.value_type)
         else:
