@@ -160,45 +160,10 @@ class ContractResolver:
             else None
         )
 
-        if (
-            self.use_binding_cache
-            and self.contract_repo
-            and block_number is not None
-        ):
-            historical = await self.contract_repo.get_at_block(
-                chain_id, address, block_number
-            )
-            if (
-                historical
-                and self._cache_matches_code_hash(historical, code_hash)
-                and self._cache_matches_proxy(
-                    historical,
-                    proxy_info,
-                    follow_proxy=follow_proxy,
-                )
-                ):
-                metadata = self.contract_repo.to_metadata(historical)
-                if self._cached_layout_is_usable(metadata):
-                    return metadata
-
-        if self.use_binding_cache and self.contract_repo and block_number is None:
-            cached = await self.contract_repo.get(chain_id, address)
-            if (
-                cached
-                and self._cache_matches_code_hash(cached, code_hash)
-                and self._cache_matches_proxy(
-                    cached,
-                    proxy_info,
-                    follow_proxy=follow_proxy,
-                )
-            ):
-                logger.debug(f"Cache hit for {address} on chain {chain_id}")
-                metadata = self.contract_repo.to_metadata(cached)
-                if self._cached_layout_is_usable(metadata):
-                    return metadata
-
         # Source data is keyed by the runtime code that is actually verified,
-        # not by the address whose storage is being interpreted.
+        # not by the address whose storage is being interpreted. Resolve that
+        # identity before consulting binding caches so cached layouts can be
+        # recomposed with their separately persisted source payload.
         code_address = address
         verification_bytecode = bytecode
         if proxy_info:
@@ -226,6 +191,53 @@ class ContractResolver:
                 )
                 return result
         verification_code_hash = Web3.keccak(verification_bytecode).hex()
+
+        if (
+            self.use_binding_cache
+            and self.contract_repo
+            and block_number is not None
+        ):
+            historical = await self.contract_repo.get_at_block(
+                chain_id, address, block_number
+            )
+            if (
+                historical
+                and self._cache_matches_code_hash(historical, code_hash)
+                and self._cache_matches_proxy(
+                    historical,
+                    proxy_info,
+                    follow_proxy=follow_proxy,
+                )
+                ):
+                metadata = self.contract_repo.to_metadata(historical)
+                if self._cached_layout_is_usable(metadata):
+                    return await self._with_cached_sources(
+                        metadata,
+                        chain_id=chain_id,
+                        code_address=code_address,
+                        code_hash=verification_code_hash,
+                    )
+
+        if self.use_binding_cache and self.contract_repo and block_number is None:
+            cached = await self.contract_repo.get(chain_id, address)
+            if (
+                cached
+                and self._cache_matches_code_hash(cached, code_hash)
+                and self._cache_matches_proxy(
+                    cached,
+                    proxy_info,
+                    follow_proxy=follow_proxy,
+                )
+            ):
+                logger.debug(f"Cache hit for {address} on chain {chain_id}")
+                metadata = self.contract_repo.to_metadata(cached)
+                if self._cached_layout_is_usable(metadata):
+                    return await self._with_cached_sources(
+                        metadata,
+                        chain_id=chain_id,
+                        code_address=code_address,
+                        code_hash=verification_code_hash,
+                    )
 
         parsed_layout = None
         compiler_artifact = None
@@ -857,6 +869,36 @@ class ContractResolver:
             not policy.compiler_layout_supported
             or bool(metadata.compiler_artifact_fingerprint)
         )
+
+    async def _with_cached_sources(
+        self,
+        metadata: ContractMetadata,
+        *,
+        chain_id: int,
+        code_address: str,
+        code_hash: str,
+    ) -> ContractMetadata:
+        """Recompose a cached layout binding with its source-cache payload."""
+        source_address = metadata.layout_source_address or code_address
+        try:
+            verification = await self.verification_service.resolve(
+                chain_id,
+                source_address,
+                code_hash,
+                self.source_cache_repo,
+            )
+        except Exception:
+            logger.warning(
+                "Cached source hydration failed for %s",
+                source_address,
+            )
+            return metadata
+        if verification is None:
+            return metadata
+        metadata.compilation_target = verification.compilation_target
+        metadata.sources = verification.sources
+        metadata.compiler_settings = verification.compiler_settings
+        return metadata
 
     @staticmethod
     def _cache_matches_code_hash(row, code_hash: str) -> bool:

@@ -1455,7 +1455,7 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    async def test_historical_resolution_uses_block_specific_cache(self):
+    async def test_historical_binding_rehydrates_block_specific_sources(self):
         expected = SimpleNamespace(
             code_hash=Web3.keccak(b"\x60\x00").hex(),
             is_verified=True,
@@ -1520,6 +1520,16 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
         metadata = await resolver.resolve(1, ADDRESS, block_number=123)
         self.assertEqual(repo.lookup[2], 123)
         self.assertEqual(metadata.storage_layout.contract_name, "Cached")
+        self.assertEqual(
+            metadata.sources,
+            {"C.sol": "contract AlreadyLaidOut {}"},
+        )
+        resolver.verification_service.resolve.assert_awaited_once_with(
+            1,
+            Web3.to_checksum_address(ADDRESS),
+            Web3.keccak(b"\x60\x00").hex(),
+            resolver.source_cache_repo,
+        )
 
 if __name__ == "__main__":
     unittest.main()
