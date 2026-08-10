@@ -831,6 +831,7 @@ class SlotPathResolver:
         slot_int: int,
         dynamic_bytes_index: dict[int, StorageVariable],
         encoded_length: Callable[[int], int | None] | None = None,
+        following_encoded_length: Callable[[int], int | None] | None = None,
     ) -> Optional[dict]:
         """Match a long bytes/string word within its proven step-time bounds."""
         for data_start, var in dynamic_bytes_index.items():
@@ -839,21 +840,28 @@ class SlotPathResolver:
                 continue
 
             encoded = encoded_length(var.slot) if encoded_length else None
+            part_count = self._dynamic_bytes_part_count(encoded)
+            if (
+                (part_count is None or offset_from_start >= part_count)
+                and following_encoded_length is not None
+            ):
+                following = following_encoded_length(var.slot)
+                following_count = self._dynamic_bytes_part_count(following)
+                if (
+                    following_count is not None
+                    and offset_from_start < following_count
+                ):
+                    encoded = following
+                    part_count = following_count
+
             if encoded is None:
                 # Retain the exact-root match when the length word was not
                 # observed. Continuation words require a proven bound.
                 if offset_from_start != 0:
                     continue
                 part_count = None
-            else:
-                # Short values live inline in the declaration slot and do not
-                # own hashed data words. Long values encode length * 2 + 1.
-                if encoded & 1 == 0:
-                    continue
-                byte_length = (encoded - 1) // 2
-                part_count = (byte_length + 31) // 32
-                if offset_from_start >= part_count:
-                    continue
+            elif part_count is None or offset_from_start >= part_count:
+                continue
 
             return {
                 "variable": var,
@@ -864,6 +872,14 @@ class SlotPathResolver:
                 "encoding": "bytes",
             }
         return None
+
+    @staticmethod
+    def _dynamic_bytes_part_count(encoded_length: int | None) -> int | None:
+        """Return the proven long-value word count for one Solidity header."""
+        if encoded_length is None or encoded_length & 1 == 0:
+            return None
+        byte_length = (encoded_length - 1) // 2
+        return (byte_length + 31) // 32
 
     def try_match_dynamic_array_slot(
         self,

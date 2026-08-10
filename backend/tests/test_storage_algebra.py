@@ -1069,6 +1069,126 @@ class DynamicBytesResolutionTests(unittest.TestCase):
         self.assertTrue(all(change.variable is None for change in mixed))
         self.assertTrue(all(change.variable_path is None for change in mixed))
 
+    def test_long_string_data_uses_the_next_durable_header_commit(self):
+        string_type = StorageType(
+            id="t_string_storage",
+            label="string",
+            kind="value",
+            encoding="bytes",
+            num_bytes=32,
+        )
+        variable = StorageVariable(
+            name="name",
+            slot=19,
+            offset=0,
+            size=32,
+            type_id=string_type.id,
+            label=string_type.label,
+        )
+        layout = StorageLayout(
+            contract_name="ResupplyPair",
+            variables=[variable],
+            types={string_type.id: string_type},
+        )
+        data_start = int.from_bytes(
+            Web3.keccak(encode(["uint256"], [variable.slot])),
+            "big",
+        )
+        value = b"Resupply Pair (CurveLendV2: crvUSD/syrupUSDC) - 1"
+        words = [
+            value[offset:offset + 32].ljust(32, b"\x00")
+            for offset in range(0, len(value), 32)
+        ]
+        encoded_length = len(value) * 2 + 1
+        tracer = TransactionAnalysisService(object(), Settings(), TypeDecoder())
+
+        changes = tracer._decode_changes(
+            [
+                (
+                    f"0x{data_start + index:064x}",
+                    "0x" + "00" * 32,
+                    "0x" + word.hex(),
+                    index + 1,
+                    step,
+                )
+                for index, (word, step) in enumerate(
+                    zip(words, (27032, 27070), strict=True)
+                )
+            ],
+            layout,
+            storage_timelines={
+                variable.slot: (0, ((27084, encoded_length),)),
+            },
+        )
+
+        self.assertEqual(
+            [change.variable_path for change in changes],
+            ["name", "name"],
+        )
+        self.assertEqual(
+            [
+                (change.data_part_index, change.data_part_count)
+                for change in changes
+            ],
+            [(0, 2), (1, 2)],
+        )
+        self.assertEqual(
+            "".join(change.new_decoded.decoded for change in changes),
+            value.decode(),
+        )
+
+    def test_long_string_lookahead_does_not_skip_the_next_header_write(self):
+        string_type = StorageType(
+            id="t_string_storage",
+            label="string",
+            kind="value",
+            encoding="bytes",
+            num_bytes=32,
+        )
+        variable = StorageVariable(
+            "name",
+            19,
+            0,
+            32,
+            string_type.id,
+            string_type.label,
+        )
+        layout = StorageLayout(
+            "ResupplyPair",
+            [variable],
+            {string_type.id: string_type},
+        )
+        data_start = int.from_bytes(
+            Web3.keccak(encode(["uint256"], [variable.slot])),
+            "big",
+        )
+        tracer = TransactionAnalysisService(object(), Settings(), TypeDecoder())
+
+        changes = tracer._decode_changes(
+            [
+                (
+                    f"0x{data_start + 1:064x}",
+                    "0x" + "00" * 32,
+                    "0x" + "11" * 32,
+                    1,
+                    20,
+                )
+            ],
+            layout,
+            storage_timelines={
+                variable.slot: (
+                    0,
+                    (
+                        (25, 3),
+                        (30, 49 * 2 + 1),
+                    ),
+                ),
+            },
+        )
+
+        self.assertIsNone(changes[0].variable)
+        self.assertIsNone(changes[0].variable_path)
+
 
 class PackedArrayLayoutTests(unittest.TestCase):
     def setUp(self):

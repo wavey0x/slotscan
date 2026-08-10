@@ -598,6 +598,21 @@ class TransactionAnalysisService:
         return value
 
     @staticmethod
+    def _next_storage_value_after_step(
+        timelines: dict[int, tuple[int | None, tuple[tuple[int, int], ...]]],
+        slot: int,
+        step: int,
+    ) -> int | None:
+        """Return the first durable value written to a slot after one step."""
+        timeline = timelines.get(slot)
+        if timeline is None:
+            return None
+        for write_step, write_value in timeline[1]:
+            if write_step > step:
+                return write_value
+        return None
+
+    @staticmethod
     def _array_match_covers_change(
         match: dict | None,
         old_value: str | None,
@@ -771,6 +786,16 @@ class TransactionAnalysisService:
                     step,
                 )
 
+            def next_length_after_step(
+                length_slot: int,
+                step: int = exec_index,
+            ) -> int | None:
+                return self._next_storage_value_after_step(
+                    storage_timelines,
+                    length_slot,
+                    step,
+                )
+
             match = (
                 self.slot_resolver.try_match_dynamic_array_slot(
                     slot_int,
@@ -800,6 +825,7 @@ class TransactionAnalysisService:
                     slot_int,
                     dynamic_bytes_index,
                     length_at_step,
+                    next_length_after_step,
                 )
                 if dynamic_bytes_index
                 else None
@@ -852,6 +878,13 @@ class TransactionAnalysisService:
 
                 def length_at_step(length_slot: int) -> int | None:
                     return self._storage_value_at_step(
+                        storage_timelines,
+                        length_slot,
+                        exec_index,
+                    )
+
+                def next_length_after_step(length_slot: int) -> int | None:
+                    return self._next_storage_value_after_step(
                         storage_timelines,
                         length_slot,
                         exec_index,
@@ -1261,6 +1294,7 @@ class TransactionAnalysisService:
                                     slot_int,
                                     dynamic_bytes_index,
                                     length_at_step,
+                                    next_length_after_step,
                                 )
                                 if bytes_match:
                                     stats["dynamic_bytes"] += 1
