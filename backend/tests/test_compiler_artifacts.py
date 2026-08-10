@@ -1,6 +1,8 @@
 import asyncio
+import json
 import unittest
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from app.config import Settings
@@ -275,8 +277,8 @@ class CompilerArtifactCacheTests(unittest.IsolatedAsyncioTestCase):
             "B.vy": "# @version 0.3.10\nb: public(uint256)\n",
         }
 
-        async def compile_target(*, filename, **_kwargs):
-            name = filename.removesuffix(".vy").lower()
+        async def compile_target(*, entry_source, **_kwargs):
+            name = entry_source.removesuffix(".vy").lower()
             return (
                 {name: {"type": "uint256", "slot": 0}},
                 "0x5f5ffd",
@@ -430,6 +432,111 @@ class VyperTargetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             artifact.standard_input["settings"]["outputSelection"],
             ["layout", "bytecode_runtime"],
+        )
+
+    async def test_vyper_runner_stages_complete_source_tree(self):
+        parser = LayoutParser()
+        stdout = (
+            json.dumps(
+                {
+                    "storage_layout": {
+                        "balanceOf": {
+                            "type": "HashMap[address, uint256]",
+                            "slot": 7,
+                            "n_slots": 1,
+                        }
+                    }
+                }
+            ).encode()
+            + b"\n0x5f5ffd\n"
+        )
+        process = _FakeProcess(stdout)
+        sources = {
+            "src/Vault.vy": "from . import token\ninitializes: token\n",
+            "src/token.vy": "balanceOf: HashMap[address, uint256]\n",
+            "src/IERC20.vyi": "interface IERC20:\n    pass\n",
+        }
+
+        async def create_process(*args, **_kwargs):
+            root = Path(args[args.index("-p") + 1])
+            entry = Path(args[-1])
+            self.assertEqual(entry, root / "src/Vault.vy")
+            self.assertEqual(
+                (root / "src/token.vy").read_text(encoding="utf-8"),
+                sources["src/token.vy"],
+            )
+            self.assertEqual(
+                (root / "src/IERC20.vyi").read_text(encoding="utf-8"),
+                sources["src/IERC20.vyi"],
+            )
+            return process
+
+        with patch(
+            "app.services.layout.asyncio.create_subprocess_exec",
+            new=AsyncMock(side_effect=create_process),
+        ):
+            layout, runtime = await parser._run_vyper_outputs(
+                "/usr/bin/vyper",
+                sources,
+                "src/Vault.vy",
+            )
+
+        self.assertEqual(layout["balanceOf"]["slot"], 7)
+        self.assertEqual(runtime, "0x5f5ffd")
+
+    async def test_vyper_runner_rejects_source_path_escape(self):
+        parser = LayoutParser()
+
+        with self.assertRaisesRegex(CompilationError, "Invalid Vyper source path"):
+            await parser._run_vyper_outputs(
+                "/usr/bin/vyper",
+                {"../Vault.vy": "value: uint256\n"},
+                "../Vault.vy",
+            )
+
+    async def test_vyper_04_compiler_layout_is_not_replaced_by_source_inference(self):
+        parser = LayoutParser()
+        parser._compile_vyper_with_layout = AsyncMock(
+            return_value=(
+                {
+                    "allowance": {
+                        "type": "HashMap[address, HashMap[address, uint256]]",
+                        "slot": 12,
+                        "n_slots": 1,
+                    },
+                    "totalSupply": {
+                        "type": "uint256",
+                        "slot": 14,
+                        "n_slots": 1,
+                    },
+                },
+                "0x5f5ffd",
+            )
+        )
+
+        layout, _ = await parser.parse_vyper_with_artifact(
+            "Vault",
+            {
+                "src/Vault.vy": (
+                    "# pragma version 0.4.3\n"
+                    "allowance: reentrant(HashMap[address, HashMap[address, uint256]])\n"
+                    "totalSupply: reentrant(uint256)\n"
+                ),
+                "src/token.vy": "moduleValue: uint256\n",
+            },
+            "vyper:0.4.3",
+            entry_source="src/Vault.vy",
+        )
+
+        self.assertEqual(
+            [(variable.name, variable.slot) for variable in layout.variables],
+            [("allowance", 12), ("totalSupply", 14)],
+        )
+        allowance = layout.get_type(layout.variables[0].type_id)
+        self.assertEqual(allowance.key_type, "address")
+        self.assertEqual(
+            allowance.value_type,
+            "HashMap[address, uint256]",
         )
 
 

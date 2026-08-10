@@ -6,6 +6,7 @@ from web3 import Web3
 
 from app.config import Settings
 from app.models.domain import (
+    ContractMetadata,
     StorageLayout,
     StorageType,
     StorageVariable,
@@ -73,6 +74,7 @@ class NamespaceParserTests(unittest.TestCase):
             "0.2.16": (SEQUENTIAL_STORAGE, LOCK_FRONT_PER_FUNCTION, True),
             "0.3.0": (SEQUENTIAL_STORAGE, LOCK_FRONT_PER_FUNCTION, True),
             "0.3.1": (SEQUENTIAL_STORAGE, LOCK_FRONT_PER_KEY, True),
+            "0.4.3": (SEQUENTIAL_STORAGE, LOCK_FRONT_PER_KEY, True),
         }
         for version, expected in cases.items():
             with self.subTest(version=version):
@@ -1157,6 +1159,78 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(metadata.storage_layout.variables[0].provenance, "compiler_layout")
         self.assertEqual(metadata.storage_layout.storage_scheme, SEQUENTIAL_STORAGE)
 
+    async def test_compiler_supported_vyper_failure_stays_unresolved(self):
+        class VyperResolver(_Resolver):
+            async def _fetch_verification(self, chain_id, address):
+                return VerificationResult(
+                    source="etherscan",
+                    match_type="exact_match",
+                    name="Vault",
+                    compiler_version="vyper:0.4.3",
+                    compilation_target={"src/Vault.vy": "Vault"},
+                    sources={
+                        "src/Vault.vy": (
+                            "# pragma version 0.4.3\n"
+                            "initializes: token\n"
+                        ),
+                        "src/token.vy": "totalSupply: uint256\n",
+                    },
+                    language="Vyper",
+                )
+
+        parser = SimpleNamespace(
+            parse_vyper_with_artifact=AsyncMock(
+                side_effect=RuntimeError("exact compiler unavailable")
+            )
+        )
+        resolver = VyperResolver(object(), Settings(), layout_parser=parser)
+        resolver.namespace_parser.parse_vyper_storage = Mock(
+            side_effect=AssertionError("compiler-supported Vyper must fail closed")
+        )
+
+        metadata = await resolver.resolve(1, ADDRESS)
+
+        self.assertIsNone(metadata.storage_layout)
+        resolver.namespace_parser.parse_vyper_storage.assert_not_called()
+
+    def test_compiler_supported_vyper_cache_requires_compiler_artifact(self):
+        value_type = StorageType("uint256", "uint256", "value", "inplace", 32)
+        layout = StorageLayout(
+            contract_name="Vault",
+            variables=[
+                StorageVariable(
+                    "totalSupply",
+                    14,
+                    0,
+                    32,
+                    value_type.id,
+                    value_type.label,
+                    provenance="source_inference",
+                    confidence="inferred",
+                )
+            ],
+            types={value_type.id: value_type},
+            language="Vyper",
+            compiler_version="vyper:0.4.3",
+            storage_scheme=SEQUENTIAL_STORAGE,
+        )
+
+        self.assertFalse(
+            ContractResolver._cached_layout_is_usable(
+                ContractMetadata(chain_id=1, address=ADDRESS, storage_layout=layout)
+            )
+        )
+        self.assertTrue(
+            ContractResolver._cached_layout_is_usable(
+                ContractMetadata(
+                    chain_id=1,
+                    address=ADDRESS,
+                    storage_layout=layout,
+                    compiler_artifact_fingerprint="ab" * 32,
+                )
+            )
+        )
+
     async def test_verified_sources_without_layout_are_not_compiled_by_resolver(self):
         class SourceOnlyResolver(_Resolver):
             async def _fetch_verification(self, chain_id, address):
@@ -1420,8 +1494,8 @@ class ResolverRegressionTests(unittest.IsolatedAsyncioTestCase):
                     }
                 },
                 "language": "Vyper",
-                "compiler_version": "0.3.7",
-                "storage_scheme": "vyper_sequential",
+                "compiler_version": "0.2.4",
+                "storage_scheme": "vyper_legacy_hashed",
             },
         )
 

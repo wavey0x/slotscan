@@ -20,6 +20,52 @@ logger = logging.getLogger(__name__)
 SourceIdentity = tuple[int, str, str]
 
 
+def _vyper_compilation_target(
+    contract_name: str | None,
+    compiler_settings: dict | None,
+    sources: dict[str, str] | None,
+) -> dict[str, str] | None:
+    """Return the single Vyper entry source proven by verifier metadata."""
+    if not isinstance(compiler_settings, dict) or not sources:
+        return None
+
+    target = compiler_settings.get("compilationTarget")
+    if isinstance(target, str):
+        if target in sources and target.endswith(".vy"):
+            return {target: contract_name or target.rsplit("/", 1)[-1][:-3]}
+    elif isinstance(target, dict) and len(target) == 1:
+        filename, target_name = next(iter(target.items()))
+        if (
+            isinstance(filename, str)
+            and filename in sources
+            and filename.endswith(".vy")
+        ):
+            return {
+                filename: (
+                    str(target_name)
+                    if target_name
+                    else contract_name or filename.rsplit("/", 1)[-1][:-3]
+                )
+            }
+
+    output_selection = compiler_settings.get("outputSelection")
+    if not isinstance(output_selection, dict):
+        return None
+    candidates = [
+        filename
+        for filename in output_selection
+        if (
+            isinstance(filename, str)
+            and filename in sources
+            and filename.endswith(".vy")
+        )
+    ]
+    if len(candidates) != 1:
+        return None
+    filename = candidates[0]
+    return {filename: contract_name or filename.rsplit("/", 1)[-1][:-3]}
+
+
 class VerificationService:
     """Resolve normalized provider data once per exact runtime-code identity."""
 
@@ -148,7 +194,14 @@ class VerificationService:
                     "code_hash": code_hash,
                 },
             )
-            return VerificationResult.from_dict(row.result), True
+            result = VerificationResult.from_dict(row.result)
+            if result.language == "Vyper" and not result.compilation_target:
+                result.compilation_target = _vyper_compilation_target(
+                    result.name,
+                    result.compiler_settings,
+                    result.sources,
+                )
+            return result, True
         if row.status == "not_found" and self._negative_is_fresh(row.checked_at):
             logger.info(
                 "verification cache hit",
@@ -412,11 +465,21 @@ class VerificationService:
         if not is_vyper and any(filename.endswith(".vy") for filename in sources):
             language = "Vyper"
 
+        compilation_target = (
+            _vyper_compilation_target(
+                contract_name,
+                metadata_settings,
+                sources,
+            )
+            if language == "Vyper"
+            else None
+        )
+
         return VerificationResult(
             source="etherscan",
             match_type=match_type,
             name=contract_name,
-            compilation_target=None,
+            compilation_target=compilation_target,
             compiler_version=compiler_version,
             compiler_settings=metadata_settings,
             sources=sources,

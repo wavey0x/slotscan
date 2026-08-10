@@ -27,7 +27,7 @@ ArrayStorageScheme = Literal[
 _UINT_PATTERN = re.compile(r"^t_uint(\d+)$")
 _INT_PATTERN = re.compile(r"^t_int(\d+)$")
 _BYTES_PATTERN = re.compile(r"^t_bytes(\d+)$")
-_HASHMAP_PATTERN = re.compile(r"^HashMap\[(.+),\s*(.+)\]$")
+_HASHMAP_PATTERN = re.compile(r"^HashMap\[(.+?),\s*(.+)\]$")
 _DYNARRAY_PATTERN = re.compile(r"^DynArray\[(.+),\s*(\d+)\]$")
 _STATIC_ARRAY_PATTERN = re.compile(r"^(.+)\[(\d+)\]$")
 _VYPER_UINT_PATTERN = re.compile(r"^uint(\d+)$")
@@ -42,6 +42,7 @@ _FIXTURE_BACKED_VYPER_VERSIONS = {
     (0, 2, 4),
     (0, 3, 7),
     (0, 3, 10),
+    (0, 4, 3),
 }
 
 

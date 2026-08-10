@@ -51,6 +51,7 @@ class MappingRuleTests(unittest.TestCase):
             ("0.2.4", "vyper_legacy_hashed"),
             ("0.3.7", "vyper_sequential"),
             ("0.3.10", "vyper_sequential"),
+            ("0.4.3", "vyper_sequential"),
         ):
             with self.subTest(compiler_version=compiler_version):
                 layout = _layout(

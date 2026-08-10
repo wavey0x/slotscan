@@ -176,10 +176,9 @@ class ContractResolver:
                     proxy_info,
                     follow_proxy=follow_proxy,
                 )
-            ):
+                ):
                 metadata = self.contract_repo.to_metadata(historical)
-                layout = metadata.storage_layout
-                if isinstance(layout, StorageLayout) and layout.variables:
+                if self._cached_layout_is_usable(metadata):
                     return metadata
 
         if self.use_binding_cache and self.contract_repo and block_number is None:
@@ -195,8 +194,7 @@ class ContractResolver:
             ):
                 logger.debug(f"Cache hit for {address} on chain {chain_id}")
                 metadata = self.contract_repo.to_metadata(cached)
-                layout = metadata.storage_layout
-                if isinstance(layout, StorageLayout) and layout.variables:
+                if self._cached_layout_is_usable(metadata):
                     return metadata
 
         # Source data is keyed by the runtime code that is actually verified,
@@ -427,15 +425,15 @@ class ContractResolver:
                         verification.compiler_version,
                         e,
                     )
-            try:
-                if not (parsed_layout and parsed_layout.variables):
+            elif not (parsed_layout and parsed_layout.variables):
+                try:
                     parsed_layout = self.namespace_parser.parse_vyper_storage(
                         verification.sources,
                         verification.name or "",
                         verification.compiler_version,
                     )
-            except Exception as e:
-                logger.warning(f"Failed to parse verified Vyper storage: {e}")
+                except Exception as e:
+                    logger.warning(f"Failed to parse verified Vyper storage: {e}")
 
         has_exact_compiler_layout = bool(
             compiler_artifact
@@ -844,6 +842,21 @@ class ContractResolver:
                     for reference in references
                 )
         return tuple(ranges)
+
+    @staticmethod
+    def _cached_layout_is_usable(metadata: ContractMetadata) -> bool:
+        layout = metadata.storage_layout
+        if not isinstance(layout, StorageLayout) or not layout.variables:
+            return False
+        if (layout.language or "").lower() != "vyper":
+            return True
+        policy = vyper_storage_policy(
+            layout.compiler_version or metadata.compiler_version
+        )
+        return (
+            not policy.compiler_layout_supported
+            or bool(metadata.compiler_artifact_fingerprint)
+        )
 
     @staticmethod
     def _cache_matches_code_hash(row, code_hash: str) -> bool:

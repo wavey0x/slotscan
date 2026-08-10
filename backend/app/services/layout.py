@@ -13,7 +13,7 @@ import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Optional, TypeVar
 
 import solcx
@@ -925,7 +925,6 @@ class LayoutParser:
             raise CompilationError(
                 f"Ambiguous Vyper entry source: {filenames}"
             )
-        main_content = vy_files[main_file]
         standard_input = {
             "language": "Vyper",
             "sources": {
@@ -959,6 +958,10 @@ class LayoutParser:
                 contract_name,
                 compiler_version=compiler_version,
             )
+
+            version = parse_vyper_version(compiler_version)
+            if version is not None and version >= (0, 4, 0):
+                return layout
 
             # Vyper's layout output provides authoritative slots but older output
             # versions expose incomplete type structure (and collapse duplicate
@@ -1018,8 +1021,8 @@ class LayoutParser:
 
         async def compile_artifact() -> RawCompilerArtifact:
             raw_layout, runtime_bytecode = await self._compile_vyper_with_layout(
-                source_content=main_content,
-                filename=main_file,
+                sources=sources,
+                entry_source=main_file,
                 version=compiler_version,
             )
             return self._make_artifact(
@@ -1048,8 +1051,8 @@ class LayoutParser:
 
     async def _compile_vyper_with_layout(
         self,
-        source_content: str,
-        filename: str,
+        sources: dict[str, str],
+        entry_source: str,
         version: str,
     ) -> tuple[dict, str]:
         """
@@ -1060,7 +1063,11 @@ class LayoutParser:
         """
         normalized_version = self._normalize_vyper_version(version)
 
-        if len(source_content.encode("utf-8")) > self.settings.max_compilation_input_bytes:
+        input_bytes = sum(
+            len(content.encode("utf-8"))
+            for content in sources.values()
+        )
+        if input_bytes > self.settings.max_compilation_input_bytes:
             raise CompilationError(
                 f"Compiler input exceeds {self.settings.max_compilation_input_bytes} bytes"
             )
@@ -1102,11 +1109,16 @@ class LayoutParser:
 
             from vvm.install import get_executable as get_vyper_executable
 
-            logger.info(f"Compiling Vyper {normalized_version} layout for {filename} using vvm")
+            logger.info(
+                "Compiling Vyper %s layout for %s using vvm",
+                normalized_version,
+                entry_source,
+            )
             async with self._compilation_semaphore:
                 outputs = await self._run_vyper_outputs(
                     str(get_vyper_executable(normalized_version)),
-                    source_content,
+                    sources,
+                    entry_source,
                 )
             logger.info(
                 "Vyper compilation returned %s layout variables",
@@ -1160,19 +1172,35 @@ class LayoutParser:
                 f"{normalized_version}, found {actual_label}"
             )
         async with self._compilation_semaphore:
-            return await self._run_vyper_outputs(executable, source_content)
+            return await self._run_vyper_outputs(
+                executable,
+                sources,
+                entry_source,
+            )
 
     async def _run_vyper_outputs(
         self,
         executable: str,
-        source_content: str,
+        sources: dict[str, str],
+        entry_source: str,
     ) -> tuple[dict, str]:
         with tempfile.TemporaryDirectory() as tmpdir:
-            source_path = Path(tmpdir) / "contract.vy"
-            source_path.write_text(source_content)
+            source_root = Path(tmpdir)
+            try:
+                for filename, content in sources.items():
+                    source_path = self._vyper_source_path(source_root, filename)
+                    source_path.parent.mkdir(parents=True, exist_ok=True)
+                    source_path.write_text(content, encoding="utf-8")
+                source_path = self._vyper_source_path(source_root, entry_source)
+            except OSError as exc:
+                raise CompilationError(
+                    "Failed to stage Vyper source tree"
+                ) from exc
             memory_limit = self.settings.compiler_memory_limit_mb * 1024 * 1024
             process = await asyncio.create_subprocess_exec(
                 executable,
+                "-p",
+                str(source_root),
                 "-f",
                 "layout,bytecode_runtime",
                 str(source_path),
@@ -1258,6 +1286,24 @@ class LayoutParser:
             if not isinstance(layout, dict):
                 raise CompilationError("Unexpected Vyper layout format")
             return layout, runtime_bytecode
+
+    @staticmethod
+    def _vyper_source_path(source_root: Path, filename: str) -> Path:
+        """Resolve one provider path inside an isolated Vyper source root."""
+        if (
+            not filename
+            or "\\" in filename
+            or "\x00" in filename
+            or any(part in {"", ".", ".."} for part in filename.split("/"))
+        ):
+            raise CompilationError(f"Invalid Vyper source path: {filename!r}")
+        relative = PurePosixPath(filename)
+        if relative.is_absolute():
+            raise CompilationError(f"Invalid Vyper source path: {filename!r}")
+        resolved = source_root.joinpath(*relative.parts)
+        if not resolved.is_relative_to(source_root):
+            raise CompilationError(f"Invalid Vyper source path: {filename!r}")
+        return resolved
 
     @staticmethod
     async def _wait_for_compiler_output(
@@ -1363,7 +1409,7 @@ class LayoutParser:
         """Build a StorageType for a Vyper type string."""
         # HashMap[key_type, value_type]
         if type_str.startswith("HashMap["):
-            match = re.match(r'^HashMap\[(.+),\s*(.+)\]$', type_str)
+            match = re.match(r'^HashMap\[(.+?),\s*(.+)\]$', type_str)
             if match:
                 return StorageType(
                     id=type_str,
@@ -1374,6 +1420,15 @@ class LayoutParser:
                     value_type=match.group(2).strip(),
                     num_bytes=32,
                 )
+
+        if re.fullmatch(r"(?:String|Bytes)\[\d+\]", type_str):
+            return StorageType(
+                id=type_str,
+                label=type_str,
+                kind="value",
+                encoding="bytes",
+                num_bytes=n_slots * 32,
+            )
 
         # DynArray[element_type, max_len]
         if type_str.startswith("DynArray["):

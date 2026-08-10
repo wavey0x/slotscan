@@ -389,6 +389,68 @@ class VerificationServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("evmVersion", result.compiler_settings)
         client.stream.assert_called_once()
 
+    def test_etherscan_vyper_output_selection_identifies_entry_source(self):
+        payload = {
+            "language": "Vyper",
+            "sources": {
+                "src/Vault.vy": {"content": "initializes: token\n"},
+                "src/token.vy": {"content": "balanceOf: HashMap[address, uint256]\n"},
+                "src/IERC20.vyi": {"content": "interface IERC20:\n    pass\n"},
+            },
+            "settings": {
+                "outputSelection": {
+                    "src/Vault.vy": ["evm.bytecode", "abi"],
+                }
+            },
+        }
+
+        result = VerificationService._parse_etherscan_response(
+            {
+                "SourceCode": f"{{{json.dumps(payload)}}}",
+                "ContractName": "Vault",
+                "CompilerVersion": "vyper:0.4.3",
+                "OptimizationUsed": "1",
+                "Runs": "200",
+            },
+            match_type="exact_match",
+        )
+
+        self.assertEqual(result.compilation_target, {"src/Vault.vy": "Vault"})
+        self.assertEqual(result.language, "Vyper")
+
+    async def test_cached_vyper_metadata_recovers_explicit_entry_source(self):
+        repo = _MemorySourceCache()
+        sources = {
+            "src/Vault.vy": "initializes: token\n",
+            "src/token.vy": "balanceOf: HashMap[address, uint256]\n",
+        }
+        cached = VerificationResult(
+            source="etherscan",
+            match_type="exact_match",
+            name="Vault",
+            compilation_target=None,
+            compiler_version="vyper:0.4.3",
+            compiler_settings={
+                "outputSelection": {"src/Vault.vy": ["evm.bytecode"]}
+            },
+            sources=sources,
+            language="Vyper",
+        )
+        repo.rows[(1, ADDRESS, HASH_A)] = SimpleNamespace(
+            status="verified",
+            result=cached.to_dict(),
+            checked_at=datetime.utcnow(),
+        )
+        service = _service()
+        service._fetch_verification = AsyncMock(
+            side_effect=AssertionError("verified entries do not expire")
+        )
+
+        result = await service.resolve(1, ADDRESS, HASH_A, repo)
+
+        self.assertEqual(result.compilation_target, {"src/Vault.vy": "Vault"})
+        service._fetch_verification.assert_not_awaited()
+
     async def test_verification_response_limit_counts_decoded_bytes(self):
         body = json.dumps(
             {
