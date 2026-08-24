@@ -65,6 +65,9 @@ async function fetchAPI<T>(url: string, init?: RequestInit): Promise<T> {
     if (isAbort) {
       throw new APIError('Request timed out', 'TIMEOUT');
     }
+    if (err instanceof TypeError) {
+      throw new APIError('Unable to reach the SlotScan API', 'NETWORK_ERROR');
+    }
     throw err;
   }
 }

@@ -2,8 +2,10 @@ import json
 import unittest
 from unittest.mock import patch
 
+import httpx
+
 from app.config import Settings
-from app.main import create_app
+from app.main import configure_cors, create_api
 
 
 class _Connection:
@@ -55,7 +57,7 @@ class HealthReadinessTests(unittest.IsolatedAsyncioTestCase):
             patch("app.main.get_web3_provider", return_value=provider),
             patch("app.main.engine", _Engine()),
         ):
-            response = await _health_endpoint(create_app())()
+            response = await _health_endpoint(create_api())()
         return response.status_code, json.loads(response.body)
 
     async def test_native_trace_capability_is_required_for_readiness(self):
@@ -79,6 +81,28 @@ class HealthReadinessTests(unittest.IsolatedAsyncioTestCase):
                 "native_trace": False,
             },
         )
+
+    async def test_unhandled_errors_include_cors_headers(self):
+        origin = "https://slotscan.info"
+        settings = Settings(_env_file=None, CORS_ORIGINS=origin)
+        with patch("app.main.get_settings", return_value=settings):
+            api = create_api()
+
+            @api.get("/test-error")
+            async def test_error():
+                raise RuntimeError("test failure")
+
+            app = configure_cors(api)
+
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            response = await client.get("/test-error", headers={"Origin": origin})
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.headers["access-control-allow-origin"], origin)
 
     async def test_native_transaction_not_found_proves_readiness(self):
         status, payload = await self._check_health(

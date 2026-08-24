@@ -1,11 +1,11 @@
 import unittest
 
-from app.main import create_app
+from app.main import create_api
 
 
 class ApiSurfaceTests(unittest.TestCase):
     def test_only_current_contract_storage_and_transaction_routes_are_exposed(self):
-        paths = set(create_app().openapi()["paths"])
+        paths = set(create_api().openapi()["paths"])
 
         self.assertIn(
             "/api/slotscan/contracts/{chain_id}/{address}/storage-view",
@@ -27,14 +27,14 @@ class ApiSurfaceTests(unittest.TestCase):
         self.assertTrue(paths.isdisjoint(obsolete))
 
     def test_transaction_response_has_no_internal_generation(self):
-        schema = create_app().openapi()["components"]["schemas"][
+        schema = create_api().openapi()["components"]["schemas"][
             "TransactionStorageHistoryResponse"
         ]
 
         self.assertNotIn("analysis_version", schema["properties"])
 
     def test_comparison_response_has_no_schema_version(self):
-        schema = create_app().openapi()["components"]["schemas"][
+        schema = create_api().openapi()["components"]["schemas"][
             "LayoutComparisonResponse"
         ]
 

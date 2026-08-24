@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchTransactionStorageHistory } from '../api';
+import { APIError, fetchTransactionStorageHistory } from '../api';
 import { hasRetryableContractResolution } from '../contract-resolution';
 
 const AUTO_RETRY_DELAY_MS = 750;
+const NETWORK_RETRY_DELAY_MS = 1000;
 
 export function useTransactionStorageHistory(chainId: string, txHash: string) {
   const queryKey = `${chainId}:${txHash.toLowerCase()}`;
@@ -20,7 +21,12 @@ export function useTransactionStorageHistory(chainId: string, txHash: string) {
     },
     gcTime: Infinity,
     enabled: !!chainId && !!txHash,
-    retry: false,
+    retry: (failureCount, error) => (
+      error instanceof APIError
+      && error.code === 'NETWORK_ERROR'
+      && failureCount < 1
+    ),
+    retryDelay: NETWORK_RETRY_DELAY_MS,
   });
 
   useEffect(() => {

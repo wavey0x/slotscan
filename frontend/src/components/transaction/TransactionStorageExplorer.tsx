@@ -194,7 +194,21 @@ export function TransactionStorageExplorer({ chain, txHash }: TransactionStorage
     return <Loading message="Analyzing transaction" subtitle="Large traces may take up to two minutes." />;
   }
   if (error) {
-    return <div className="border border-gray-300 p-5 text-red">Failed to analyze transaction: {(error as Error).message}</div>;
+    return (
+      <div className="border border-red/30 p-5">
+        <div className="text-sm text-red">Transaction request failed</div>
+        <p className="mt-1 text-xs text-gray-500">{(error as Error).message}</p>
+        <button
+          type="button"
+          onClick={() => { void refetch(); }}
+          disabled={isFetching}
+          aria-busy={isFetching}
+          className="mt-3 text-xs text-gray-900 underline underline-offset-2 disabled:text-gray-500"
+        >
+          {isFetching ? 'Retrying…' : 'Retry'}
+        </button>
+      </div>
+    );
   }
   if (!data) return null;
   if (data.trace_unavailable) {

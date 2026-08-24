@@ -82,6 +82,30 @@ function resolutionResponse(contracts: ReturnType<typeof resolutionContract>[]) 
   };
 }
 
+test('network failures retry once automatically and then offer a manual retry', async ({ page }) => {
+  const response = resolutionResponse([resolutionContract({})]);
+  let attempts = 0;
+  await page.route(`**/api/slotscan/tx/1/${RESOLUTION_TX}*`, async (route) => {
+    attempts += 1;
+    if (attempts <= 2) {
+      await route.abort('connectionfailed');
+      return;
+    }
+    await route.fulfill({ json: response });
+  });
+
+  await page.goto(`/1/tx/${RESOLUTION_TX}`);
+
+  await expect(page.getByText('Transaction request failed')).toBeVisible();
+  await expect(page.getByText('Unable to reach the SlotScan API')).toBeVisible();
+  await expect.poll(() => attempts).toBe(2);
+
+  await page.getByRole('button', { name: 'Retry' }).click();
+
+  await expect(page.getByTestId('transaction-report')).toBeVisible();
+  await expect.poll(() => attempts).toBe(3);
+});
+
 test('incomplete effective-code attribution explains the raw-slot fallback', async ({ page }) => {
   const response = resolutionResponse([
     resolutionContract({

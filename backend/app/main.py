@@ -48,8 +48,8 @@ async def lifespan(app: FastAPI):
     await engine.dispose()
 
 
-def create_app() -> FastAPI:
-    """Create and configure FastAPI application."""
+def create_api() -> FastAPI:
+    """Create and configure the FastAPI application."""
     settings = get_settings()
 
     app = FastAPI(
@@ -59,19 +59,6 @@ def create_app() -> FastAPI:
         docs_url="/api/slotscan/docs",
         redoc_url="/api/slotscan/redoc",
         lifespan=lifespan,
-    )
-
-    # CORS
-    cors_origins = settings.cors_origins_list
-    if settings.debug:
-        # In debug mode, allow all origins to avoid local dev CORS headaches
-        cors_origins = ["*"]
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
     )
 
     # Routes
@@ -117,6 +104,27 @@ def create_app() -> FastAPI:
         }
 
     return app
+
+
+def configure_cors(app: FastAPI) -> CORSMiddleware:
+    """Wrap the full application so error responses also receive CORS headers."""
+    settings = get_settings()
+    cors_origins = settings.cors_origins_list
+    if settings.debug:
+        # In debug mode, allow all origins to avoid local dev CORS headaches
+        cors_origins = ["*"]
+    return CORSMiddleware(
+        app=app,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+
+def create_app() -> CORSMiddleware:
+    """Create the complete ASGI application."""
+    return configure_cors(create_api())
 
 
 app = create_app()
