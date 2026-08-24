@@ -1,6 +1,6 @@
 [package]
 name = "reth-slotscan"
-version = "2.5.0-slotscan.1"
+version = "2.5.1-slotscan.1"
 edition = "2024"
 rust-version = "1.95"
 publish = false
@@ -11,10 +11,10 @@ alloy-rpc-types-trace = { version = "=2.3.0", default-features = false }
 async-trait = "0.1.89"
 clap = { version = "4", features = ["derive"] }
 jsonrpsee = { version = "=0.26.0", features = ["server", "macros"] }
-reth-ethereum = { git = "https://github.com/paradigmxyz/reth", rev = "189c0df32617afc488e0f091dbface1bd72cceb4", features = ["node"] }
-reth-ethereum-cli = { git = "https://github.com/paradigmxyz/reth", rev = "189c0df32617afc488e0f091dbface1bd72cceb4" }
-reth-node-core = { git = "https://github.com/paradigmxyz/reth", rev = "189c0df32617afc488e0f091dbface1bd72cceb4" }
-reth-rpc-eth-api = { git = "https://github.com/paradigmxyz/reth", rev = "189c0df32617afc488e0f091dbface1bd72cceb4" }
+reth-ethereum = { git = "https://github.com/paradigmxyz/reth", rev = "6dec1b96b625584956883c34ad0eafbe550480ac", features = ["node"] }
+reth-ethereum-cli = { git = "https://github.com/paradigmxyz/reth", rev = "6dec1b96b625584956883c34ad0eafbe550480ac" }
+reth-node-core = { git = "https://github.com/paradigmxyz/reth", rev = "6dec1b96b625584956883c34ad0eafbe550480ac" }
+reth-rpc-eth-api = { git = "https://github.com/paradigmxyz/reth", rev = "6dec1b96b625584956883c34ad0eafbe550480ac" }
 revm-inspectors = "=0.42.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
