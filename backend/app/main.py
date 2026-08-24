@@ -11,7 +11,6 @@ from sqlalchemy import text
 from app.api.routes import contracts, layout_comparisons, storage, transactions
 from app.config import get_settings
 from app.db import engine
-from app.models.database import Base
 from app.api.dependencies import get_verification_http_client, get_web3_provider
 from app.services.tracer.rpc_client import TraceRPCClient
 
@@ -31,13 +30,6 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     # Startup
     logger.info("Starting SlotScan API...")
-
-    # Create tables if they don't exist (dev mode)
-    settings = get_settings()
-    if settings.debug:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("Database tables created/verified")
 
     yield
 

@@ -1,20 +1,32 @@
 """Application configuration loaded from environment variables."""
 
 from functools import lru_cache
-from pydantic_settings import BaseSettings
+from pathlib import Path
+
 from pydantic import Field
+from pydantic_settings import BaseSettings
+from sqlalchemy.engine import URL
+
+
+BACKEND_DIRECTORY = Path(__file__).resolve().parents[1]
+
+
+def sqlite_database_url(database_path: Path) -> URL:
+    """Build the one supported database URL from a filesystem path."""
+    path = database_path
+    if not path.is_absolute():
+        path = BACKEND_DIRECTORY / path
+    return URL.create("sqlite+aiosqlite", database=str(path.resolve()))
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment."""
 
     # Database
-    database_url: str = Field(
-        default="postgresql+asyncpg://wavey@localhost:5432/slotscan_dev",
-        alias="DATABASE_URL"
+    database_path: Path = Field(
+        default=Path("slotscan.sqlite3"),
+        alias="DATABASE_PATH",
     )
-    db_pool_size: int = Field(default=5, alias="DB_POOL_SIZE")
-    db_max_overflow: int = Field(default=10, alias="DB_MAX_OVERFLOW")
     transaction_response_cache_bytes: int = Field(
         default=64 * 1024 * 1024,
         alias="TRANSACTION_RESPONSE_CACHE_BYTES",

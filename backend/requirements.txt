@@ -6,7 +6,7 @@ pydantic-settings>=2.1.0
 
 # Database
 sqlalchemy[asyncio]>=2.0.25
-asyncpg>=0.29.0
+aiosqlite>=0.20.0
 alembic>=1.13.0
 
 # Ethereum

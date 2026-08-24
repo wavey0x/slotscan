@@ -31,6 +31,8 @@ API presenters
 
 ## Persistence
 
+- One local SQLite database stores all reproducible caches. Connections use WAL
+  mode, `synchronous=NORMAL`, foreign keys, and a five-second busy timeout.
 - Trace artifacts are transaction-scoped and keyed by `(chain_id, tx_hash)`.
 - Contract projections are derived and are not duplicated in the trace cache.
 - Historical address/proxy/layout associations are keyed by block.

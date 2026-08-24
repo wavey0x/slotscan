@@ -8,10 +8,10 @@ from sqlalchemy import (
     DateTime,
     Index,
     Integer,
+    JSON,
     String,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import func
 
@@ -44,8 +44,8 @@ class Contract(Base):
     layout_provenance = Column(String(32))
     layout_source_address = Column(String(100))
 
-    # Storage layout (JSONB)
-    storage_layout = Column(JSONB)
+    # Storage layout
+    storage_layout = Column(JSON)
 
     # Timestamps
     created_at = Column(DateTime, server_default=func.now())
@@ -75,10 +75,10 @@ class TransactionTraceArtifact(Base):
     transaction_to = Column(String(42))
     created_contract = Column(String(42))
 
-    write_events = Column(JSONB, nullable=False)
-    prestate_diff = Column(JSONB, nullable=False)
-    preimage_lookup = Column(JSONB, nullable=False)
-    capabilities = Column(JSONB, nullable=False)
+    write_events = Column(JSON, nullable=False)
+    prestate_diff = Column(JSON, nullable=False)
+    preimage_lookup = Column(JSON, nullable=False)
+    capabilities = Column(JSON, nullable=False)
 
     # Metadata
     trace_step_count = Column(Integer)  # For debugging/monitoring
@@ -106,9 +106,9 @@ class CompilerArtifact(Base):
     language = Column(String(20), nullable=False)
     compiler_version = Column(String(100), nullable=False)
     pipeline = Column(String(50), nullable=False)
-    standard_input = Column(JSONB, nullable=False)
-    compiler_output = Column(JSONB, nullable=False)
-    source_hashes = Column(JSONB, nullable=False)
+    standard_input = Column(JSON, nullable=False)
+    compiler_output = Column(JSON, nullable=False)
+    source_hashes = Column(JSON, nullable=False)
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (
@@ -136,7 +136,7 @@ class HistoricalContractResolution(Base):
     compiler_artifact_fingerprint = Column(String(64))
     layout_provenance = Column(String(32))
     layout_source_address = Column(String(100))
-    storage_layout = Column(JSONB)
+    storage_layout = Column(JSON)
     created_at = Column(DateTime, server_default=func.now())
     source_checked_at = Column(DateTime)
 
@@ -161,7 +161,7 @@ class ContractSourceCache(Base):
     code_address = Column(String(42), nullable=False)
     code_hash = Column(String(66), nullable=False)
     status = Column(String(20), nullable=False)
-    result = Column(JSONB)
+    result = Column(JSON)
     checked_at = Column(DateTime, nullable=False, server_default=func.now())
 
     __table_args__ = (

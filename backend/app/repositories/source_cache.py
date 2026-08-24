@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import ContractSourceCache
@@ -83,7 +83,7 @@ class SourceCacheRepository:
         }
         statement = insert(ContractSourceCache).values(**values)
         statement = statement.on_conflict_do_update(
-            constraint="uq_contract_source_cache_identity",
+            index_elements=["chain_id", "code_address", "code_hash"],
             set_={
                 "status": status,
                 "result": result,

@@ -130,12 +130,13 @@ The public API is rooted at `/api/slotscan`:
 
 ## Persistence
 
-PostgreSQL stores:
+One local SQLite database stores:
 
 - current contract metadata/layouts;
-- current block-specific contract resolutions;
+- historical block-specific contract resolutions;
 - one current trace artifact per `(chain_id, tx_hash)`;
-- compiler inputs/outputs keyed by deterministic fingerprint.
+- compiler inputs/outputs keyed by deterministic fingerprint; and
+- normalized source-verification results keyed by exact runtime-code identity.
 
 Trace and layout data are reproducible caches, not user data. During pre-launch
 development, incompatible cache changes use destructive invalidation or a
@@ -168,6 +169,9 @@ on-demand rebuilding; they do not add legacy readers or dual payload formats.
 - Compiler processes are concurrency-, time-, input-, CPU-, and memory-bounded.
 - RPC calls use the single configured endpoint for each supported chain.
 - Readiness requires both database and RPC connectivity.
+- SQLite runs from local storage in WAL mode behind one API process. Revisit the
+  database choice before adding multiple API hosts or sustained concurrent
+  writes.
 - The application remains single-chain (Ethereum mainnet) until another chain
   is deliberately configured and tested.
 
@@ -176,4 +180,5 @@ on-demand rebuilding; they do not add legacy readers or dual payload formats.
 Every change must pass the repository checks in `AGENTS.md`. Changes to storage
 algebra, compiler behavior, trace semantics, database schema, or API responses
 must add focused regression coverage. A schema-baseline change must also prove
-that an empty PostgreSQL database can upgrade to Alembic head.
+that an empty SQLite file can upgrade to Alembic head and passes `alembic
+check`.

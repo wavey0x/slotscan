@@ -28,7 +28,7 @@ and compares layouts across contracts or historical blocks.
 | Component | Purpose |
 | --- | --- |
 | [`frontend/`](frontend/) | Next.js application |
-| [`backend/`](backend/) | FastAPI analysis API and PostgreSQL-backed caches |
+| [`backend/`](backend/) | FastAPI analysis API and SQLite-backed caches |
 | [`reth-slotscan/`](reth-slotscan/) | Downstream Reth binary with native SlotScan RPC extensions |
 
 The custom Reth node collects the state diff, ordered writes, call-frame
@@ -44,14 +44,14 @@ details.
 
 Prerequisites:
 
-- PostgreSQL
 - Python 3 with `venv`
 - Node.js and npm
 - A synced Ethereum mainnet node running the
   [`reth-slotscan`](reth-slotscan/README.md) binary
 
-Copy the environment template and configure the database, RPC endpoint, and
-Etherscan API key:
+Copy the environment template and configure the RPC endpoint and Etherscan API
+key. The default SQLite database is `backend/slotscan.sqlite3`; set
+`DATABASE_PATH` to override it.
 
 ```bash
 cp .env.example .env

@@ -1,7 +1,7 @@
 """Raw compiler artifact persistence."""
 
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import CompilerArtifact

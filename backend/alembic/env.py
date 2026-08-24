@@ -10,30 +10,21 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 
 from app.models.database import Base
-from app.config import get_settings
+from app.config import get_settings, sqlite_database_url
 
 config = context.config
 settings = get_settings()
 
-# Override sqlalchemy.url from environment
-config.set_main_option("sqlalchemy.url", settings.database_url)
+database_url = sqlite_database_url(settings.database_path)
+config.set_main_option(
+    "sqlalchemy.url",
+    database_url.render_as_string(hide_password=False).replace("%", "%%"),
+)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
-managed_table_names = frozenset(target_metadata.tables)
-
-
-def include_name(
-    name: str | None,
-    type_: str,
-    _parent_names: dict[str, str | None],
-) -> bool:
-    """Exclude tables owned by other applications in the shared database."""
-    if type_ == "table":
-        return name in managed_table_names
-    return True
 
 
 def run_migrations_offline() -> None:
@@ -42,7 +33,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=url,
         target_metadata=target_metadata,
-        include_name=include_name,
+        render_as_batch=True,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -55,7 +46,7 @@ def do_run_migrations(connection: Connection) -> None:
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
-        include_name=include_name,
+        render_as_batch=True,
     )
 
     with context.begin_transaction():

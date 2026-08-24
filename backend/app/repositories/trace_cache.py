@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import TransactionTraceArtifact
