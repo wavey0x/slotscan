@@ -100,21 +100,20 @@ RUN_RETH_TRACER_CONFORMANCE=1 venv/bin/python \
   -m unittest tests.test_reth_tracer_conformance -v
 ```
 
-For the manual release gate, run interleaved concurrency 1/2/4 measurements
-against the custom node. Supplying the Reth PID adds CPU-time and peak-RSS
-sampling; the RPC URL stays out of output:
+For the manual release gate, run the pinned transaction corpus against the
+custom node. The benchmark alternates the legacy and native paths by round,
+checks exact semantic parity, and keeps the RPC URL out of output:
 
 ```sh
 cd ../backend
 SLOTSCAN_BENCH_RPC_URL=http://127.0.0.1:8545 \
   venv/bin/python -m scripts.benchmark_native_trace \
-  --reth-pid 12345 --rounds 10 0xTRANSACTION_HASH
+  --rounds 10
 ```
 
-Adopt only when the semantic suite is exact and the report shows either at
-least 25% lower p50 trace latency than the concurrently overlapped legacy pair
-or at least 40% lower Reth CPU per trace. Timing thresholds intentionally do not
-run in CI.
+Adopt only when the semantic suite is exact and the report shows at least 25%
+lower p50 trace latency than the interleaved legacy path for representative
+cases. Timing thresholds intentionally do not run in CI.
 
 ## Reth upgrades
 
