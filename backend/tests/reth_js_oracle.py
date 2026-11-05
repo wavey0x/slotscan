@@ -422,7 +422,8 @@ class TraceRPCClient:
             this.steps += 1;
           },
           onFault: function(log, db) {
-            if (this.steps >= __MAX_STEPS__) this.reachLimit('limit:steps');
+            // Reth v2.10 calls fault after step for the same failed opcode.
+            // Counting it again shifts every later write index in that frame.
             this.ensureRoot(log, db);
             this.consumeCompletion(log);
             this.confirmCurrentFrame(log, db);
@@ -430,12 +431,12 @@ class TraceRPCClient:
             frame.faulted = true;
             this.lastOp = log.op.toString();
             this.lastDepth = log.getDepth();
-            this.steps += 1;
           },
           onEnter: function(call) {
             var parent = this.currentFrame();
             var type = call.getType().toString();
-            if (!this.isCall(type) && !this.isCreate(type)) {
+            if (!this.isCall(type) && !this.isCreate(type) &&
+                type !== 'SELFDESTRUCT') {
               throw new Error('slotscan unsupported hook frame type');
             }
             var target = toHex(call.getTo()).toLowerCase();

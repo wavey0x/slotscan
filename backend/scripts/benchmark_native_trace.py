@@ -227,6 +227,7 @@ async def run_legacy(
                 {
                     "tracer": "prestateTracer",
                     "tracerConfig": {"diffMode": True},
+                    "timeout": "60s",
                 },
             ],
         ),
@@ -234,7 +235,7 @@ async def run_legacy(
     compact = await rpc_call(
         rpc,
         "debug_traceTransaction",
-        [transaction_hash, {"tracer": tracer_source}],
+        [transaction_hash, {"tracer": tracer_source, "timeout": "60s"}],
     )
     elapsed = time.perf_counter() - started
     if not isinstance(receipt.result, dict):

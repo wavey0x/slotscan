@@ -22,6 +22,10 @@ VOTING_TX = (
     "0xa1fc48efe579dde86c1b46ced4d5a2cb"
     "589c95609be976539eb4d5b3513e2f56"
 )
+REVERTED_WRITES_TX = (
+    "0x561dd631cb9eabc2ba595ca4410fd26c"
+    "a3e6183d2b8ba4f55bbf4c4b9c742ae2"
+)
 VOTING_SLOT = (
     "0x0251ce03e055d3e1e4d121004047584d"
     "fce20cb4c02d76b24d1e17f2b0181cdf"
@@ -77,6 +81,7 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
         *,
         overrides=None,
         tracer_source=None,
+        expect_error=False,
     ):
         return await self._trace_call(
             code,
@@ -85,6 +90,7 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
                 tracer_source
                 or self.client._compact_storage_tracer_source()
             ),
+            expect_error=expect_error,
         )
 
     async def _trace_call(
@@ -94,6 +100,7 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
         overrides=None,
         tracer,
         tracer_config=None,
+        expect_error=False,
     ):
         state_overrides = {
             FROM: {"balance": "0x1000000000000000000"},
@@ -123,6 +130,9 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
                 trace_config,
             ],
         )
+        if expect_error:
+            self.assertIn("error", response)
+            return response["error"]
         self.assertNotIn("error", response)
         return response["result"]
 
@@ -133,6 +143,7 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
         overrides=None,
         client=None,
         tracer_source=None,
+        allow_created_zero_storage=False,
     ):
         compact_client = client or self.client
         compact_raw = await self.trace_call(
@@ -157,8 +168,24 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
         )
         if compact.observed_storage_complete:
             if has_persistent_writes:
+                observed_storage = compact.observed_storage
+                if allow_created_zero_storage:
+                    extra_addresses = set(observed_storage) - set(expected_storage)
+                    self.assertLessEqual(len(extra_addresses), 1)
+                    for address in extra_addresses:
+                        self.assertTrue(
+                            all(
+                                value == "0x" + "0" * 64
+                                for value in observed_storage[address].values()
+                            )
+                        )
+                    observed_storage = {
+                        address: slots
+                        for address, slots in observed_storage.items()
+                        if address in expected_storage
+                    }
                 self.assertEqual(
-                    compact.observed_storage,
+                    observed_storage,
                     expected_storage,
                 )
             else:
@@ -255,6 +282,21 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(journal.capabilities.state_reconciliation)
 
+    async def test_reverted_transaction_faults_do_not_shift_write_indices(self):
+        legacy = await self.client._execute_compact_storage_trace(
+            1, REVERTED_WRITES_TX
+        )
+        native = await self.native_client.execute_slotscan_trace(
+            1, REVERTED_WRITES_TX
+        )
+        self.assertIsNotNone(legacy)
+        self.assertEqual(legacy.evm_step_count, 318375)
+        self.assertEqual(native.evm_step_count, legacy.evm_step_count)
+        self.assertEqual(
+            [(write["index"], write["frame_id"]) for write in legacy.writes],
+            [(write["index"], write["frame_id"]) for write in native.writes],
+        )
+
     async def test_calls_and_caught_or_uncaught_reverts(self):
         target_success = "0x600160005500"
         target_revert = "0x600160005560006000fd"
@@ -330,7 +372,9 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
             "600160005560006000f3"
         )
         success_raw, success, _success_prestate = (
-            await self.trace_call_differential(successful_creation)
+            await self.trace_call_differential(
+                successful_creation, allow_created_zero_storage=True
+            )
         )
         created_write = next(
             write
@@ -350,7 +394,9 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
             "600160005560006000fd"
         )
         creation_raw, creation, _creation_prestate = (
-            await self.trace_call_differential(creation_failure)
+            await self.trace_call_differential(
+                creation_failure, allow_created_zero_storage=True
+            )
         )
         creation_writes = creation.writes
         constructor_write = next(
@@ -458,11 +504,13 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
                     self.provider,
                     settings,
                 )._compact_storage_tracer_source()
-                result = await self.trace_call(
+                error = await self.trace_call(
                     program,
                     tracer_source=source,
+                    expect_error=True,
                 )
-                self.assertEqual(result["fatal"], marker)
+                self.assertEqual(error["code"], -32603)
+                self.assertIn(marker, error["message"])
 
         source = self.client._compact_storage_tracer_source()
         injected = source.replace(
@@ -471,11 +519,13 @@ class RethTracerConformanceTests(unittest.IsolatedAsyncioTestCase):
             1,
         )
         self.assertNotEqual(source, injected)
-        callback_result = await self.trace_call(
+        callback_error = await self.trace_call(
             "600160005500",
             tracer_source=injected,
+            expect_error=True,
         )
-        self.assertEqual(callback_result["fatal"], "tracer:exception")
+        self.assertEqual(callback_error["code"], -32603)
+        self.assertIn("conformance callback failure", callback_error["message"])
 
     async def test_observation_overflow_and_lazy_materialization(self):
         bounded_client = JsOracleTraceRPCClient(
