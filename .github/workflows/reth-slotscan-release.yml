@@ -106,6 +106,8 @@ jobs:
           ARCHIVE: ${{ steps.build.outputs.archive }}
           TAG_EXISTS: ${{ steps.release.outputs.tag_exists }}
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin master
           [[ "$(git rev-parse origin/master)" == "$INITIAL_SHA" ]] || {
             echo "master changed while the release was building; rerun the workflow" >&2
