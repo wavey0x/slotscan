@@ -48,7 +48,6 @@ impl TraceLimits {
 #[serde(rename_all = "snake_case")]
 pub enum CodeAttribution {
     Exact,
-    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -56,7 +55,6 @@ pub enum CodeAttribution {
 pub enum CodeSource {
     Direct,
     Eip7702,
-    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]

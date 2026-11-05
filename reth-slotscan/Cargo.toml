@@ -1,8 +1,8 @@
 [package]
 name = "reth-slotscan"
-version = "2.8.0-slotscan.1"
+version = "2.10.0-slotscan.1"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.96"
 publish = false
 
 [dependencies]
@@ -11,15 +11,17 @@ alloy-rpc-types-trace = { version = "=2.5.0", default-features = false }
 async-trait = "0.1.89"
 clap = { version = "4", features = ["derive"] }
 jsonrpsee = { version = "=0.26.0", features = ["server", "macros"] }
-reth-ethereum = { git = "https://github.com/paradigmxyz/reth", rev = "05ba48120a0ce8d6beb65f0b2a7ad4710f4f2915", features = ["node"] }
-reth-ethereum-cli = { git = "https://github.com/paradigmxyz/reth", rev = "05ba48120a0ce8d6beb65f0b2a7ad4710f4f2915" }
-reth-node-core = { git = "https://github.com/paradigmxyz/reth", rev = "05ba48120a0ce8d6beb65f0b2a7ad4710f4f2915" }
-reth-rpc-eth-api = { git = "https://github.com/paradigmxyz/reth", rev = "05ba48120a0ce8d6beb65f0b2a7ad4710f4f2915" }
-revm-inspectors = "=0.44.3"
+evm2 = { git = "https://github.com/alloy-rs/evm2", rev = "592bf18c4e22fff54ac9b4db606c4ee276e345cb" }
+evm2-inspectors = { git = "https://github.com/alloy-rs/evm2", rev = "592bf18c4e22fff54ac9b4db606c4ee276e345cb" }
+reth-ethereum = { git = "https://github.com/paradigmxyz/reth", rev = "f5192ac72d92bc1e656a6939796421af76544af4", features = ["node"] }
+reth-ethereum-cli = { git = "https://github.com/paradigmxyz/reth", rev = "f5192ac72d92bc1e656a6939796421af76544af4" }
+reth-node-core = { git = "https://github.com/paradigmxyz/reth", rev = "f5192ac72d92bc1e656a6939796421af76544af4" }
+reth-rpc-eth-api = { git = "https://github.com/paradigmxyz/reth", rev = "f5192ac72d92bc1e656a6939796421af76544af4" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 [dev-dependencies]
+alloy-consensus = "=2.5.0"
 tokio = { version = "1", features = ["macros", "rt"] }
 
 [features]
@@ -57,3 +59,18 @@ codegen-units = 16
 inherits = "release"
 lto = "fat"
 codegen-units = 1
+
+# Reth v2.10.0 patches evm2 through the pre-transfer URL to select its LLVM-compatible fork.
+[patch."https://github.com/alloy-rs/evm2"]
+evm2 = { git = "https://github.com/DaniPopes/evm2", rev = "592bf18c4e22fff54ac9b4db606c4ee276e345cb" }
+evm2-inspectors = { git = "https://github.com/DaniPopes/evm2", rev = "592bf18c4e22fff54ac9b4db606c4ee276e345cb" }
+evm2-jit = { git = "https://github.com/DaniPopes/evm2", rev = "592bf18c4e22fff54ac9b4db606c4ee276e345cb" }
+
+[patch.crates-io]
+# Reth v2.10.0 needs LLVM 23 support before inkwell publishes it.
+inkwell = { git = "https://github.com/TheDan64/inkwell", rev = "c9d9734ae17dbaf1d9902dab3b8ee9d2041781ff" }
+reth-codecs = { git = "https://github.com/paradigmxyz/reth-core", rev = "275ce4cf5befeb9f1e8acd935ff2882d2d25fc61" }
+reth-codecs-derive = { git = "https://github.com/paradigmxyz/reth-core", rev = "275ce4cf5befeb9f1e8acd935ff2882d2d25fc61" }
+reth-primitives-traits = { git = "https://github.com/paradigmxyz/reth-core", rev = "275ce4cf5befeb9f1e8acd935ff2882d2d25fc61" }
+reth-rpc-traits = { git = "https://github.com/paradigmxyz/reth-core", rev = "275ce4cf5befeb9f1e8acd935ff2882d2d25fc61" }
+reth-zstd-compressors = { git = "https://github.com/paradigmxyz/reth-core", rev = "275ce4cf5befeb9f1e8acd935ff2882d2d25fc61" }

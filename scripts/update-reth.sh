@@ -81,7 +81,21 @@ workspace_dependency_version() {
 alloy_primitives_version="$(workspace_dependency_version alloy-primitives)"
 alloy_trace_version="$(workspace_dependency_version alloy-rpc-types-trace)"
 jsonrpsee_version="$(workspace_dependency_version jsonrpsee)"
-revm_inspectors_version="$(workspace_dependency_version revm-inspectors)"
+evm2_revision="$(sed -nE 's/^evm2 = .*rev = "([0-9a-f]{40})".*/\1/p' "$upstream_manifest" | head -n1)"
+[[ "$evm2_revision" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "could not read Reth's evm2 revision at ${reth_commit}" >&2
+  exit 1
+}
+inkwell_revision="$(sed -nE 's/^inkwell = .*rev = "([0-9a-f]{40})".*/\1/p' "$upstream_manifest" | head -n1)"
+[[ "$inkwell_revision" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "could not read Reth's inkwell revision at ${reth_commit}" >&2
+  exit 1
+}
+reth_core_revision="$(sed -nE 's/^reth-codecs = .*rev = "([0-9a-f]{40})".*/\1/p' "$upstream_manifest" | head -n1)"
+[[ "$reth_core_revision" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "could not read Reth's reth-core revision at ${reth_commit}" >&2
+  exit 1
+}
 
 RETH_COMMIT="$reth_commit" \
 RETH_VERSION="$reth_version" \
@@ -91,7 +105,9 @@ RUST_VERSION="$rust_version" \
 ALLOY_PRIMITIVES_VERSION="$alloy_primitives_version" \
 ALLOY_TRACE_VERSION="$alloy_trace_version" \
 JSONRPSEE_VERSION="$jsonrpsee_version" \
-REVM_INSPECTORS_VERSION="$revm_inspectors_version" \
+EVM2_REVISION="$evm2_revision" \
+INKWELL_REVISION="$inkwell_revision" \
+RETH_CORE_REVISION="$reth_core_revision" \
 MANIFEST="$manifest" \
 TOOLCHAIN="$toolchain" \
 python3 <<'PY'
@@ -145,7 +161,6 @@ interface_dependencies = {
     "alloy-primitives": os.environ["ALLOY_PRIMITIVES_VERSION"],
     "alloy-rpc-types-trace": os.environ["ALLOY_TRACE_VERSION"],
     "jsonrpsee": os.environ["JSONRPSEE_VERSION"],
-    "revm-inspectors": os.environ["REVM_INSPECTORS_VERSION"],
 }
 for dependency, version in interface_dependencies.items():
     pattern = re.compile(
@@ -161,6 +176,55 @@ for dependency, version in interface_dependencies.items():
         raise SystemExit(
             f"Cargo.toml {dependency} dependency did not match the expected shape"
         )
+
+evm_dependency = re.compile(
+    r'(?m)^(evm2(?:-inspectors)? = \{ git = "https://github\.com/alloy-rs/evm2", rev = ")'
+    r'([0-9a-f]{40})(".*\})$'
+)
+matches = evm_dependency.findall(manifest)
+if len(matches) != 2 or {match[0].split(" = ", 1)[0] for match in matches} != {"evm2", "evm2-inspectors"}:
+    raise SystemExit("Cargo.toml evm2 dependency set did not match the expected shape")
+if len({match[1] for match in matches}) != 1:
+    raise SystemExit("Cargo.toml evm2 dependencies were not pinned to one revision")
+manifest = evm_dependency.sub(
+    lambda match: f"{match.group(1)}{os.environ['EVM2_REVISION']}{match.group(3)}",
+    manifest,
+)
+evm_patch = re.compile(
+    r'(?m)^(evm2(?:-inspectors|-jit)? = \{ git = "https://github\.com/DaniPopes/evm2", rev = ")'
+    r'([0-9a-f]{40})(".*\})$'
+)
+patch_matches = evm_patch.findall(manifest)
+if len(patch_matches) != 3 or {match[0].split(" = ", 1)[0] for match in patch_matches} != {"evm2", "evm2-inspectors", "evm2-jit"}:
+    raise SystemExit("Cargo.toml evm2 patch set did not match the expected shape")
+if len({match[1] for match in patch_matches}) != 1:
+    raise SystemExit("Cargo.toml evm2 patches were not pinned to one revision")
+manifest = evm_patch.sub(
+    lambda match: f"{match.group(1)}{os.environ['EVM2_REVISION']}{match.group(3)}",
+    manifest,
+)
+inkwell_patch = re.compile(
+    r'(?m)^(inkwell = \{ git = "https://github\.com/TheDan64/inkwell", rev = ")'
+    r'([0-9a-f]{40})(".*\})$'
+)
+manifest, count = inkwell_patch.subn(
+    lambda match: f"{match.group(1)}{os.environ['INKWELL_REVISION']}{match.group(3)}",
+    manifest,
+)
+if count != 1:
+    raise SystemExit("Cargo.toml inkwell patch did not match the expected shape")
+reth_core_patch = re.compile(
+    r'(?m)^(reth-(?:codecs|codecs-derive|primitives-traits|rpc-traits|zstd-compressors)'
+    r' = \{ git = "https://github\.com/paradigmxyz/reth-core", rev = ")'
+    r'([0-9a-f]{40})(".*\})$'
+)
+core_matches = reth_core_patch.findall(manifest)
+if len(core_matches) != 5 or len({match[1] for match in core_matches}) != 1:
+    raise SystemExit("Cargo.toml reth-core patch set did not match the expected shape")
+manifest = reth_core_patch.sub(
+    lambda match: f"{match.group(1)}{os.environ['RETH_CORE_REVISION']}{match.group(3)}",
+    manifest,
+)
 
 manifest_path.write_text(manifest)
 
@@ -189,7 +253,7 @@ SLOTSCAN_VERSION="$slotscan_version" \
 ALLOY_PRIMITIVES_VERSION="$alloy_primitives_version" \
 ALLOY_TRACE_VERSION="$alloy_trace_version" \
 JSONRPSEE_VERSION="$jsonrpsee_version" \
-REVM_INSPECTORS_VERSION="$revm_inspectors_version" \
+EVM2_REVISION="$evm2_revision" \
 METADATA="$tmp/metadata.json" \
 python3 <<'PY'
 import json
@@ -213,7 +277,6 @@ expected_dependencies = {
     "alloy-primitives": os.environ["ALLOY_PRIMITIVES_VERSION"],
     "alloy-rpc-types-trace": os.environ["ALLOY_TRACE_VERSION"],
     "jsonrpsee": os.environ["JSONRPSEE_VERSION"],
-    "revm-inspectors": os.environ["REVM_INSPECTORS_VERSION"],
 }
 dependencies = {dependency["name"]: dependency for dependency in root["dependencies"]}
 for name, version in expected_dependencies.items():
@@ -222,6 +285,11 @@ for name, version in expected_dependencies.items():
         raise SystemExit(
             f"Cargo metadata contains the wrong {name} requirement: {requirement}"
         )
+for name in ("evm2", "evm2-inspectors"):
+    dependency = dependencies.get(name, {})
+    source = dependency.get("source") or ""
+    if os.environ["EVM2_REVISION"] not in source:
+        raise SystemExit(f"Cargo metadata contains the wrong {name} revision")
 PY
 
 [[ -s "$lockfile" ]] || { echo "Cargo.lock was not generated" >&2; exit 1; }

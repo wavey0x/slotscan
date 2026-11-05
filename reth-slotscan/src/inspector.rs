@@ -3,16 +3,10 @@ use crate::rpc::{
     WriteEvidence, WriteOpcode,
 };
 use alloy_primitives::{Address, B256, Bytes, U256};
-use reth_ethereum::evm::revm::revm::{
-    bytecode::{Bytecode, opcode},
-    context::JournalEntry,
-    context_interface::{ContextTr, JournalTr},
-    inspector::{Inspector, JournalExt},
-    interpreter::{
-        CallInputs, CallOutcome, CreateInputs, CreateOutcome, Interpreter, InterpreterAction,
-        interpreter::EthInterpreter,
-        interpreter_types::{Jumps, LoopControl, MemoryTr},
-    },
+use evm2::{
+    EvmTypes, Inspector,
+    evm::JournalEntry,
+    interpreter::{Interpreter, Message, MessageResult, op as opcode},
 };
 use std::collections::HashSet;
 
@@ -28,7 +22,6 @@ struct ActiveFrame {
     parent_id: Option<u64>,
     first_write_index: usize,
     storage_address: Address,
-    requested_code_address: Address,
     code_address: Option<Address>,
     code_attribution: CodeAttribution,
     code_source: CodeSource,
@@ -183,12 +176,7 @@ impl SlotScanInspector {
         self.observation_overflow = true;
     }
 
-    fn push_frame(
-        &mut self,
-        storage_address: Address,
-        requested_code_address: Address,
-        resolution: CodeResolution,
-    ) {
+    fn push_frame(&mut self, storage_address: Address, resolution: CodeResolution) {
         let id = self.next_frame_id;
         self.next_frame_id = self.next_frame_id.saturating_add(1);
         self.active_frames.push(ActiveFrame {
@@ -196,7 +184,6 @@ impl SlotScanInspector {
             parent_id: self.active_frames.last().map(|frame| frame.id),
             first_write_index: self.writes.len(),
             storage_address,
-            requested_code_address,
             code_address: resolution.code_address,
             code_attribution: resolution.attribution,
             code_source: resolution.source,
@@ -237,38 +224,22 @@ impl SlotScanInspector {
         self.sload_keys.push(key);
     }
 
-    fn resolve_code<CTX>(context: &CTX, requested: Address) -> CodeResolution
-    where
-        CTX: ContextTr<Journal: JournalExt>,
-    {
-        let delegated = context
-            .journal_ref()
-            .evm_state()
-            .get(&requested)
-            .and_then(|account| account.info.code.as_ref())
-            .and_then(Bytecode::eip7702_address);
-        if let Some(code_address) = delegated {
+    fn resolve_code<T: EvmTypes>(message: &Message<T>) -> CodeResolution {
+        if message.code_address != message.call_target {
             CodeResolution {
-                code_address: Some(code_address),
+                code_address: Some(message.code_address),
                 attribution: CodeAttribution::Exact,
                 source: CodeSource::Eip7702,
-                designator: Some(format!("0xef0100{code_address:x}")),
+                designator: Some(format!("0xef0100{:x}", message.code_address)),
             }
         } else {
             CodeResolution {
-                code_address: Some(requested),
+                code_address: Some(message.code_address),
                 attribution: CodeAttribution::Exact,
                 source: CodeSource::Direct,
                 designator: None,
             }
         }
-    }
-
-    fn action_failed(interp: &mut Interpreter<EthInterpreter>) -> bool {
-        matches!(
-            interp.bytecode.action().as_ref(),
-            Some(InterpreterAction::Return(result)) if !result.result.is_ok()
-        )
     }
 
     fn word(value: U256) -> B256 {
@@ -284,25 +255,8 @@ struct CodeResolution {
     designator: Option<String>,
 }
 
-impl<CTX> Inspector<CTX, EthInterpreter> for SlotScanInspector
-where
-    CTX: ContextTr<Journal: JournalExt>,
-{
-    fn initialize_interp(&mut self, interp: &mut Interpreter<EthInterpreter>, _context: &mut CTX) {
-        let Some(frame) = self.active_frames.last_mut() else {
-            return;
-        };
-        if frame.storage_address == Address::ZERO && frame.requested_code_address == Address::ZERO {
-            frame.storage_address = interp.input.target_address;
-            frame.requested_code_address = interp.input.target_address;
-            frame.code_address = Some(interp.input.target_address);
-            frame.code_attribution = CodeAttribution::Exact;
-            frame.code_source = CodeSource::Direct;
-            frame.code_designator = None;
-        }
-    }
-
-    fn step(&mut self, interp: &mut Interpreter<EthInterpreter>, context: &mut CTX) {
+impl<T: EvmTypes> Inspector<T> for SlotScanInspector {
+    fn step(&mut self, interp: &mut Interpreter<'_, '_, T>) {
         self.pending_write = None;
         self.pending_sha3 = None;
 
@@ -318,7 +272,7 @@ where
 
         let index = self.step_count;
         self.step_count = self.step_count.saturating_add(1);
-        let op = interp.bytecode.opcode();
+        let op = interp.opcode();
         let Some(frame) = self.active_frames.last().cloned() else {
             self.degrade();
             return;
@@ -326,7 +280,7 @@ where
 
         match op {
             opcode::SLOAD => {
-                if let Ok(slot) = interp.stack.peek(0) {
+                if let Some(slot) = interp.stack().peek(0) {
                     self.remember_sload(frame.storage_address, slot);
                 }
             }
@@ -335,7 +289,8 @@ where
                     self.degrade();
                     return;
                 }
-                let (Ok(slot), Ok(value)) = (interp.stack.peek(0), interp.stack.peek(1)) else {
+                let (Some(slot), Some(value)) = (interp.stack().peek(0), interp.stack().peek(1))
+                else {
                     return;
                 };
                 let persistent = op == opcode::SSTORE;
@@ -345,7 +300,7 @@ where
                     code_attribution: frame.code_attribution,
                     code_source: frame.code_source,
                     code_designator: frame.code_designator,
-                    pc: interp.bytecode.pc() as u64,
+                    pc: interp.pc() as u64,
                     slot,
                     value,
                     opcode: if persistent {
@@ -362,11 +317,12 @@ where
                     index,
                     frame_id: frame.id,
                     frame_parent_id: frame.parent_id,
-                    journal_len: context.journal_ref().journal().len(),
+                    journal_len: interp.host().state().journal().len(),
                 });
             }
             opcode::KECCAK256 => {
-                let (Ok(offset), Ok(size)) = (interp.stack.peek(0), interp.stack.peek(1)) else {
+                let (Some(offset), Some(size)) = (interp.stack().peek(0), interp.stack().peek(1))
+                else {
                     return;
                 };
                 let (Ok(offset), Ok(size)) = (usize::try_from(offset), usize::try_from(size))
@@ -399,38 +355,38 @@ where
         }
     }
 
-    fn step_end(&mut self, interp: &mut Interpreter<EthInterpreter>, context: &mut CTX) {
+    fn step_end(&mut self, interp: &mut Interpreter<'_, '_, T>) {
         if self.degraded_reason.is_some() {
             self.pending_write = None;
             self.pending_sha3 = None;
             return;
         }
 
-        let failed = Self::action_failed(interp);
+        let failed = interp.result().is_err();
         if let Some(pending) = self.pending_write.take() {
-            let journal = context.journal_ref().journal();
+            let journal = interp.host().state().journal();
             let new_entries = journal.get(pending.journal_len..);
             let old_value = new_entries.and_then(|entries| {
                 entries.iter().rev().find_map(|entry| match entry {
-                    JournalEntry::StorageChanged {
+                    JournalEntry::StorageChange {
                         address,
                         key,
-                        had_value,
+                        previous,
                     } if pending.namespace == StorageNamespace::Persistent
                         && *address == pending.address
                         && *key == pending.slot =>
                     {
-                        Some(*had_value)
+                        Some(*previous)
                     }
                     JournalEntry::TransientStorageChange {
                         address,
                         key,
-                        had_value,
+                        previous,
                     } if pending.namespace == StorageNamespace::Transient
                         && *address == pending.address
                         && *key == pending.slot =>
                     {
-                        Some(*had_value)
+                        Some(previous.unwrap_or_default())
                     }
                     _ => None,
                 })
@@ -468,11 +424,11 @@ where
             let Some(end) = pending.offset.checked_add(pending.size) else {
                 return;
             };
-            if end > interp.memory.size() {
+            if end > interp.memory().len() {
                 return;
             }
             let preimage =
-                Bytes::copy_from_slice(interp.memory.slice(pending.offset..end).as_ref());
+                Bytes::copy_from_slice(interp.memory().slice(pending.offset, pending.size));
             self.sha3_bytes += pending.size;
             self.sha3_operations.push(Sha3Evidence {
                 address: pending.address,
@@ -483,24 +439,36 @@ where
         }
     }
 
-    fn call(&mut self, context: &mut CTX, inputs: &mut CallInputs) -> Option<CallOutcome> {
-        let resolution = Self::resolve_code(context, inputs.bytecode_address);
-        self.push_frame(inputs.target_address, inputs.bytecode_address, resolution);
+    fn call(
+        &mut self,
+        _interp: &mut Interpreter<'_, '_, T>,
+        message: &mut Message<T>,
+    ) -> Option<MessageResult<T>> {
+        let resolution = Self::resolve_code::<T>(message);
+        self.push_frame(message.destination, resolution);
         None
     }
 
-    fn call_end(&mut self, _context: &mut CTX, _inputs: &CallInputs, outcome: &mut CallOutcome) {
-        self.finish_frame(!outcome.instruction_result().is_ok());
+    fn call_end(
+        &mut self,
+        _interp: &mut Interpreter<'_, '_, T>,
+        _message: &Message<T>,
+        result: &mut MessageResult<T>,
+    ) {
+        self.finish_frame(!result.is_success());
     }
 
-    fn create(&mut self, _context: &mut CTX, _inputs: &mut CreateInputs) -> Option<CreateOutcome> {
+    fn create(
+        &mut self,
+        _interp: &mut Interpreter<'_, '_, T>,
+        message: &mut Message<T>,
+    ) -> Option<MessageResult<T>> {
         self.push_frame(
-            Address::ZERO,
-            Address::ZERO,
+            message.destination,
             CodeResolution {
-                code_address: None,
-                attribution: CodeAttribution::Unknown,
-                source: CodeSource::Unknown,
+                code_address: Some(message.destination),
+                attribution: CodeAttribution::Exact,
+                source: CodeSource::Direct,
                 designator: None,
             },
         );
@@ -509,28 +477,29 @@ where
 
     fn create_end(
         &mut self,
-        _context: &mut CTX,
-        _inputs: &CreateInputs,
-        outcome: &mut CreateOutcome,
+        _interp: &mut Interpreter<'_, '_, T>,
+        _message: &Message<T>,
+        result: &mut MessageResult<T>,
     ) {
-        self.finish_frame(!outcome.instruction_result().is_ok() || outcome.address.is_none());
+        self.finish_frame(!result.is_success() || result.created_address.is_none());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reth_ethereum::evm::revm::revm::{
-        context::{Context, TxEnv},
-        database::{
-            BENCH_CALLER, BENCH_CALLER_BALANCE, BENCH_TARGET, BENCH_TARGET_BALANCE, BenchmarkDB,
-            InMemoryDB,
-        },
-        handler::{MainBuilder, MainContext},
-        inspector::InspectEvm,
-        primitives::TxKind,
-        state::AccountInfo,
+    use alloy_consensus::{TxLegacy, transaction::Recovered};
+    use alloy_primitives::TxKind;
+    use evm2::{
+        BaseEvmTypes, Evm, Precompiles, SpecId,
+        bytecode::Bytecode,
+        env::BlockEnvExt,
+        ethereum::{TxEnvelope, ethereum_tx_registry},
+        evm::{AccountInfo, InMemoryDB},
     };
+
+    const BENCH_CALLER: Address = Address::repeat_byte(0x10);
+    const BENCH_TARGET: Address = Address::repeat_byte(0x11);
 
     fn limits() -> TraceLimits {
         TraceLimits {
@@ -567,30 +536,14 @@ mod tests {
     }
 
     fn execute(code: Vec<u8>, limits: TraceLimits) -> (bool, SlotScanInspector) {
-        let context =
-            Context::mainnet().with_db(BenchmarkDB::new_bytecode(Bytecode::new_raw(code.into())));
-        let mut evm = context.build_mainnet_with_inspector(SlotScanInspector::new(limits));
-        let result = evm
-            .inspect_one_tx(
-                TxEnv::builder()
-                    .caller(BENCH_CALLER)
-                    .kind(TxKind::Call(BENCH_TARGET))
-                    .gas_limit(1_000_000)
-                    .build()
-                    .unwrap(),
-            )
-            .unwrap();
-        (result.is_success(), evm.inspector)
+        execute_accounts(code, [], limits)
     }
 
     fn account(code: Bytecode, balance: U256) -> AccountInfo {
-        AccountInfo {
-            balance,
-            nonce: 1,
-            code_hash: code.hash_slow(),
-            code: Some(code),
-            ..Default::default()
-        }
+        AccountInfo::default()
+            .with_balance(balance)
+            .with_nonce(1)
+            .with_code(code)
     }
 
     fn execute_accounts(
@@ -600,33 +553,37 @@ mod tests {
     ) -> (bool, SlotScanInspector) {
         let mut db = InMemoryDB::default();
         db.insert_account_info(
-            BENCH_CALLER,
-            AccountInfo {
-                balance: BENCH_CALLER_BALANCE,
-                ..Default::default()
-            },
+            &BENCH_CALLER,
+            AccountInfo::default().with_balance(U256::from(1_000_000_000_000_000_000u64)),
         );
         db.insert_account_info(
-            BENCH_TARGET,
-            account(Bytecode::new_raw(target_code.into()), BENCH_TARGET_BALANCE),
+            &BENCH_TARGET,
+            account(Bytecode::new_raw(target_code.into()), U256::ZERO),
         );
         for (address, code) in extra_accounts {
-            db.insert_account_info(address, account(code, U256::ZERO));
+            db.insert_account_info(&address, account(code, U256::ZERO));
         }
 
-        let context = Context::mainnet().with_db(db);
-        let mut evm = context.build_mainnet_with_inspector(SlotScanInspector::new(limits));
-        let result = evm
-            .inspect_one_tx(
-                TxEnv::builder()
-                    .caller(BENCH_CALLER)
-                    .kind(TxKind::Call(BENCH_TARGET))
-                    .gas_limit(1_000_000)
-                    .build()
-                    .unwrap(),
-            )
-            .unwrap();
-        (result.is_success(), evm.inspector)
+        let spec = SpecId::OSAKA;
+        let mut evm = Evm::<BaseEvmTypes>::new(
+            spec,
+            BlockEnvExt::default(),
+            ethereum_tx_registry(spec),
+            db,
+            Precompiles::base(spec),
+        );
+        evm.set_inspector(SlotScanInspector::new(limits));
+        let tx = Recovered::new_unchecked(
+            TxEnvelope::Legacy(TxLegacy {
+                to: TxKind::Call(BENCH_TARGET),
+                gas_limit: 1_000_000,
+                ..Default::default()
+            }),
+            BENCH_CALLER,
+        );
+        let result = evm.transact(&tx).unwrap().discard();
+        let inspector = evm.clear_inspector_as::<SlotScanInspector>().unwrap();
+        (result.is_success(), *inspector)
     }
 
     fn child_call_code(op: u8, target: Address) -> Vec<u8> {
@@ -654,7 +611,6 @@ mod tests {
         let mut inspector = SlotScanInspector::new(limits());
         inspector.push_frame(
             Address::repeat_byte(1),
-            Address::repeat_byte(1),
             CodeResolution {
                 code_address: Some(Address::repeat_byte(1)),
                 attribution: CodeAttribution::Exact,
@@ -663,7 +619,6 @@ mod tests {
             },
         );
         inspector.push_frame(
-            Address::repeat_byte(2),
             Address::repeat_byte(2),
             CodeResolution {
                 code_address: Some(Address::repeat_byte(2)),

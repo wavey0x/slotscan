@@ -2,7 +2,7 @@
 
 `reth-slotscan` is SlotScan's downstream Reth full-node binary. It compiles the
 upstream Reth crates at the pinned commit and adds one in-process
-`slotscan_traceTransaction` RPC method backed by a native REVM inspector.
+`slotscan_traceTransaction` RPC method backed by a native evm2 inspector.
 
 It is not a sidecar and does not maintain a modified Reth source tree. Run this
 binary in place of the stock `reth` executable, using the same compatible data
@@ -11,10 +11,10 @@ against the same data directory at the same time.
 
 The custom binary is possible without editing an upstream checkout because
 Reth exposes its node builder, RPC registry, trace semaphore, canonical
-transaction replay, and REVM inspector hooks as public Rust APIs. This crate
+transaction replay, and evm2 inspector hooks as public Rust APIs. This crate
 links those upstream crates at one exact commit and adds a module at the
-supported extension seam. `src/reth_adapter.rs` is the only version-sensitive
-bridge.
+supported extension seam. `src/reth_adapter.rs` and `src/inspector.rs` are the
+version-sensitive bridge.
 
 ## Performance model
 
@@ -88,7 +88,7 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
-The Rust suite executes synthetic bytecode through REVM for ordered old values,
+The Rust suite executes synthetic bytecode through evm2 for ordered old values,
 delegate/callcode ownership, nested and root rollback, create/create2,
 transient storage, EIP-7702 attribution, SHA3 capture, and collection limits.
 The gated backend conformance suite keeps the old JS tracer and prestate tracer
@@ -138,7 +138,7 @@ the normal `server-setup update apply` path installs it into the existing
 binary location and service.
 
 Before adopting a new upstream release, review changes around
-`spawn_trace_transaction_in_block_with_inspector`, REVM inspector/journal
+`spawn_trace_transaction_in_block_with_inspector`, evm2 inspector/journal
 hooks, and `GethTraceBuilder::geth_prestate_traces`, then re-run the manual
 interleaved performance benchmark.
 

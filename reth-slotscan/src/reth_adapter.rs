@@ -7,9 +7,9 @@ use crate::{
 use alloy_primitives::B256;
 use alloy_rpc_types_trace::geth::PreStateConfig;
 use async_trait::async_trait;
-use reth_ethereum::evm::revm::revm::database_interface::Database;
+use evm2::evm::Database;
+use evm2_inspectors::tracing::GethTraceBuilder;
 use reth_rpc_eth_api::{FromEthApiError, helpers::TraceExt};
-use revm_inspectors::tracing::GethTraceBuilder;
 use std::{collections::BTreeMap, fmt::Display};
 
 #[derive(Clone)]
@@ -62,7 +62,7 @@ where
                         inspector.observation_keys();
                     let mut observed_storage = BTreeMap::new();
                     for key in observation_keys {
-                        let value = match db.storage(key.address, key.slot) {
+                        let value = match db.get_storage(&key.address, &key.slot) {
                             Ok(value) => Some(B256::new(value.to_be_bytes())),
                             Err(_) => {
                                 observed_storage_complete = false;
